@@ -1,29 +1,22 @@
-import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import {
-  AccessibilityInfo,
-  Platform,
-  ScrollView,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useColorScheme,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { AccessibilityInfo, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Button, Card, Screen, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { FieldError, ManualDispatchInput } from '../../features/alerts/types';
 import { ApiError } from '../../lib/apiClient';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
+import { Notice, noticeText } from './alertsUi';
 
 const OTHER_TOWN = '__other__';
 // Matches the backend's MAX_LOCALITY_TOWN_LENGTH (a longer town is dropped server-side).
 const MAX_TOWN_LENGTH = 80;
 const LOCALITY_LABEL = 'Town / village (required)';
-// Platform minimum touch target for the locality controls: 44pt iOS, 48dp Android (m8).
-const localityTarget = () =>
-  Platform.OS === 'android' ? touchTarget.baseline.android : touchTarget.baseline.ios;
+// The field floor (56dp, design.md §1) - above the 44pt / 48dp platform minimum m8 asked for.
+const FIELD_TARGET = targetSize.field;
+/** Field body text (design.md §1: body 17 on the field surface). */
+const INPUT_TEXT = 17;
 
 const EMPTY_FORM: ManualDispatchInput = {
   incidentType: '',
@@ -38,8 +31,7 @@ const EMPTY_FORM: ManualDispatchInput = {
 // feed exists or it is down. Fields match dispatchIngressPort.normalizeManualEntry exactly.
 export function ManualDispatchEntryScreen() {
   const navigation = useNavigation<NavigationProp<AlertsStackParamList>>();
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useAlertsRepository();
   const [form, setForm] = useState<ManualDispatchInput>(EMPTY_FORM);
   const [unitsText, setUnitsText] = useState('');
@@ -121,16 +113,37 @@ export function ManualDispatchEntryScreen() {
     }
   };
 
+  const labelStyle = {
+    color: theme.fg,
+    fontSize: typeScale.body.size,
+    fontWeight: '600' as const,
+  };
+  const inputStyle = (invalid: boolean, multiline = false) => ({
+    minHeight: multiline ? 96 : FIELD_TARGET,
+    borderWidth: invalid ? 2 : 1,
+    borderColor: invalid ? theme.status.danger : theme.border,
+    borderRadius: radiusScale.md,
+    backgroundColor: theme.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: multiline ? spacing.sm : 0,
+    color: theme.fg,
+    fontSize: INPUT_TEXT,
+    marginTop: spacing.xs,
+  });
+  const errorStyle = {
+    color: theme.status.danger,
+    fontSize: typeScale.body.size,
+    fontWeight: '600' as const,
+    marginTop: spacing.xs,
+  };
+
   const field = (
     label: string,
     key: keyof Omit<ManualDispatchInput, 'unitsRequested' | 'locality'>,
     options: { multiline?: boolean } = {},
   ) => (
-    <View style={{ marginTop: spacing.md }}>
-      <Text
-        nativeID={`${key}-label`}
-        style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-      >
+    <View>
+      <Text nativeID={`${key}-label`} style={labelStyle}>
         {label}
       </Text>
       <TextInput
@@ -140,22 +153,12 @@ export function ManualDispatchEntryScreen() {
         onChangeText={(text) => setForm((prev) => ({ ...prev, [key]: text }))}
         multiline={options.multiline}
         style={{
-          minHeight: options.multiline ? 80 : touchTarget.baseline.ios,
-          borderWidth: 1,
-          borderColor: errorFor(key) ? tokens.error : tokens.foreground + '33',
-          borderRadius: radius.default,
-          paddingHorizontal: spacing.md,
-          paddingVertical: options.multiline ? spacing.sm : 0,
-          color: tokens.foreground,
-          fontSize: typography.size.base,
-          marginTop: spacing.xs,
+          ...inputStyle(Boolean(errorFor(key)), options.multiline),
+          ...(options.multiline ? { textAlignVertical: 'top' as const } : {}),
         }}
       />
       {errorFor(key) ? (
-        <Text
-          accessibilityLiveRegion="polite"
-          style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
-        >
+        <Text accessibilityLiveRegion="polite" style={errorStyle}>
           {errorFor(key)}
         </Text>
       ) : null}
@@ -163,148 +166,116 @@ export function ManualDispatchEntryScreen() {
   );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: tokens.foreground, fontSize: typography.size.lg, fontWeight: '700' }}
-        >
-          Enter dispatch manually
-        </Text>
+    <Screen>
+      <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+        For when the CAD feed is down or missing: key the dispatch in by hand.
+      </Text>
 
-        {field('Incident type', 'incidentType')}
-        {field('Address', 'address')}
-        {field('Cross streets', 'crossStreets')}
+      <Card title="Call">
+        <View style={{ gap: spacing.md }}>
+          {field('Incident type', 'incidentType')}
+          {field('Address', 'address')}
+          {field('Cross streets', 'crossStreets')}
 
-        <View
-          style={{ marginTop: spacing.md }}
-          testID="locality-group"
-          accessibilityRole="radiogroup"
-          accessibilityLabel={LOCALITY_LABEL}
-          accessibilityLabelledBy="locality-label"
-        >
-          <Text
-            nativeID="locality-label"
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
+          <View
+            testID="locality-group"
+            accessibilityRole="radiogroup"
+            accessibilityLabel={LOCALITY_LABEL}
+            accessibilityLabelledBy="locality-label"
           >
-            {LOCALITY_LABEL}
-          </Text>
-          {/* "Other town…" comes first so the home towns loading in below it can never move it
-              under a finger mid-tap (m8). */}
-          {[OTHER_TOWN, ...homeTowns].map((choice) => {
-            const selected = localityChoice === choice;
-            const label = choice === OTHER_TOWN ? 'Other town…' : choice;
-            return (
-              <View key={choice}>
-                <TouchableOpacity
-                  accessibilityRole="radio"
-                  accessibilityLabel={label}
-                  accessibilityState={{ checked: selected }}
-                  onPress={() => setLocalityChoice(choice)}
-                  style={{
-                    minHeight: localityTarget(),
-                    justifyContent: 'center',
-                    paddingHorizontal: spacing.md,
-                    marginTop: spacing.xs,
-                    borderWidth: selected ? 2 : 1,
-                    borderColor: selected ? tokens.accent : tokens.foreground + '33',
-                    borderRadius: radius.default,
-                  }}
-                >
-                  <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
-                    {selected ? '● ' : '○ '}
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-                {choice === OTHER_TOWN && selected ? (
-                  <TextInput
-                    accessibilityLabel="Other town name"
-                    maxLength={MAX_TOWN_LENGTH}
-                    value={otherTown}
-                    onChangeText={setOtherTown}
-                    style={{
-                      minHeight: localityTarget(),
-                      borderWidth: 1,
-                      borderColor: tokens.foreground + '33',
-                      borderRadius: radius.default,
-                      paddingHorizontal: spacing.md,
-                      color: tokens.foreground,
-                      fontSize: typography.size.base,
-                      marginTop: spacing.xs,
-                    }}
-                  />
-                ) : null}
-              </View>
-            );
-          })}
-          {localityError ? (
-            <Text
-              accessibilityLiveRegion="polite"
-              style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: 2 }}
-            >
-              {localityError}
+            <Text nativeID="locality-label" style={labelStyle}>
+              {LOCALITY_LABEL}
             </Text>
-          ) : null}
+            {/* "Other town…" comes first so the home towns loading in below it can never move it
+                under a finger mid-tap (m8). */}
+            {[OTHER_TOWN, ...homeTowns].map((choice) => {
+              const selected = localityChoice === choice;
+              const label = choice === OTHER_TOWN ? 'Other town…' : choice;
+              return (
+                <View key={choice}>
+                  <TouchableOpacity
+                    accessibilityRole="radio"
+                    accessibilityLabel={label}
+                    accessibilityState={{ checked: selected }}
+                    onPress={() => setLocalityChoice(choice)}
+                    style={{
+                      minHeight: FIELD_TARGET,
+                      justifyContent: 'center',
+                      paddingHorizontal: spacing.md,
+                      marginTop: spacing.sm,
+                      // Selected: the amber selection mark (3:1 on the card) on a soft amber fill.
+                      borderWidth: selected ? 2 : 1,
+                      borderColor: selected ? theme.indicator : theme.border,
+                      borderRadius: radiusScale.md,
+                      backgroundColor: selected ? theme.accentSubtle : theme.surface,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: selected ? theme.onAccentSubtle : theme.fg,
+                        fontSize: INPUT_TEXT,
+                        fontWeight: selected ? '700' : '400',
+                      }}
+                    >
+                      {selected ? '● ' : '○ '}
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                  {choice === OTHER_TOWN && selected ? (
+                    <TextInput
+                      accessibilityLabel="Other town name"
+                      maxLength={MAX_TOWN_LENGTH}
+                      value={otherTown}
+                      onChangeText={setOtherTown}
+                      style={inputStyle(false)}
+                    />
+                  ) : null}
+                </View>
+              );
+            })}
+            {localityError ? (
+              <Text accessibilityLiveRegion="polite" style={errorStyle}>
+                {localityError}
+              </Text>
+            ) : null}
+          </View>
         </View>
+      </Card>
 
-        <View style={{ marginTop: spacing.md }}>
-          <Text
-            nativeID="units-label"
-            style={{ color: tokens.foreground, fontSize: typography.size.sm, fontWeight: '600' }}
-          >
-            Units requested (comma separated, optional)
-          </Text>
-          <TextInput
-            accessibilityLabel="Units requested"
-            accessibilityLabelledBy="units-label"
-            value={unitsText}
-            onChangeText={setUnitsText}
-            style={{
-              minHeight: touchTarget.baseline.ios,
-              borderWidth: 1,
-              borderColor: tokens.foreground + '33',
-              borderRadius: radius.default,
-              paddingHorizontal: spacing.md,
-              color: tokens.foreground,
-              fontSize: typography.size.base,
-              marginTop: spacing.xs,
-            }}
+      <Card title="Details">
+        <View style={{ gap: spacing.md }}>
+          <View>
+            <Text nativeID="units-label" style={labelStyle}>
+              Units requested (comma separated, optional)
+            </Text>
+            <TextInput
+              accessibilityLabel="Units requested"
+              accessibilityLabelledBy="units-label"
+              value={unitsText}
+              onChangeText={setUnitsText}
+              style={inputStyle(false)}
+            />
+          </View>
+
+          {field('Narrative', 'narrative', { multiline: true })}
+          {field('Operator-entered reference', 'externalDispatchId')}
+
+          {formError ? (
+            <Notice tone="warning">
+              <Text accessibilityRole="alert" style={noticeText(theme, 'warning', true)}>
+                {formError}
+              </Text>
+            </Notice>
+          ) : null}
+
+          <Button
+            label={submitting ? 'Submitting…' : 'Submit dispatch'}
+            disabled={submitting}
+            fullWidth
+            onPress={() => void submit()}
           />
         </View>
-
-        {field('Narrative', 'narrative', { multiline: true })}
-        {field('Operator-entered reference', 'externalDispatchId')}
-
-        {formError ? (
-          <Text
-            accessibilityRole="alert"
-            style={{ color: tokens.error, fontSize: typography.size.base, marginTop: spacing.md }}
-          >
-            {formError}
-          </Text>
-        ) : null}
-
-        <TouchableOpacity
-          accessibilityRole="button"
-          disabled={submitting}
-          onPress={() => void submit()}
-          style={{
-            marginTop: spacing.lg,
-            minHeight: touchTarget.oversized.ios,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: tokens.accent,
-            borderRadius: radius.default,
-            opacity: submitting ? 0.6 : 1,
-          }}
-        >
-          <Text
-            style={{ color: tokens.background, fontSize: typography.size.base, fontWeight: '600' }}
-          >
-            {submitting ? 'Submitting…' : 'Submit dispatch'}
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
+      </Card>
+    </Screen>
   );
 }

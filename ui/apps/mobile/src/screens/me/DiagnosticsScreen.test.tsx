@@ -106,7 +106,10 @@ test('renders the per-tone, per-channel timeline for the most recent dispatch', 
   expect(getByText(/Push: sent, delivery not confirmed/)).toBeTruthy();
   expect(getByLabelText('Tone 1')).toBeTruthy();
   expect(getByLabelText('Tone 2')).toBeTruthy();
-  expect(getByText(/Critical alerts \/ full-screen alerts: not allowed/)).toBeTruthy();
+  // Each device check is one row - its name and a glyph + word chip - read as "<check>: <state>".
+  expect(getByLabelText('Critical alerts / full-screen alerts: not allowed')).toBeTruthy();
+  expect(getByLabelText('Notifications: allowed')).toBeTruthy();
+  expect(getByText('Not allowed')).toBeTruthy();
   // The self route only — never another member's diagnostics.
   expect(mockApiRequest.mock.calls.map((c) => c[0])).not.toContainEqual(
     expect.stringMatching(/diagnostics\/MBR/),

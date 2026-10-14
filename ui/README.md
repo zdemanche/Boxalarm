@@ -43,6 +43,19 @@ npm run typecheck && npm run lint && npm run format && npm test
 npm run test:e2e                                 # Playwright against a production build
 ```
 
+**iPhone app in the iOS Simulator (demo, no sign-in):** in `apps/mobile`, create a `.env` with
+`DEMO_MODE=true` and no `API_BASE_URL` (every screen then serves its mock data as a signed-in demo
+officer), put a `GoogleService-Info.plist` in `ios/Boxalarm/` (a placeholder works; push does
+nothing in the demo), then:
+
+```bash
+cd apps/mobile/ios && pod install && cd ..
+npx react-native start                      # Metro, in its own terminal
+npx react-native run-ios --simulator "iPhone 17 Pro"
+```
+
+DEMO_MODE is refused whenever `API_BASE_URL` is set, so a demo session never reaches a real API.
+
 Without `VITE_DEMO`, the web app needs `COGNITO_ISSUER`, `COGNITO_WEB_CLIENT_ID` and
 `COGNITO_HOSTED_UI_ORIGIN` (see `apps/web/src/auth/config.ts`). The GitHub Pages demo is built by
 `.github/workflows/pages.yml` on every push to `main` that touches `ui/`.

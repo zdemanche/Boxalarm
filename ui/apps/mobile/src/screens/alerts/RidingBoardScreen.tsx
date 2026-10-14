@@ -1,12 +1,13 @@
-import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize } from '@boxalarm/design-tokens';
 import { useIsFocused, useRoute } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
-import { FlatList, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text, TouchableOpacity, View } from 'react-native';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { RidingBoardApparatus, RosterEntry } from '../../features/alerts/types';
 import { ApiError } from '../../lib/apiClient';
 import { useConnectivity } from '../../sync/ConnectivityContext';
+import { Notice, noticeText, ROW_PRIMARY, ROW_SECONDARY, rowDivider } from './alertsUi';
 
 const REFETCH_INTERVAL_MS = 10_000;
 // Backoff cap for repeated poll failures - retries slow down rather than hammering a struggling
@@ -30,8 +31,7 @@ interface PendingAssignment {
 export function RidingBoardScreen() {
   const route = useRoute();
   const { dispatchId } = route.params as { dispatchId: string };
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const isFocused = useIsFocused();
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
@@ -198,112 +198,130 @@ export function RidingBoardScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+    <Screen>
       {conflict ? (
-        <Text
-          accessibilityRole="alert"
-          style={{ color: tokens.error, padding: spacing.sm, fontSize: typography.size.sm }}
-        >
-          {conflict}
-        </Text>
+        <Notice tone="warning">
+          <Text accessibilityRole="alert" style={noticeText(theme, 'warning', true)}>
+            {conflict}
+          </Text>
+        </Notice>
       ) : null}
       {staleSince ? (
-        <Text
-          accessibilityRole="alert"
-          style={{ color: tokens.warning, padding: spacing.sm, fontSize: typography.size.sm }}
-        >
-          {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}
-        </Text>
+        <Notice tone="warning">
+          <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
+            {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}
+          </Text>
+        </Notice>
       ) : null}
-      <FlatList
-        data={apparatus}
-        keyExtractor={(item) => item.apparatusId}
-        contentContainerStyle={{ padding: spacing.lg }}
-        renderItem={({ item: unit }) => (
-          <View style={{ marginBottom: spacing.lg }}>
-            <Text
-              accessibilityRole="header"
-              style={{
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                fontWeight: '700',
-              }}
-            >
-              {unit.unitId}
-            </Text>
-            {!unit.assignable ? (
-              <Text style={{ color: tokens.error, fontSize: typography.size.sm }}>
-                Out of service{unit.outOfServiceReason ? `: ${unit.outOfServiceReason}` : ''}
-              </Text>
-            ) : null}
-            {unit.positions.map((position) => {
-              const seatKey = `${unit.unitId}#${position.code}`;
-              const assignedMember = position.assignment
-                ? memberById.get(position.assignment.memberId)
-                : undefined;
-              const isPending = pending.has(seatKey);
-              return (
-                <View key={position.code} style={{ marginTop: spacing.sm }}>
-                  <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
-                    {position.label}:{' '}
-                    {position.assignment
-                      ? (assignedMember?.name ?? position.assignment.memberId)
-                      : 'Unassigned'}
-                    {position.assignment?.qualStatus === 'UNMET' ? ' · Missing qualification' : ''}
-                    {isPending ? ' · Pending sync' : ''}
-                  </Text>
+      {apparatus.map((unit) => (
+        <Card key={unit.apparatusId} title={unit.unitId}>
+          {!unit.assignable ? (
+            <StatusChip
+              status="danger"
+              label={`Out of service${unit.outOfServiceReason ? `: ${unit.outOfServiceReason}` : ''}`}
+            />
+          ) : null}
+          {unit.positions.map((position, index) => {
+            const seatKey = `${unit.unitId}#${position.code}`;
+            const assignedMember = position.assignment
+              ? memberById.get(position.assignment.memberId)
+              : undefined;
+            const isPending = pending.has(seatKey);
+            const seatOpen =
+              openSeat?.unitId === unit.unitId && openSeat.positionCode === position.code;
+            return (
+              <View key={position.code} style={{ gap: spacing.sm, ...rowDivider(theme, index) }}>
+                <View
+                  style={{
+                    minHeight: targetSize.field,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.sm,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <Text
+                      style={{
+                        color: position.assignment ? theme.fg : theme.fgMuted,
+                        ...ROW_PRIMARY,
+                      }}
+                    >
+                      {position.label}:{' '}
+                      {position.assignment
+                        ? (assignedMember?.name ?? position.assignment.memberId)
+                        : 'Unassigned'}
+                    </Text>
+                    {position.assignment?.qualStatus === 'UNMET' || isPending ? (
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs }}>
+                        {position.assignment?.qualStatus === 'UNMET' ? (
+                          <StatusChip status="caution" label="Missing qualification" />
+                        ) : null}
+                        {isPending ? <StatusChip status="warning" label="Pending sync" /> : null}
+                      </View>
+                    ) : null}
+                  </View>
                   {unit.assignable && !sessionExpired ? (
-                    <TouchableOpacity
-                      accessibilityRole="button"
+                    <Button
+                      label="Assign"
+                      variant="secondary"
                       onPress={() =>
                         setOpenSeat({ unitId: unit.unitId, positionCode: position.code })
                       }
-                      style={{
-                        marginTop: spacing.xs,
-                        minHeight: touchTarget.baseline.ios,
-                        justifyContent: 'center',
-                        paddingHorizontal: spacing.sm,
-                        borderRadius: radius.default,
-                        borderWidth: 1,
-                        borderColor: tokens.foreground + '33',
-                        alignSelf: 'flex-start',
-                      }}
-                    >
-                      <Text style={{ color: tokens.accent, fontSize: typography.size.sm }}>
-                        Assign
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
-                  {openSeat?.unitId === unit.unitId && openSeat.positionCode === position.code ? (
-                    <View style={{ marginTop: spacing.xs }}>
-                      {assignable.map((member) => (
-                        <TouchableOpacity
-                          key={member.memberId}
-                          accessibilityRole="button"
-                          onPress={() =>
-                            void assign(
-                              unit.unitId,
-                              position.code,
-                              member.memberId,
-                              position.assignment?.version ?? 0,
-                            )
-                          }
-                          style={{ minHeight: touchTarget.baseline.ios, justifyContent: 'center' }}
-                        >
-                          <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
-                            {member.name}
-                            {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
+                    />
                   ) : null}
                 </View>
-              );
-            })}
-          </View>
-        )}
-      />
-    </SafeAreaView>
+                {seatOpen ? (
+                  <View
+                    style={{
+                      borderRadius: radiusScale.md,
+                      backgroundColor: theme.surface,
+                      paddingHorizontal: spacing.md,
+                      paddingVertical: spacing.xs,
+                    }}
+                  >
+                    {assignable.length === 0 ? (
+                      <Text
+                        style={{
+                          color: theme.fgMuted,
+                          ...ROW_SECONDARY,
+                          paddingVertical: spacing.sm,
+                        }}
+                      >
+                        No one is responding yet.
+                      </Text>
+                    ) : null}
+                    {assignable.map((member, memberIndex) => (
+                      <TouchableOpacity
+                        key={member.memberId}
+                        accessibilityRole="button"
+                        onPress={() =>
+                          void assign(
+                            unit.unitId,
+                            position.code,
+                            member.memberId,
+                            position.assignment?.version ?? 0,
+                          )
+                        }
+                        style={{
+                          minHeight: targetSize.field,
+                          justifyContent: 'center',
+                          ...rowDivider(theme, memberIndex),
+                          paddingTop: 0,
+                        }}
+                      >
+                        <Text style={{ flex: 1, color: theme.fg, ...ROW_PRIMARY }}>
+                          {member.name}
+                          {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
+        </Card>
+      ))}
+    </Screen>
   );
 }

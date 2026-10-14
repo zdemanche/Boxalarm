@@ -92,7 +92,18 @@ test('training officer creates an event, signs up, and records attendance (#152)
     signedUp: boolean;
   }
 
-  const events: TrainingEvent[] = [];
+  // The drill created below is in the past (so its hours form shows); sign-up closes once an
+  // event starts, so the member signs up for this upcoming one instead.
+  const events: TrainingEvent[] = [
+    {
+      eventId: 'evt-upcoming-1',
+      title: 'Pump operations',
+      category: 'Drill',
+      startAt: Date.parse('2099-06-01T22:00:00Z'),
+      endAt: Date.parse('2099-06-02T00:00:00Z'),
+      signedUp: false,
+    },
+  ];
   const hourPayloads: { attendees: { memberId: string; hours: number }[] }[] = [];
 
   await page.route('**/api/v1/personnel/members', (route) =>
@@ -115,7 +126,7 @@ test('training officer creates an event, signs up, and records attendance (#152)
         endAt: body.endAt,
         signedUp: false,
       };
-      events.splice(0, events.length, created);
+      events.push(created);
       await route.fulfill({ status: 201, json: created });
       return;
     }
@@ -124,8 +135,9 @@ test('training officer creates an event, signs up, and records attendance (#152)
       if (raw) {
         hourPayloads.push(JSON.parse(raw) as { attendees: { memberId: string; hours: number }[] });
       } else {
-        const current = events[0];
-        if (current) events.splice(0, events.length, { ...current, signedUp: true });
+        const eventId = url.pathname.split('/').at(-2);
+        const index = events.findIndex((e) => e.eventId === eventId);
+        if (index >= 0) events[index] = { ...events[index]!, signedUp: true };
       }
       await route.fulfill({ json: { eventId: 'evt-drill-1' } });
       return;
@@ -144,6 +156,7 @@ test('training officer creates an event, signs up, and records attendance (#152)
   await page.getByRole('button', { name: 'Create event' }).click();
 
   await expect(page.getByText('Hose line drill')).toBeVisible();
+  await expect(page.getByText('Sign-up closed: the event is over')).toBeVisible();
   await page.getByRole('button', { name: 'Sign up' }).click();
   await expect(page.getByText('Signed up')).toBeVisible();
 

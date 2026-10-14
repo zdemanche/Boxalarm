@@ -2,9 +2,11 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
-import { Button, Card, Skeleton, TextInput } from '../../components/ui';
+import { Button, Card, Skeleton, StatusChip, TextInput } from '../../components/ui';
+import { daysUntil, dueLabel, formatCalendarDate } from '../../lib/dates';
 import { createScbaRecord, getScbaDueSoon } from './api';
 import type { CreateScbaInput, ScbaRecord } from './types';
+import styles from './Apparatus.module.css';
 
 const emptyForm: CreateScbaInput = {
   scbaUnitId: '',
@@ -47,65 +49,76 @@ export function ScbaTab({ unitId, apparatusId }: { unitId: string; apparatusId: 
   const dueForUnit = (dueSoonQuery.data ?? []).filter((entry) => entry.apparatusId === apparatusId);
 
   return (
-    <section>
-      <h2 style={{ fontSize: 17, fontWeight: 600 }}>SCBA</h2>
-
+    <div className={styles.stack}>
       {records.length > 0 ? (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {records.map((record) => (
-            <li
-              key={record.scbaUnitId}
-              style={{
-                padding: 'var(--bx-space-sm) 0',
-                borderBottom: '1px solid var(--bx-border-decorative)',
-              }}
-            >
-              <strong>{record.scbaUnitId}</strong> — cylinder {record.cylinderId}
-              <div style={{ fontSize: 13, color: 'var(--bx-fg-muted)' }}>
-                Next flow test due {record.nextFlowTestDue} — next hydro test due{' '}
-                {record.nextHydroTestDue}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <Card title="Recorded this visit">
+          <ul className={styles.list}>
+            {records.map((record) => (
+              <li key={record.scbaUnitId} className={styles.row}>
+                <span className={styles.rowBody}>
+                  <span className={[styles.rowTitle, styles.mono].join(' ')}>
+                    {record.scbaUnitId}
+                  </span>
+                  <span className={styles.rowMeta}>
+                    Cylinder {record.cylinderId} · next flow test{' '}
+                    {formatCalendarDate(record.nextFlowTestDue)} · next hydro test{' '}
+                    {formatCalendarDate(record.nextHydroTestDue)}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
       ) : null}
 
-      <h3 style={{ fontSize: 15, fontWeight: 600 }}>Due soon</h3>
-      {dueSoonQuery.isLoading ? (
-        <Skeleton lines={2} />
-      ) : dueSoonQuery.error ? (
-        <div role="alert">
-          <p>{dueSoonErrorMessage}</p>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => void dueSoonQuery.refetch()}
-          >
-            Try again
-          </Button>
-        </div>
-      ) : dueForUnit.length === 0 ? (
-        <p>Nothing due soon for this unit.</p>
-      ) : (
-        <ul>
-          {dueForUnit.map((entry) => (
-            <li key={`${entry.scbaUnitId}-${entry.testType}`}>
-              {entry.scbaUnitId} — {entry.testType === 'SCBA_FLOW' ? 'Flow test' : 'Hydro test'} due{' '}
-              {entry.dueDate}
-            </li>
-          ))}
-        </ul>
-      )}
+      <Card title="SCBA tests due soon">
+        {dueSoonQuery.isLoading ? (
+          <Skeleton lines={2} />
+        ) : dueSoonQuery.error ? (
+          <div role="alert" className={styles.notice}>
+            <p>{dueSoonErrorMessage}</p>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void dueSoonQuery.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : dueForUnit.length === 0 ? (
+          <p className={styles.message}>Nothing due soon for this unit.</p>
+        ) : (
+          <ul className={styles.list}>
+            {dueForUnit.map((entry) => {
+              const days = daysUntil(entry.dueDate);
+              return (
+                <li key={`${entry.scbaUnitId}-${entry.testType}`} className={styles.row}>
+                  <span className={styles.rowBody}>
+                    <span className={[styles.rowTitle, styles.mono].join(' ')}>
+                      {entry.scbaUnitId}
+                    </span>
+                    <span className={styles.rowMeta}>
+                      {entry.testType === 'SCBA_FLOW' ? 'Flow test' : 'Hydro test'} due{' '}
+                      {formatCalendarDate(entry.dueDate)}
+                    </span>
+                  </span>
+                  <StatusChip status={days < 0 ? 'danger' : 'warning'}>{dueLabel(days)}</StatusChip>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
 
-      <Card title="Log SCBA record" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>
+      <Card title="Log SCBA record">
         <form
           aria-label="Log SCBA record"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
             mutation.mutate(form);
           }}
-          style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
+          className={styles.formGrid}
         >
           <TextInput
             label="SCBA unit"
@@ -133,12 +146,18 @@ export function ScbaTab({ unitId, apparatusId }: { unitId: string; apparatusId: 
             required
             onChange={(e) => setForm((prev) => ({ ...prev, hydroTestDate: e.target.value }))}
           />
-          {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
-          <Button type="submit" loading={mutation.isPending} style={{ maxWidth: 240 }}>
-            Save SCBA record
-          </Button>
+          {mutation.error ? (
+            <p role="alert" className={styles.error}>
+              {mutation.error.message}
+            </p>
+          ) : null}
+          <div className={styles.formActions}>
+            <Button type="submit" loading={mutation.isPending}>
+              Save SCBA record
+            </Button>
+          </div>
         </form>
       </Card>
-    </section>
+    </div>
   );
 }

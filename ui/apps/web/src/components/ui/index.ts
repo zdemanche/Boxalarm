@@ -1,4 +1,4 @@
-export { Button, IconButton } from './Button';
+export { Button, IconButton, buttonClassName } from './Button';
 export type { ButtonSize, ButtonVariant } from './Button';
 export { Card, Stat } from './Card';
 export { PageHeader } from './PageHeader';

@@ -1,10 +1,13 @@
 import {
+  accentPalette,
   breakpoints,
+  elevationShadow,
   fontStack,
   motion,
   palette,
   radius,
   radiusScale,
+  shellPalette,
   spacing,
   spacingScale,
   statusChipPalette,
@@ -27,6 +30,11 @@ function typeVars(prefix: string, scale: typeof typeScale) {
 
 function surfaceVars(theme: 'day' | 'cab') {
   const s = surfacePalette[theme];
+  const a = accentPalette[theme];
+  // The page is the canvas and cards sit on it: grey canvas with white cards in day, black canvas
+  // with lifted dark cards in cab. Both values are existing surface tokens.
+  const canvas = theme === 'day' ? s.surface : s.bg;
+  const card = theme === 'day' ? s.bg : s.surface;
   const status = statusPalette[theme];
   const chip = statusChipPalette[theme];
   const chipVars = Object.entries(chip)
@@ -35,7 +43,18 @@ function surfaceVars(theme: 'day' | 'cab') {
         `  --bx-chip-fill-${role}: ${fill};\n  --bx-chip-onfill-${role}: ${onFill};`,
     )
     .join('\n');
-  return `  --bx-bg: ${s.bg};
+  return `  --bx-canvas: ${canvas};
+  --bx-card: ${card};
+  --bx-accent: ${a.accent};
+  --bx-accent-indicator: ${a.indicator};
+  --bx-accent-fill: ${a.fill};
+  --bx-accent-fill-hover: ${a.fillHover};
+  --bx-on-accent-fill: ${a.onFill};
+  --bx-accent-subtle: ${a.accentSubtle};
+  --bx-on-accent-subtle: ${a.onAccentSubtle};
+  --bx-shadow-raised: ${elevationShadow.raised[theme]};
+  --bx-shadow-overlay: ${elevationShadow.overlay[theme]};
+  --bx-bg: ${s.bg};
   --bx-surface: ${s.surface};
   --bx-surface-raised: ${s.surfaceRaised};
   --bx-fg: ${s.fg};
@@ -46,6 +65,7 @@ function surfaceVars(theme: 'day' | 'cab') {
   --bx-border-decorative: ${s.borderDecorative};
   --bx-focus: ${s.focus};
   --bx-focus-gap: ${s.focusGap};
+  --bx-link: ${s.link};
   --bx-scrim: ${s.scrim};
   --bx-skeleton: ${s.skeleton};
   --bx-status-danger: ${status.danger};
@@ -69,6 +89,13 @@ ${surfaceVars('day')}
 }
 
 :root {
+  --bx-shell-bg: ${shellPalette.bg};
+  --bx-shell-bg-raised: ${shellPalette.bgRaised};
+  --bx-shell-border: ${shellPalette.border};
+  --bx-shell-fg: ${shellPalette.fg};
+  --bx-shell-fg-muted: ${shellPalette.fgMuted};
+  --bx-shell-accent: ${shellPalette.accent};
+
   --bx-space-2xs: ${spacingScale['2xs']}px;
   --bx-space-xs: ${spacingScale.xs}px;
   --bx-space-sm: ${spacingScale.sm}px;
@@ -172,12 +199,50 @@ ${surfaceVars('cab')}
 }
 
 body {
-  background: var(--bx-bg);
+  background: var(--bx-canvas);
   color: var(--bx-fg);
   margin: 0;
   line-height: var(--boxalarm-line-height);
   font-family: var(--bx-font-ui);
   -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--bx-link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* Bare headings follow the type scale; the browser's 2em/1.5em defaults made a section <h2>
+   larger than the page title. Component classes still override these. */
+h1 {
+  font-size: var(--boxalarm-type-title-size);
+  line-height: var(--boxalarm-type-title-lh);
+}
+
+h2 {
+  font-size: var(--boxalarm-type-heading-size);
+  line-height: var(--boxalarm-type-heading-lh);
+  font-weight: 600;
+}
+
+h3,
+h4 {
+  font-size: var(--boxalarm-type-subheading-size);
+  line-height: var(--boxalarm-type-subheading-lh);
+  font-weight: 600;
+}
+
+/* Native controls default to the platform UI font at 13px, not the page's type. */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 ::selection {

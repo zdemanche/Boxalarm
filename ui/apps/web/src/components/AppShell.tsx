@@ -26,8 +26,13 @@ export function AppShell() {
     <LiveRegionProvider>
       <ToastProvider>
         <SkipToContentLink />
-        {import.meta.env.VITE_DEMO === 'true' && <DemoBanner />}
         <div className={styles.shell}>
+          {/* In the content column, so the sidebar runs the full height of the window. */}
+          {import.meta.env.VITE_DEMO === 'true' && (
+            <div className={styles.banner}>
+              <DemoBanner />
+            </div>
+          )}
           <PrimaryNav />
           <NavDrawer open={navOpen} onOpenChange={setNavOpen} />
           <TopBar onOpenNav={() => setNavOpen(true)} notifications={<NotificationBell />} />

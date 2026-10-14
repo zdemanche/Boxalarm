@@ -12,6 +12,7 @@ import {
   StatusChip,
   TextInput,
 } from '../../components/ui';
+import { humanize } from '../../lib/labels';
 import { useRidingPositions } from '../../lib/useRidingPositions';
 import { useStations } from '../../lib/useStations';
 import { listMembers } from '../personnel/api';
@@ -23,7 +24,56 @@ import {
   listShifts,
 } from './api';
 import { formatShiftWindow } from './format';
-import { SHIFT_STATUS_LABEL, type CoverageStatus, type CreateShiftPosition } from './types';
+import {
+  SHIFT_STATUS_LABEL,
+  type CoverageStatus,
+  type CreateShiftPosition,
+  type DutyShift,
+} from './types';
+import styles from './SchedulePage.module.css';
+
+/** The department's label for a riding-position code ("FF" -> "Firefighter (interior)"), or the
+ * code itself when no riding positions are configured. */
+function usePositionLabel(): (code: string) => string {
+  const { positions } = useRidingPositions();
+  return (code) => positions.find((position) => position.code === code)?.label ?? code;
+}
+
+/** Spelled-out qual codes ("DRIVER_OPERATOR") read as words; short department codes ("DO") stay. */
+function qualLabel(code: string): string {
+  return code.includes('_') ? humanize(code) : code;
+}
+
+const SHIFT_STATUS_ROLE: Record<DutyShift['status'], StatusRole> = {
+  FULL: 'ok',
+  PARTIALLY_FILLED: 'warning',
+  OPEN: 'warning',
+  CANCELLED: 'neutral',
+};
+
+function ShiftRows({
+  shifts,
+  nameFor,
+}: {
+  shifts: readonly DutyShift[];
+  nameFor: (stationId: string) => string;
+}) {
+  return (
+    <ul className={styles.list}>
+      {shifts.map((shift) => (
+        <li key={shift.shiftId} className={styles.row}>
+          <span className={styles.rowMain}>
+            <span className={styles.rowTitle}>{nameFor(shift.stationId)}</span>
+            <span className={styles.rowMeta}>{formatShiftWindow(shift.startAt, shift.endAt)}</span>
+          </span>
+          <StatusChip status={SHIFT_STATUS_ROLE[shift.status]}>
+            {SHIFT_STATUS_LABEL[shift.status]}
+          </StatusChip>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 const COVERAGE_STATUS: Record<CoverageStatus, StatusRole> = {
   covered: 'ok',
@@ -82,29 +132,31 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
   });
 
   return (
-    <Card title="New shift" style={{ marginTop: 'var(--bx-space-xl)', maxWidth: 480 }}>
+    <Card title="New shift">
       <form
         aria-label="New shift"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
           createMutation.mutate();
         }}
-        style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+        className={styles.form}
       >
-        <TextInput
-          label="Start"
-          type="datetime-local"
-          value={startAt}
-          onChange={(e) => setStartAt(e.target.value)}
-          required
-        />
-        <TextInput
-          label="End"
-          type="datetime-local"
-          value={endAt}
-          onChange={(e) => setEndAt(e.target.value)}
-          required
-        />
+        <div className={styles.pair}>
+          <TextInput
+            label="Start"
+            type="datetime-local"
+            value={startAt}
+            onChange={(e) => setStartAt(e.target.value)}
+            required
+          />
+          <TextInput
+            label="End"
+            type="datetime-local"
+            value={endAt}
+            onChange={(e) => setEndAt(e.target.value)}
+            required
+          />
+        </div>
         {stations.length > 0 ? (
           <Select
             label="Station"
@@ -133,10 +185,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
           />
         )}
         {positions.map((position, index) => (
-          <fieldset
-            key={index}
-            style={{ display: 'flex', gap: 'var(--bx-space-sm)', border: 'none', padding: 0 }}
-          >
+          <fieldset key={index} className={styles.position}>
             <legend>Position {index + 1}</legend>
             {ridingPositions.length > 0 ? (
               // Pick from the department's riding positions; the position's own required qual
@@ -193,13 +242,15 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
           </fieldset>
         ))}
         {createMutation.error ? (
-          <p role="alert" aria-live="assertive">
+          <p role="alert" aria-live="assertive" className={styles.error}>
             {createMutation.error.message}
           </p>
         ) : null}
-        <Button type="submit" loading={createMutation.isPending}>
-          Create shift
-        </Button>
+        <div className={styles.submit}>
+          <Button type="submit" loading={createMutation.isPending}>
+            Create shift
+          </Button>
+        </div>
       </form>
     </Card>
   );
@@ -208,6 +259,7 @@ function CreateShiftForm({ onCreated }: { onCreated: () => void }) {
 function CoverageSection() {
   const auth = useAuth();
   const { nameFor } = useStations();
+  const positionLabel = usePositionLabel();
   const coverageQuery = useQuery({
     queryKey: ['schedule', 'coverage'],
     queryFn: () => getShiftCoverage(auth),
@@ -221,36 +273,56 @@ function CoverageSection() {
     );
   }
 
+  const shifts = coverageQuery.data ?? [];
+
   return (
-    <Card title="Coverage" style={{ marginTop: 'var(--bx-space-xl)' }}>
+    <Card title="Coverage">
       {coverageQuery.isLoading ? (
         <Skeleton lines={3} />
+      ) : shifts.length === 0 ? (
+        <p className={styles.muted}>No upcoming shifts to check.</p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {(coverageQuery.data ?? []).map((shift) => (
-            <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
-              <strong>{nameFor(shift.stationId)}</strong>{' '}
-              {formatShiftWindow(shift.startAt, shift.endAt)}{' '}
-              <StatusChip status={COVERAGE_STATUS[shift.status]}>
-                {COVERAGE_WORD[shift.status]}
-              </StatusChip>
-              <ul style={{ listStyle: 'none', paddingLeft: 'var(--bx-space-md)' }}>
-                {shift.positions
-                  .filter((position) => position.status !== 'covered')
-                  .map((position) => (
-                    <li key={position.positionCode}>
-                      {position.positionCode} —{' '}
-                      <StatusChip status={COVERAGE_STATUS[position.status]}>
-                        {COVERAGE_WORD[position.status]}
-                      </StatusChip>
-                      {position.status === 'qual-gapped' && position.requiredQual
-                        ? ` (${position.requiredQual})`
-                        : ''}
-                    </li>
-                  ))}
-              </ul>
-            </li>
-          ))}
+        <ul className={styles.list}>
+          {shifts.map((shift) => {
+            const gaps = shift.positions.filter((position) => position.status !== 'covered');
+            return (
+              <li key={shift.shiftId} className={styles.row}>
+                <span className={styles.rowMain}>
+                  <span className={styles.rowTitle}>{nameFor(shift.stationId)}</span>
+                  <span className={styles.rowMeta}>
+                    {formatShiftWindow(shift.startAt, shift.endAt)}
+                  </span>
+                </span>
+                <StatusChip status={COVERAGE_STATUS[shift.status]}>
+                  {COVERAGE_WORD[shift.status]}
+                </StatusChip>
+                {gaps.length > 0 ? (
+                  <ul
+                    className={styles.gaps}
+                    aria-label={`Open positions, ${nameFor(shift.stationId)}`}
+                  >
+                    {gaps.map((position, index) => (
+                      // A shift can be short the same position twice (two firefighters).
+                      <li key={`${position.positionCode}-${index}`} className={styles.gap}>
+                        <span>
+                          {positionLabel(position.positionCode)}
+                          {position.status === 'qual-gapped' && position.requiredQual ? (
+                            <span className={styles.need}>
+                              {' '}
+                              · needs {qualLabel(position.requiredQual)}
+                            </span>
+                          ) : null}
+                        </span>
+                        <StatusChip status={COVERAGE_STATUS[position.status]}>
+                          {COVERAGE_WORD[position.status]}
+                        </StatusChip>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>
@@ -262,6 +334,7 @@ function PendingSwaps() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const { nameFor } = useStations();
+  const positionLabel = usePositionLabel();
   const swapsQuery = useQuery({
     queryKey: ['schedule', 'swaps', 'pending'],
     queryFn: () => listPendingShiftSwaps(auth),
@@ -297,41 +370,33 @@ function PendingSwaps() {
       </ApiForbiddenGate>
     );
   } else if (swapsQuery.data.length === 0) {
-    body = <p>No swaps are waiting for approval.</p>;
+    body = <p className={styles.muted}>No swaps are waiting for approval.</p>;
   } else {
     body = (
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul className={styles.list}>
         {swapsQuery.data.map((swap) => {
           const shift = shiftsQuery.data?.find((s) => s.shiftId === swap.shiftId);
-          const what = `${memberName(swap.fromMemberId)} to ${memberName(swap.toMemberId)}, ${swap.positionCode}`;
+          const what = `${memberName(swap.fromMemberId)} to ${memberName(swap.toMemberId)}, ${positionLabel(swap.positionCode)}`;
           const approving =
             approveMutation.isPending &&
             approveMutation.variables?.shiftId === swap.shiftId &&
             approveMutation.variables.requestedAt === swap.requestedAt;
           return (
-            <li
-              key={`${swap.shiftId}-${swap.requestedAt}`}
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 'var(--bx-space-sm)',
-                padding: 'var(--bx-space-sm) 0',
-                borderBottom: '1px solid var(--bx-border-decorative)',
-              }}
-            >
-              <span>
-                <strong>
+            <li key={`${swap.shiftId}-${swap.requestedAt}`} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>
                   {memberName(swap.fromMemberId)} → {memberName(swap.toMemberId)}
-                </strong>{' '}
-                · {swap.positionCode}
-                {shift
-                  ? ` · ${nameFor(shift.stationId)}, ${formatShiftWindow(shift.startAt, shift.endAt)}`
-                  : ''}
+                </span>
+                <span className={styles.rowMeta}>
+                  {positionLabel(swap.positionCode)}
+                  {shift
+                    ? ` · ${nameFor(shift.stationId)}, ${formatShiftWindow(shift.startAt, shift.endAt)}`
+                    : ''}
+                </span>
               </span>
               <Button
                 variant="secondary"
+                size="sm"
                 loading={approving}
                 aria-label={`Approve swap: ${what}`}
                 onClick={() =>
@@ -348,14 +413,18 @@ function PendingSwaps() {
   }
 
   return (
-    <Card title="Swaps waiting for approval" style={{ marginTop: 'var(--bx-space-xl)' }}>
+    <Card title="Swaps waiting for approval">
       {body}
       {approveMutation.error ? (
-        <p role="alert" aria-live="assertive">
+        <p role="alert" aria-live="assertive" className={[styles.error, styles.message].join(' ')}>
           The swap wasn&rsquo;t approved: {approveMutation.error.message}
         </p>
       ) : null}
-      {approveMutation.isSuccess ? <p role="status">Swap approved.</p> : null}
+      {approveMutation.isSuccess ? (
+        <p role="status" className={styles.message}>
+          Swap approved.
+        </p>
+      ) : null}
     </Card>
   );
 }
@@ -378,28 +447,45 @@ export function SchedulePage() {
     );
   }
 
+  const now = Date.now();
+  const byStart = [...(shiftsQuery.data ?? [])].sort((a, b) => a.startAt - b.startAt);
+  const upcoming = byStart.filter((shift) => shift.endAt > now);
+  const past = byStart.filter((shift) => shift.endAt <= now).reverse();
+
   return (
     <main id="main-content">
-      <PageHeader title="Schedule" />
-
-      {shiftsQuery.isLoading ? (
-        <Skeleton lines={4} />
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {(shiftsQuery.data ?? []).map((shift) => (
-            <li key={shift.shiftId} style={{ padding: 'var(--bx-space-sm) 0' }}>
-              <strong>{nameFor(shift.stationId)}</strong> —{' '}
-              {formatShiftWindow(shift.startAt, shift.endAt)} — {SHIFT_STATUS_LABEL[shift.status]}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <CreateShiftForm
-        onCreated={() => void queryClient.invalidateQueries({ queryKey: ['schedule', 'shifts'] })}
+      <PageHeader
+        title="Schedule"
+        description="Duty shifts by station: swaps to approve, coverage gaps, and the plan ahead."
       />
-      <CoverageSection />
-      <PendingSwaps />
+
+      <div className={styles.layout}>
+        {/* What needs an officer first: swaps to approve, then gaps, then the plan itself. */}
+        <div className={styles.column}>
+          <PendingSwaps />
+          <CoverageSection />
+
+          <Card title="Upcoming shifts">
+            {shiftsQuery.isLoading ? (
+              <Skeleton lines={4} />
+            ) : upcoming.length === 0 ? (
+              <p className={styles.muted}>No upcoming shifts are scheduled.</p>
+            ) : (
+              <ShiftRows shifts={upcoming} nameFor={nameFor} />
+            )}
+            {past.length > 0 ? (
+              <details className={styles.earlier}>
+                <summary>Earlier shifts ({past.length})</summary>
+                <ShiftRows shifts={past} nameFor={nameFor} />
+              </details>
+            ) : null}
+          </Card>
+        </div>
+
+        <CreateShiftForm
+          onCreated={() => void queryClient.invalidateQueries({ queryKey: ['schedule', 'shifts'] })}
+        />
+      </div>
     </main>
   );
 }

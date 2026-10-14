@@ -1,16 +1,18 @@
-import { radius, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useState } from 'react';
-import { AccessibilityInfo, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { AccessibilityInfo, Text, View } from 'react-native';
 import Config from 'react-native-config';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, StatusChip, useTheme } from '../../components/ui';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
+import { cardShadow } from '../../components/ui/theme';
 import { setServiceStatus } from '../../features/checks/serviceStatusApi';
 import type { ApparatusStatus } from '../../features/checks/types';
 import { ApiError, ApiTimeoutError } from '../../lib/apiClient';
 import type { ChecksStackParamList } from '../../navigation/ChecksStack';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
+import { ROW_TEXT_SIZE } from './fieldText';
+import { RadioOption } from './RadioOption';
 
 /** Reasons offered for taking a unit out of service: pick-from-list, no typing (design.md §4.8). */
 export const OOS_REASONS = [
@@ -92,47 +94,51 @@ export function ServiceStatusScreen() {
   const body = (text: string, color = theme.fg) => (
     <Text style={{ color, fontSize: typeScale.body.size }}>{text}</Text>
   );
+  const shown = phase.kind === 'done' ? phase.status : status;
 
   return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: theme.bg }}
-      edges={['bottom', 'left', 'right']}
-    >
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
+    <Screen>
+      <Card>
+        <View
+          style={{
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: spacing.sm,
+          }}
         >
-          {unitId} service status
-        </Text>
-        <StatusChip
-          status={
-            (phase.kind === 'done' ? phase.status : status) === 'IN_SERVICE' ? 'ok' : 'danger'
-          }
-          label={
-            (phase.kind === 'done' ? phase.status : status) === 'IN_SERVICE'
-              ? 'In service'
-              : 'Out of service'
-          }
-        />
-
+          <Text
+            accessibilityRole="header"
+            style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
+          >
+            {unitId}
+          </Text>
+          <StatusChip
+            status={shown === 'IN_SERVICE' ? 'ok' : 'danger'}
+            label={shown === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+          />
+        </View>
         {phase.kind === 'done' ? (
-          <>
-            <Text
-              accessibilityLiveRegion="polite"
-              style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}
-            >
-              {takingOut ? `${unitId} is now out of service.` : `${unitId} is back in service.`}
-            </Text>
-            <Button
-              label="Back to apparatus"
-              size="alert"
-              fullWidth
-              onPress={() => navigation.goBack()}
-            />
-          </>
-        ) : !isOnline ? (
-          <>
+          <Text
+            accessibilityLiveRegion="polite"
+            style={{ color: theme.fg, fontSize: ROW_TEXT_SIZE, fontWeight: '600' }}
+          >
+            {takingOut ? `${unitId} is now out of service.` : `${unitId} is back in service.`}
+          </Text>
+        ) : null}
+      </Card>
+
+      {phase.kind === 'done' ? (
+        <Button
+          label="Back to apparatus"
+          size="alert"
+          fullWidth
+          onPress={() => navigation.goBack()}
+        />
+      ) : !isOnline ? (
+        <>
+          <Card>
             <Text
               accessibilityRole="alert"
               style={{
@@ -144,120 +150,101 @@ export function ServiceStatusScreen() {
               You&apos;re offline. Service status can only be changed with a connection, so nothing
               was changed. Try again when you have signal, or radio the officer.
             </Text>
-            <Button
-              label="Back to apparatus"
-              variant="secondary"
-              onPress={() => navigation.goBack()}
-            />
-          </>
-        ) : (
-          <>
-            {takingOut ? (
+          </Card>
+          <Button
+            label="Back to apparatus"
+            variant="secondary"
+            onPress={() => navigation.goBack()}
+          />
+        </>
+      ) : (
+        <>
+          {takingOut ? (
+            <Card>
               <View
                 accessibilityRole="radiogroup"
                 accessibilityLabel={`Why is ${unitId} out of service?`}
                 style={{ gap: spacing.sm }}
               >
-                <Text
-                  style={{ color: theme.fg, fontSize: typeScale.label.size, fontWeight: '600' }}
-                >
+                <Text style={{ color: theme.fg, fontSize: ROW_TEXT_SIZE, fontWeight: '600' }}>
                   Why is {unitId} out of service?
                 </Text>
-                {OOS_REASONS.map((option) => {
-                  const selected = reason === option;
-                  return (
-                    <TouchableOpacity
-                      key={option}
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: selected, disabled: phase.kind === 'saving' }}
-                      disabled={phase.kind === 'saving'}
-                      onPress={() => {
-                        setReason(option);
-                        if (phase.kind !== 'choose') setPhase({ kind: 'choose' });
-                      }}
-                      style={{
-                        minHeight: targetSize.field,
-                        justifyContent: 'center',
-                        paddingHorizontal: spacing.md,
-                        borderRadius: radius.default,
-                        borderWidth: selected ? 2 : 1,
-                        borderColor: selected ? theme.fg : theme.borderStrong,
-                        backgroundColor: selected ? theme.surfaceRaised : 'transparent',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          color: theme.fg,
-                          fontSize: typeScale.body.size,
-                          fontWeight: selected ? '700' : '400',
-                        }}
-                      >
-                        {selected ? '● ' : '○ '}
-                        {option}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                {OOS_REASONS.map((option) => (
+                  <RadioOption
+                    key={option}
+                    label={option}
+                    selected={reason === option}
+                    disabled={phase.kind === 'saving'}
+                    onPress={() => {
+                      setReason(option);
+                      if (phase.kind !== 'choose') setPhase({ kind: 'choose' });
+                    }}
+                  />
+                ))}
+                {!reason ? body('Choose a reason first.', theme.fgMuted) : null}
               </View>
-            ) : null}
+            </Card>
+          ) : null}
 
-            {phase.kind === 'failed' ? (
+          {phase.kind === 'failed' ? (
+            <Card>
               <Text
                 accessibilityRole="alert"
                 style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
               >
                 {phase.message}
               </Text>
-            ) : null}
+            </Card>
+          ) : null}
 
-            {phase.kind === 'confirm' || phase.kind === 'saving' ? (
-              <View
-                style={{
-                  gap: spacing.sm,
-                  padding: spacing.md,
-                  borderRadius: radius.default,
-                  borderWidth: 2,
-                  borderColor: takingOut ? theme.status.danger : theme.status.ok,
-                }}
+          {phase.kind === 'confirm' || phase.kind === 'saving' ? (
+            // The confirmation keeps its 2px status edge: it is the step that changes what every
+            // member sees.
+            <View
+              style={{
+                gap: spacing.sm,
+                padding: spacing.md,
+                borderRadius: radiusScale.lg,
+                borderWidth: 2,
+                borderColor: takingOut ? theme.status.danger : theme.status.ok,
+                backgroundColor: theme.card,
+                ...cardShadow(theme),
+              }}
+            >
+              <Text
+                accessibilityRole="header"
+                style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
               >
-                <Text
-                  accessibilityRole="header"
-                  style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
-                >
-                  {action}?
-                </Text>
-                {body(consequence)}
-                <Button
-                  label={takingOut ? 'Yes, take it out of service' : 'Yes, return it to service'}
-                  variant={takingOut ? 'danger' : 'primary'}
-                  size="alert"
-                  fullWidth
-                  loading={phase.kind === 'saving'}
-                  onPress={() => void submit()}
-                />
-                <Button
-                  label="Cancel"
-                  variant="secondary"
-                  disabled={phase.kind === 'saving'}
-                  onPress={() => setPhase({ kind: 'choose' })}
-                />
-              </View>
-            ) : (
-              <>
-                {takingOut && !reason ? body('Choose a reason first.', theme.fgMuted) : null}
-                <Button
-                  label={action}
-                  variant={takingOut ? 'danger' : 'primary'}
-                  size="alert"
-                  fullWidth
-                  disabled={takingOut && !reason}
-                  onPress={() => setPhase({ kind: 'confirm' })}
-                />
-              </>
-            )}
-          </>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+                {action}?
+              </Text>
+              {body(consequence)}
+              <Button
+                label={takingOut ? 'Yes, take it out of service' : 'Yes, return it to service'}
+                variant={takingOut ? 'danger' : 'primary'}
+                size="alert"
+                fullWidth
+                loading={phase.kind === 'saving'}
+                onPress={() => void submit()}
+              />
+              <Button
+                label="Cancel"
+                variant="secondary"
+                disabled={phase.kind === 'saving'}
+                onPress={() => setPhase({ kind: 'choose' })}
+              />
+            </View>
+          ) : (
+            <Button
+              label={action}
+              variant={takingOut ? 'danger' : 'primary'}
+              size="alert"
+              fullWidth
+              disabled={takingOut && !reason}
+              onPress={() => setPhase({ kind: 'confirm' })}
+            />
+          )}
+        </>
+      )}
+    </Screen>
   );
 }

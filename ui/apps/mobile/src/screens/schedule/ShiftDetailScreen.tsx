@@ -1,22 +1,21 @@
-import { palette, radius, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import {
+  radiusScale,
+  spacing,
+  targetSize,
+  typeScale,
+  type StatusRole,
+} from '@boxalarm/design-tokens';
 import { useRoute } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
-import {
-  AccessibilityInfo,
-  ScrollView,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useColorScheme,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
 import type { DutyShift } from '../../features/schedule/types';
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { NoCachedDataError } from '../../sync/readThrough';
+import { formatShiftWindow } from './ShiftBoardScreen';
 
 // Mirrors ProfileEditScreen's error-handling pattern: a 403 gets its own message, everything
 // else (offline, 409, 500) gets a generic retry prompt, shown on screen and announced for a
@@ -31,11 +30,23 @@ function describeError(e: unknown, forbiddenMessage: string, fallbackMessage: st
 // otherwise mislead a volunteer into believing a shift is theirs.
 type ClaimUiState = 'open' | 'pending' | 'claimed_by_you' | 'claimed_by_other' | 'already_taken';
 
+// Glyph + word + colour (design.md §2.3): an empty seat is hollow, a filled one solid, a claim in
+// flight is "sending", and losing the race is a caution - never the alarm red.
+const STATE_ROLE: Record<ClaimUiState, StatusRole> = {
+  open: 'neutral',
+  pending: 'info',
+  claimed_by_you: 'ok',
+  claimed_by_other: 'ok',
+  already_taken: 'caution',
+};
+
+/** Field rows: primary text 17/600 (docs/design.md §1 field body). */
+const ROW_TITLE_SIZE = 17;
+
 export function ShiftDetailScreen() {
   const route = useRoute();
   const shiftId = (route.params as { shiftId: string }).shiftId;
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const repository = useScheduleRepository();
   const { isOnline } = useOptionalConnectivity();
   const auth = useOptionalAuth();
@@ -199,148 +210,114 @@ export function ShiftDetailScreen() {
 
   if (!shift) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background, padding: spacing.lg }}>
-        <Text
-          accessibilityRole={loadError ? 'alert' : undefined}
-          style={{
-            color: loadError ? tokens.error : tokens.foreground,
-            fontSize: typography.size.base,
-          }}
-        >
-          {loadError ?? 'Loading shift…'}
-        </Text>
-      </SafeAreaView>
+      <Screen>
+        <Card>
+          <Text
+            accessibilityRole={loadError ? 'alert' : undefined}
+            style={{
+              color: loadError ? theme.status.danger : theme.fgMuted,
+              fontSize: typeScale.body.size,
+            }}
+          >
+            {loadError ?? 'Loading shift…'}
+          </Text>
+        </Card>
+      </Screen>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
-        {error ? (
+    <Screen>
+      {error ? (
+        <Card>
           <Text
             accessibilityRole="alert"
-            style={{
-              color: tokens.error,
-              marginBottom: spacing.md,
-              fontSize: typography.size.sm,
-            }}
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size, fontWeight: '600' }}
           >
             {error}
           </Text>
-        ) : null}
-        {shift.positions.map((position) => {
-          const state = claimState[position.positionCode] ?? 'open';
-          const isMine =
-            state === 'claimed_by_you' ||
-            position.claimedByMe === true ||
-            position.claimedByMemberId === auth?.memberId;
-          return (
-            <View
-              key={position.positionCode}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                paddingVertical: spacing.md,
-                borderBottomWidth: 1,
-                borderBottomColor: tokens.foreground + '22',
-              }}
-            >
-              <View>
-                <Text
-                  style={{
-                    color: tokens.foreground,
-                    fontSize: typography.size.base,
-                    fontWeight: '600',
-                  }}
-                >
-                  {position.positionCode}
-                </Text>
-                <Text
-                  accessibilityLiveRegion={state === 'already_taken' ? 'polite' : 'none'}
-                  style={{
-                    color: state === 'already_taken' ? tokens.error : tokens.foreground,
-                    opacity: state === 'already_taken' ? 1 : 0.7,
-                    fontSize: typography.size.sm,
-                  }}
-                >
-                  {STATE_LABEL[state]}
-                </Text>
-              </View>
-              {state === 'open' && (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  onPress={() => handleClaim(position.positionCode)}
-                  style={{
-                    minHeight: touchTarget.baseline.ios,
-                    paddingHorizontal: spacing.lg,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: tokens.accent,
-                    borderRadius: radius.default,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: tokens.background,
-                      fontSize: typography.size.sm,
-                      fontWeight: '600',
-                    }}
-                  >
-                    Claim
-                  </Text>
-                </TouchableOpacity>
-              )}
-              {isMine && (
-                <View style={{ flexDirection: 'row', gap: spacing.sm }}>
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    onPress={() => handleGiveBack(position.positionCode)}
-                    style={{
-                      minHeight: touchTarget.baseline.ios,
-                      paddingHorizontal: spacing.md,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: tokens.foreground, fontSize: typography.size.sm }}>
-                      Give back
+        </Card>
+      ) : null}
+      <Card>
+        <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
+          {shift.stationId}
+        </Text>
+        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+          {formatShiftWindow(shift.startAt, shift.endAt)}
+        </Text>
+      </Card>
+      <Card title="Positions">
+        <View>
+          {shift.positions.map((position, index) => {
+            const state = claimState[position.positionCode] ?? 'open';
+            const isMine =
+              state === 'claimed_by_you' ||
+              position.claimedByMe === true ||
+              position.claimedByMemberId === auth?.memberId;
+            return (
+              <View
+                key={position.positionCode}
+                style={{
+                  minHeight: targetSize.field,
+                  gap: spacing.md,
+                  paddingVertical: spacing.md,
+                  borderTopWidth: index === 0 ? 0 : 1,
+                  borderTopColor: theme.borderDecorative,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+                  <View style={{ flex: 1, gap: spacing.sm }}>
+                    <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
+                      {position.positionCode}
                     </Text>
-                  </TouchableOpacity>
-                  <TextInput
-                    accessibilityLabel="Propose swap to member ID"
-                    placeholder="Member ID"
-                    placeholderTextColor={tokens.foreground + '88'}
-                    value={swapTargetMemberId}
-                    onChangeText={setSwapTargetMemberId}
-                    style={{
-                      minHeight: touchTarget.baseline.ios,
-                      borderWidth: 1,
-                      borderColor: tokens.foreground + '33',
-                      borderRadius: radius.default,
-                      paddingHorizontal: spacing.sm,
-                      color: tokens.foreground,
-                      minWidth: 90,
-                    }}
-                  />
-                  <TouchableOpacity
-                    accessibilityRole="button"
-                    onPress={() => handleProposeSwap(position.positionCode)}
-                    style={{
-                      minHeight: touchTarget.baseline.ios,
-                      paddingHorizontal: spacing.md,
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: tokens.accent, fontSize: typography.size.sm }}>
-                      Propose swap
-                    </Text>
-                  </TouchableOpacity>
+                    <View accessibilityLiveRegion={state === 'already_taken' ? 'polite' : 'none'}>
+                      <StatusChip status={STATE_ROLE[state]} label={STATE_LABEL[state]} />
+                    </View>
+                  </View>
+                  {state === 'open' && (
+                    <Button label="Claim" onPress={() => handleClaim(position.positionCode)} />
+                  )}
                 </View>
-              )}
-            </View>
-          );
-        })}
-      </ScrollView>
-    </SafeAreaView>
+                {isMine && (
+                  <View style={{ gap: spacing.sm }}>
+                    <Button
+                      label="Give back"
+                      variant="secondary"
+                      fullWidth
+                      onPress={() => handleGiveBack(position.positionCode)}
+                    />
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                      <TextInput
+                        accessibilityLabel="Propose swap to member ID"
+                        placeholder="Member ID"
+                        placeholderTextColor={theme.fgFaint}
+                        value={swapTargetMemberId}
+                        onChangeText={setSwapTargetMemberId}
+                        style={{
+                          flex: 1,
+                          minHeight: targetSize.field,
+                          borderWidth: 1,
+                          borderColor: theme.border,
+                          borderRadius: radiusScale.lg,
+                          backgroundColor: theme.surface,
+                          paddingHorizontal: spacing.md,
+                          color: theme.fg,
+                          fontSize: ROW_TITLE_SIZE,
+                        }}
+                      />
+                      <Button
+                        label="Propose swap"
+                        variant="secondary"
+                        onPress={() => handleProposeSwap(position.positionCode)}
+                      />
+                    </View>
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      </Card>
+    </Screen>
   );
 }

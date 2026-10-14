@@ -3,15 +3,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageTraining } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, ConfirmDialog, Skeleton, TextInput } from '../../components/ui';
+import type { StatusRole } from '@boxalarm/design-tokens';
+import { Button, Card, ConfirmDialog, Skeleton, StatusChip, TextInput } from '../../components/ui';
 import {
   createCertification,
   listCertifications,
   revokeCertification,
   uploadCertificationAttachment,
 } from './api';
-import type { Certification, CreateCertificationInput } from './types';
+import type { Certification, CertificationStatus, CreateCertificationInput } from './types';
+import { formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import styles from './training.module.css';
+
+const CERT_STATUS_ROLE: Record<CertificationStatus, StatusRole> = {
+  CURRENT: 'ok',
+  EXPIRED: 'danger',
+  REVOKED: 'neutral',
+};
 
 const emptyForm: CreateCertificationInput = {
   certType: '',
@@ -27,7 +36,14 @@ interface PendingUpload {
   file: File;
 }
 
-export function CertificationsPanel({ memberId }: { memberId: string }) {
+export function CertificationsPanel({
+  memberId,
+  title = 'Certifications',
+}: {
+  memberId: string;
+  /** The card's heading; the Certifications page names the member it shows. */
+  title?: string;
+}) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const isTraining = canManageTraining(auth.roles);
@@ -97,50 +113,50 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
     );
   }
 
+  const certs = certsQuery.data ?? [];
+
   return (
-    <Card title="Certifications" style={{ marginTop: 'var(--bx-space-lg)' }}>
+    <Card title={title}>
       {certsQuery.isLoading ? (
         <Skeleton lines={3} />
+      ) : certs.length === 0 ? (
+        <p className={styles.muted}>No certifications on file.</p>
       ) : (
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {(certsQuery.data ?? []).map((cert) => (
-            <li
-              key={cert.certId}
-              style={{
-                padding: 'var(--bx-space-sm) 0',
-                borderBottom: '1px solid var(--bx-border-decorative)',
-              }}
-            >
-              <strong>{cert.certType}</strong> — {humanize(cert.status)} · expires {cert.expiryDate}{' '}
-              · {cert.issuingAuthority}
-              {cert.attachmentS3Key ? (
-                <>
-                  {' '}
-                  · <span>attachment: {cert.attachmentS3Key.split('/').pop()}</span>
-                </>
-              ) : null}
-              {isTraining && cert.status !== 'REVOKED' ? (
-                <>
-                  {' '}
+        <ul className={styles.list}>
+          {certs.map((cert) => (
+            <li key={cert.certId} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{cert.certType}</span>
+                <span className={styles.rowMeta}>
+                  {cert.issuingAuthority} · expires {formatCalendarDate(cert.expiryDate)}
+                  {cert.attachmentS3Key
+                    ? ` · attachment: ${cert.attachmentS3Key.split('/').pop()}`
+                    : null}
+                </span>
+              </span>
+              <span className={styles.rowAside}>
+                <StatusChip status={CERT_STATUS_ROLE[cert.status]}>
+                  {humanize(cert.status)}
+                </StatusChip>
+                {isTraining && cert.status !== 'REVOKED' ? (
                   <Button
                     type="button"
-                    variant="danger"
+                    variant="secondary"
                     size="sm"
                     onClick={() => setRevokeTarget(cert)}
                   >
                     Revoke
                   </Button>
-                </>
-              ) : null}
+                ) : null}
+              </span>
             </li>
           ))}
-          {(certsQuery.data ?? []).length === 0 ? <li>No certifications on file.</li> : null}
         </ul>
       )}
 
       {pendingUpload ? (
-        <div role="alert" style={{ marginTop: 'var(--bx-space-sm)' }}>
-          <p>{uploadError}</p>
+        <div role="alert" className={styles.uploadAlert}>
+          <p className={styles.error}>{uploadError}</p>
           <Button
             type="button"
             variant="secondary"
@@ -152,58 +168,50 @@ export function CertificationsPanel({ memberId }: { memberId: string }) {
       ) : null}
 
       {isTraining ? (
-        <form
-          onSubmit={onSubmit}
-          aria-label="Add certification"
-          style={{
-            marginTop: 'var(--bx-space-lg)',
-            display: 'grid',
-            gap: 'var(--bx-space-md)',
-            maxWidth: 480,
-          }}
-        >
-          <TextInput
-            label="Certification type"
-            value={form.certType}
-            onChange={(e) => setForm((prev) => ({ ...prev, certType: e.target.value }))}
-            required
-          />
-          <TextInput
-            label="Issue date"
-            type="date"
-            value={form.issueDate}
-            onChange={(e) => setForm((prev) => ({ ...prev, issueDate: e.target.value }))}
-            required
-          />
-          <TextInput
-            label="Expiry date"
-            type="date"
-            value={form.expiryDate}
-            onChange={(e) => setForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
-            required
-          />
-          <TextInput
-            label="Issuing authority"
-            value={form.issuingAuthority}
-            onChange={(e) => setForm((prev) => ({ ...prev, issuingAuthority: e.target.value }))}
-            required
-          />
-          <label style={{ display: 'grid', gap: 4 }}>
-            Attachment (optional)
-            <input
-              type="file"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              style={{ minHeight: 44 }}
+        <form onSubmit={onSubmit} aria-label="Add certification" className={styles.subsection}>
+          <h3 className={styles.subhead}>Add certification</h3>
+          <div className={styles.formGrid}>
+            <TextInput
+              label="Certification type"
+              value={form.certType}
+              onChange={(e) => setForm((prev) => ({ ...prev, certType: e.target.value }))}
+              required
             />
-          </label>
-          {formError ? (
-            <p role="alert" aria-live="assertive">
-              {formError}
-            </p>
-          ) : null}
-          <Button type="submit" loading={createMutation.isPending}>
-            Add certification
-          </Button>
+            <TextInput
+              label="Issuing authority"
+              value={form.issuingAuthority}
+              onChange={(e) => setForm((prev) => ({ ...prev, issuingAuthority: e.target.value }))}
+              required
+            />
+            <TextInput
+              label="Issue date"
+              type="date"
+              value={form.issueDate}
+              onChange={(e) => setForm((prev) => ({ ...prev, issueDate: e.target.value }))}
+              required
+            />
+            <TextInput
+              label="Expiry date"
+              type="date"
+              value={form.expiryDate}
+              onChange={(e) => setForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
+              required
+            />
+            <label className={styles.fileField}>
+              Attachment (optional)
+              <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            </label>
+          </div>
+          <div className={styles.formActions}>
+            {formError ? (
+              <p role="alert" aria-live="assertive" className={styles.error}>
+                {formError}
+              </p>
+            ) : null}
+            <Button type="submit" variant="secondary" loading={createMutation.isPending}>
+              Add certification
+            </Button>
+          </div>
         </form>
       ) : null}
 

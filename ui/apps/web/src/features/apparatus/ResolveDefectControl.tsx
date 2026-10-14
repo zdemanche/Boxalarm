@@ -70,7 +70,12 @@ export function ResolveDefectControl({
         }
         mutation.mutate(note.trim());
       }}
-      style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'flex-end' }}
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 'var(--bx-space-sm)',
+        alignItems: 'flex-end',
+      }}
     >
       <TextInput
         label="How was it fixed?"

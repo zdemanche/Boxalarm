@@ -1,4 +1,4 @@
-import { radius, spacing, statusChipPalette, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react';
 import {
@@ -8,14 +8,11 @@ import {
   findNodeHandle,
   Linking,
   Platform,
-  ScrollView,
   Text,
   TouchableOpacity,
-  useColorScheme,
   View,
   type AccessibilityActionEvent,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
@@ -35,11 +32,22 @@ import { useAlertDetail, type DetailFailure } from '../../features/alerts/useAle
 import { useAlertResponse, type ResponseDelivery } from '../../features/alerts/useAlertResponse';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
+import {
+  CanvasScrollView,
+  cardSurface,
+  LiveCard,
+  LiveDot,
+  Notice,
+  noticeText,
+  rowDivider,
+} from './alertsUi';
 
 // a11y-spec §1.11 alert-path targets: the primary answer is full width x 88, the others 72, with
 // 16 between; every other control on this screen is at least 72.
 const PRIMARY_TARGET = 88;
 const ALERT_TARGET = 72;
+/** a11y-spec §1.1 `type.alert.type` (24/30); the address is `type.alert.address`, 32/38. */
+const INCIDENT_TYPE = { size: 24, lineHeight: 30 };
 
 /** R3-1: an answered alert stays over the keyguard until this long passes with no touch. */
 export const ALERT_LOCK_IDLE_MS = 10 * 60_000;
@@ -82,9 +90,8 @@ interface AnswerButtonProps {
   label: string;
   sublabel?: string;
   height: number;
-  fill: string | null;
-  onFill: string;
-  outline: string;
+  /** The amber fill: the member's answer once given, else the suggested one (Responding). */
+  filled: boolean;
   selected: boolean;
   delivery: ResponseDelivery | null;
   onPress: () => void;
@@ -95,14 +102,13 @@ function AnswerButton({
   label,
   sublabel,
   height,
-  fill,
-  onFill,
-  outline,
+  filled,
   selected,
   delivery,
   onPress,
 }: AnswerButtonProps) {
   const theme = useTheme();
+  const ink = filled ? theme.onAccentFill : theme.fg;
   return (
     <TouchableOpacity
       accessibilityRole="button"
@@ -115,26 +121,62 @@ function AnswerButton({
         alignItems: 'center',
         justifyContent: 'center',
         paddingHorizontal: spacing.md,
-        borderRadius: radius.default,
-        backgroundColor: fill ?? 'transparent',
-        // Selected is carried by a heavy focus-colour ring and a word, not colour alone.
-        borderWidth: selected ? 5 : fill ? 0 : 2,
-        borderColor: selected ? theme.focus : outline,
+        borderRadius: radiusScale.lg,
+        backgroundColor: filled ? theme.accentFill : theme.card,
+        // Selected is carried by a heavy dark ring inside the amber and the words "YOUR ANSWER",
+        // not by colour alone.
+        borderWidth: selected ? 4 : filled ? 0 : 2,
+        borderColor: selected ? theme.onAccentFill : theme.border,
       }}
     >
-      <Text style={{ color: onFill, fontSize: typeScale.title.size, fontWeight: '800' }}>
+      <Text style={{ color: ink, fontSize: typeScale.title.size, fontWeight: '800' }}>
         {selected ? '✓ ' : ''}
         {label}
       </Text>
       {selected ? (
-        <Text style={{ color: onFill, fontSize: typeScale.label.size, fontWeight: '700' }}>
+        <Text style={{ color: ink, fontSize: typeScale.label.size, fontWeight: '800' }}>
           YOUR ANSWER
         </Text>
       ) : sublabel ? (
-        <Text style={{ color: onFill, fontSize: typeScale.label.size, fontWeight: '600' }}>
+        <Text style={{ color: ink, fontSize: typeScale.label.size, fontWeight: '600' }}>
           {sublabel}
         </Text>
       ) : null}
+    </TouchableOpacity>
+  );
+}
+
+/** A secondary action on the alert screen: 72dp (no control here is under it, a11y-spec N1) and
+ * an 18pt label - bigger than the kit button's, because this screen is read at 03:00 in gloves. */
+function AlertAction({
+  label,
+  accessibilityLabel,
+  onPress,
+}: {
+  label: string;
+  accessibilityLabel?: string;
+  onPress: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      style={{
+        minHeight: ALERT_TARGET,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: spacing.md,
+        borderRadius: radiusScale.lg,
+        borderWidth: 2,
+        borderColor: theme.border,
+        backgroundColor: theme.card,
+      }}
+    >
+      <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -152,8 +194,6 @@ export function AlertDetailScreen() {
   const route = useRoute();
   const { dispatchId, payload } = route.params as { dispatchId: string; payload?: AlertPayload };
   const theme = useTheme();
-  const scheme = useColorScheme();
-  const chips = statusChipPalette[scheme === 'dark' ? 'cab' : 'day'];
   const repository = useAlertsRepository();
   const {
     header,
@@ -298,6 +338,8 @@ export function AlertDetailScreen() {
 
   const answer = response.answer;
   const selected = (value: ResponseAnswer) => answer?.ackStatus === value;
+  // One amber answer at a time: the member's own once given, Responding until then.
+  const filled = (value: ResponseAnswer) => (answer ? selected(value) : value === 'RESPONDING');
   const verify = dispatch?.prePlan ? matchNotice(dispatch.prePlan) : null;
   const time = header?.time ?? null;
   const tone = header?.toneSequence ?? null;
@@ -310,120 +352,114 @@ export function AlertDetailScreen() {
     .join(' · ');
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
-      <ScrollView
-        onTouchStart={() => touchedRef.current?.()}
-        contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
-        accessibilityLabel="Incoming call"
-        accessibilityActions={[
-          { name: 'respond', label: ANSWER_NAME.RESPONDING },
-          { name: 'respondDirect', label: ANSWER_NAME.DIRECT_TO_SCENE },
-          { name: 'notResponding', label: ANSWER_NAME.NOT_RESPONDING },
-        ]}
-        onAccessibilityAction={onAccessibilityAction}
-      >
-        {statusStrip || !isOnline ? (
-          <View>
-            {statusStrip ? (
-              <Text
-                accessibilityLiveRegion="none"
-                style={{
-                  color: theme.fgMuted,
-                  fontSize: 15,
-                  fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-                }}
-              >
-                {statusStrip}
-              </Text>
-            ) : null}
-            {!isOnline ? (
-              <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
-                You're offline. This call came through anyway - your answer will send when you have
-                signal.
-              </Text>
-            ) : null}
-          </View>
-        ) : null}
-
-        <View>
+    <CanvasScrollView
+      onTouchStart={() => touchedRef.current?.()}
+      accessibilityLabel="Incoming call"
+      accessibilityActions={[
+        { name: 'respond', label: ANSWER_NAME.RESPONDING },
+        { name: 'respondDirect', label: ANSWER_NAME.DIRECT_TO_SCENE },
+        { name: 'notResponding', label: ANSWER_NAME.NOT_RESPONDING },
+      ]}
+      onAccessibilityAction={onAccessibilityAction}
+    >
+      {/* The call: first on screen and first in reading order (a11y-spec N1) - incident type,
+          then the address, then cross streets. Nothing sits above it. */}
+      <LiveCard>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          <LiveDot />
           <Text
             ref={headerRef}
             accessibilityRole="header"
             style={{
-              color: theme.status.warning,
-              fontSize: typeScale.display.size,
-              lineHeight: typeScale.display.lineHeight,
-              fontWeight: '700',
+              flex: 1,
+              color: theme.status.danger,
+              fontSize: INCIDENT_TYPE.size,
+              lineHeight: INCIDENT_TYPE.lineHeight,
+              fontWeight: '800',
+              letterSpacing: 0.5,
             }}
           >
             {(header?.incidentType ?? `Dispatch ${dispatchId}`).toUpperCase()}
           </Text>
-          <Text
-            selectable
-            style={{ color: theme.fg, fontSize: 32, lineHeight: 40, fontWeight: '700' }}
-          >
-            {header?.address ||
-              (status === 'failed' ? 'Address not available' : 'Loading the address…')}
-          </Text>
-          {header?.crossStreets ? (
-            <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, marginTop: 4 }}>
-              x {header.crossStreets}
-            </Text>
-          ) : null}
         </View>
+        <Text
+          selectable
+          style={{ color: theme.fg, fontSize: 32, lineHeight: 38, fontWeight: '800' }}
+        >
+          {header?.address ||
+            (status === 'failed' ? 'Address not available' : 'Loading the address…')}
+        </Text>
+        {header?.crossStreets ? (
+          <Text
+            style={{
+              color: theme.fg,
+              fontSize: typeScale.heading.size,
+              lineHeight: typeScale.heading.lineHeight,
+              fontWeight: '500',
+            }}
+          >
+            x {header.crossStreets}
+          </Text>
+        ) : null}
 
         {/* Directly under the address it qualifies (alert-ux M4), not below the buttons. */}
         {verify?.warning ? (
-          <View
-            accessibilityRole="alert"
-            style={{
-              padding: spacing.md,
-              borderRadius: radius.default,
-              borderWidth: 2,
-              borderColor: chips.warning.onFill,
-              backgroundColor: chips.warning.fill,
-            }}
-          >
-            <Text
-              style={{
-                color: chips.warning.onFill,
-                fontSize: typeScale.heading.size,
-                fontWeight: '700',
-              }}
-            >
-              ▲ {verify.text}
-            </Text>
-          </View>
+          <Notice tone="warning" accessibilityRole="alert">
+            <Text style={noticeText(theme, 'warning', true)}>{verify.text}</Text>
+          </Notice>
         ) : null}
 
         {dispatch?.verifyRequired ? (
-          <View
-            accessibilityRole="alert"
-            accessibilityLiveRegion="assertive"
-            style={{
-              padding: spacing.md,
-              borderRadius: radius.default,
-              borderWidth: 2,
-              borderColor: theme.status.warning,
-            }}
-          >
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}>
+          <Notice tone="warning" accessibilityRole="alert" accessibilityLiveRegion="assertive">
+            <Text style={noticeText(theme, 'warning', true)}>
               VERIFY: the CAD message could not be read automatically. The location is in the
               dispatch text - confirm it by radio.
             </Text>
-          </View>
+          </Notice>
         ) : null}
 
-        {/* Answer stack: before the narrative, so a driving member reaches it first (N1 #3). */}
+        {statusStrip ? (
+          <View
+            style={{
+              borderTopWidth: 1,
+              borderTopColor: theme.borderDecorative,
+              paddingTop: spacing.sm,
+              marginTop: spacing.xs,
+            }}
+          >
+            <Text
+              accessibilityLiveRegion="none"
+              style={{
+                color: theme.fgMuted,
+                fontSize: 15,
+                fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+              }}
+            >
+              {statusStrip}
+            </Text>
+          </View>
+        ) : null}
+      </LiveCard>
+
+      {/* a11y-spec N1 Offline: the banner sits below the header, never above the address. */}
+      {!isOnline ? (
+        <Notice tone="warning">
+          <Text style={noticeText(theme, 'warning')}>
+            You&apos;re offline. This call came through anyway - your answer will send when you have
+            signal.
+          </Text>
+        </Notice>
+      ) : null}
+
+      {/* Answer stack: before the narrative, so a driving member reaches it first (N1 #3). */}
+      <View style={cardSurface(theme)}>
         <View style={{ gap: spacing.md }}>
           <AnswerButton
             answer="RESPONDING"
             label="RESPONDING"
             sublabel="to the station"
             height={PRIMARY_TARGET}
-            fill={theme.status.ok}
-            onFill={theme.bg}
-            outline={theme.status.ok}
+            filled={filled('RESPONDING')}
             selected={selected('RESPONDING')}
             delivery={response.delivery}
             onPress={() => changeAnswer('RESPONDING')}
@@ -432,9 +468,7 @@ export function AlertDetailScreen() {
             answer="DIRECT_TO_SCENE"
             label="DIRECT TO SCENE"
             height={ALERT_TARGET}
-            fill={theme.status.warning}
-            onFill={theme.bg}
-            outline={theme.status.warning}
+            filled={filled('DIRECT_TO_SCENE')}
             selected={selected('DIRECT_TO_SCENE')}
             delivery={response.delivery}
             onPress={() => changeAnswer('DIRECT_TO_SCENE')}
@@ -443,42 +477,38 @@ export function AlertDetailScreen() {
             answer="NOT_RESPONDING"
             label="NOT RESPONDING"
             height={ALERT_TARGET}
-            fill={null}
-            onFill={theme.fg}
-            outline={theme.status.danger}
+            filled={filled('NOT_RESPONDING')}
             selected={selected('NOT_RESPONDING')}
             delivery={response.delivery}
             onPress={() => changeAnswer('NOT_RESPONDING')}
           />
+
+          {Platform.OS === 'android' ? (
+            <AlertAction
+              label="Silence alarm"
+              accessibilityLabel="Silence the alarm without answering"
+              onPress={() => {
+                silence();
+                AccessibilityInfo.announceForAccessibility(
+                  'Alarm silenced. You have not answered yet.',
+                );
+              }}
+            />
+          ) : null}
         </View>
 
-        {Platform.OS === 'android' ? (
-          <TouchableOpacity
-            accessibilityRole="button"
-            accessibilityLabel="Silence the alarm without answering"
-            onPress={() => {
-              silence();
-              AccessibilityInfo.announceForAccessibility(
-                'Alarm silenced. You have not answered yet.',
-              );
-            }}
+        {answer && answer.ackStatus !== 'NOT_RESPONDING' ? (
+          <View
+            accessibilityRole="radiogroup"
+            accessibilityLabel="Your ETA"
             style={{
-              minHeight: ALERT_TARGET,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: radius.default,
-              borderWidth: 2,
-              borderColor: theme.borderStrong,
+              gap: spacing.sm,
+              marginTop: spacing.sm,
+              paddingTop: spacing.md,
+              borderTopWidth: 1,
+              borderTopColor: theme.borderDecorative,
             }}
           >
-            <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
-              Silence alarm
-            </Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {answer && answer.ackStatus !== 'NOT_RESPONDING' ? (
-          <View accessibilityRole="radiogroup" accessibilityLabel="Your ETA" style={{ gap: 8 }}>
             <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
               {answer.eta ? 'Your ETA - tap to change' : 'ETA ? - tap one if you can (optional)'}
             </Text>
@@ -504,14 +534,19 @@ export function AlertDetailScreen() {
                       minHeight: ALERT_TARGET,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      borderRadius: radius.default,
-                      borderWidth: isSelected ? 5 : 2,
-                      borderColor: isSelected ? theme.focus : theme.borderStrong,
-                      backgroundColor: isSelected ? theme.surfaceRaised : 'transparent',
+                      borderRadius: radiusScale.lg,
+                      // Selected: the amber fill under dark text, with a heavy dark ring.
+                      borderWidth: isSelected ? 4 : 1,
+                      borderColor: isSelected ? theme.onAccentFill : theme.border,
+                      backgroundColor: isSelected ? theme.accentFill : theme.surface,
                     }}
                   >
                     <Text
-                      style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '800' }}
+                      style={{
+                        color: isSelected ? theme.onAccentFill : theme.fg,
+                        fontSize: typeScale.title.size,
+                        fontWeight: '800',
+                      }}
                     >
                       {choice.label}
                     </Text>
@@ -521,190 +556,149 @@ export function AlertDetailScreen() {
             </View>
           </View>
         ) : null}
+      </View>
 
-        {answer && response.delivery ? (
-          <ResponseStatus
-            answer={answer}
-            delivery={response.delivery}
-            outboxId={response.outboxId}
-            lastError={response.lastError}
-            rosterAnswer={response.rosterAnswer}
-            onResend={() => respond(answer.ackStatus, answer.eta)}
-            onKeepRoster={() => void response.keepRosterAnswer()}
-          />
-        ) : null}
+      {answer && response.delivery ? (
+        <ResponseStatus
+          answer={answer}
+          delivery={response.delivery}
+          outboxId={response.outboxId}
+          lastError={response.lastError}
+          rosterAnswer={response.rosterAnswer}
+          onResend={() => respond(answer.ackStatus, answer.eta)}
+          onKeepRoster={() => void response.keepRosterAnswer()}
+        />
+      ) : null}
 
-        {dispatch ? (
-          <View>
-            <Text
-              numberOfLines={narrativeExpanded ? undefined : 3}
-              style={{ color: theme.fg, fontSize: typeScale.body.size, lineHeight: 22 }}
-            >
-              {dispatch.narrative || 'No narrative was sent with this dispatch.'}
-            </Text>
-            {dispatch.narrative && dispatch.narrative.length > 120 ? (
-              <TouchableOpacity
-                accessibilityRole="button"
-                accessibilityLabel={
-                  narrativeExpanded ? 'Show less narrative' : 'Show the full narrative'
-                }
-                accessibilityState={{ expanded: narrativeExpanded }}
-                onPress={() => setNarrativeExpanded((value) => !value)}
-                style={{ minHeight: ALERT_TARGET, justifyContent: 'center' }}
-              >
-                <Text
-                  style={{ color: theme.fg, fontWeight: '700', textDecorationLine: 'underline' }}
-                >
-                  {narrativeExpanded ? 'Less' : 'More'}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        ) : status === 'loading' ? (
-          <Text
-            accessibilityLiveRegion="polite"
-            style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}
-          >
-            Loading the dispatch narrative…
-          </Text>
-        ) : null}
-
-        {dispatch?.updates && dispatch.updates.length > 0 ? (
-          <View accessibilityLabel={`CAD updates, ${dispatch.updates.length}`}>
-            <Text
-              accessibilityRole="header"
-              style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '700' }}
-            >
-              CAD updates
-            </Text>
-            {dispatch.updates.map((update) => (
+      {dispatch || status === 'loading' ? (
+        <View style={cardSurface(theme)}>
+          {dispatch ? (
+            <View>
               <Text
-                key={update.updateId}
-                style={{ color: theme.fg, fontSize: typeScale.body.size, lineHeight: 22 }}
+                numberOfLines={narrativeExpanded ? undefined : 3}
+                style={{ color: theme.fg, fontSize: 17, lineHeight: 24 }}
               >
-                {new Date(update.receivedAt * 1000).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}{' '}
-                — {update.summary}
+                {dispatch.narrative || 'No narrative was sent with this dispatch.'}
               </Text>
-            ))}
-          </View>
-        ) : null}
-
-        {status === 'failed' && failure ? (
-          <View
-            accessibilityLiveRegion="polite"
-            style={{
-              padding: spacing.md,
-              borderRadius: radius.default,
-              borderWidth: 2,
-              borderColor: chips.warning.onFill,
-              backgroundColor: chips.warning.fill,
-              gap: spacing.sm,
-            }}
-          >
-            <Text style={{ color: chips.warning.onFill, fontSize: typeScale.body.size }}>
-              ▲ {failureText(failure, Boolean(header?.address))}
+              {dispatch.narrative && dispatch.narrative.length > 120 ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    narrativeExpanded ? 'Show less narrative' : 'Show the full narrative'
+                  }
+                  accessibilityState={{ expanded: narrativeExpanded }}
+                  onPress={() => setNarrativeExpanded((value) => !value)}
+                  style={{ minHeight: ALERT_TARGET, justifyContent: 'center' }}
+                >
+                  <Text
+                    style={{
+                      color: theme.accent,
+                      fontSize: typeScale.heading.size,
+                      fontWeight: '700',
+                    }}
+                  >
+                    {narrativeExpanded ? 'Less' : 'More'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}
+            >
+              Loading the dispatch narrative…
             </Text>
-            {detailCachedAt ? (
-              <Text style={{ color: chips.warning.onFill, fontSize: typeScale.body.size }}>
-                Showing details saved on this phone at {formatClock(detailCachedAt)}.
-              </Text>
-            ) : null}
-            <TouchableOpacity
-              accessibilityRole="button"
-              accessibilityLabel="Retry loading the call details"
-              onPress={retry}
+          )}
+        </View>
+      ) : null}
+
+      {dispatch?.updates && dispatch.updates.length > 0 ? (
+        <View
+          accessibilityLabel={`CAD updates, ${dispatch.updates.length}`}
+          style={cardSurface(theme)}
+        >
+          <Text
+            accessibilityRole="header"
+            style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
+          >
+            CAD updates
+          </Text>
+          {dispatch.updates.map((update, index) => (
+            <Text
+              key={update.updateId}
               style={{
-                minHeight: ALERT_TARGET,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: radius.default,
-                borderWidth: 2,
-                borderColor: chips.warning.onFill,
+                color: theme.fg,
+                fontSize: typeScale.body.size,
+                lineHeight: 22,
+                ...rowDivider(theme, index),
               }}
             >
-              <Text
-                style={{
-                  color: chips.warning.onFill,
-                  fontSize: typeScale.heading.size,
-                  fontWeight: '700',
-                }}
-              >
-                Retry
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
-        {dispatch?.toneLadder && dispatch.toneLadder.predicateGaps.length > 0 ? (
-          <View
-            style={{
-              padding: spacing.md,
-              borderRadius: radius.default,
-              borderWidth: 1,
-              borderColor: theme.borderDecorative,
-            }}
-          >
-            <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-              Tone {dispatch.toneLadder.currentToneSequence} / {dispatch.toneLadder.status}
+              {new Date(update.receivedAt * 1000).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}{' '}
+              — {update.summary}
             </Text>
-            {dispatch.toneLadder.predicateGaps.map((gap) => (
-              <Text key={gap} style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-                {gap}
-              </Text>
-            ))}
-          </View>
-        ) : null}
+          ))}
+        </View>
+      ) : null}
 
+      {status === 'failed' && failure ? (
+        <Notice tone="warning" accessibilityLiveRegion="polite">
+          <Text style={noticeText(theme, 'warning')}>
+            {failureText(failure, Boolean(header?.address))}
+          </Text>
+          {detailCachedAt ? (
+            <Text style={noticeText(theme, 'warning')}>
+              Showing details saved on this phone at {formatClock(detailCachedAt)}.
+            </Text>
+          ) : null}
+          <AlertAction
+            label="Retry"
+            accessibilityLabel="Retry loading the call details"
+            onPress={retry}
+          />
+        </Notice>
+      ) : null}
+
+      {dispatch?.toneLadder && dispatch.toneLadder.predicateGaps.length > 0 ? (
+        <View style={cardSurface(theme)}>
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            Tone {dispatch.toneLadder.currentToneSequence} / {dispatch.toneLadder.status}
+          </Text>
+          {dispatch.toneLadder.predicateGaps.map((gap) => (
+            <Text key={gap} style={{ color: theme.fg, fontSize: 17, fontWeight: '600' }}>
+              {gap}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+
+      {dispatch ? (
+        <PrePlanPanel
+          prePlan={dispatch.prePlan}
+          unavailable={dispatch.prePlanUnavailable === true}
+          {...(dispatch.nearestHydrants ? { nearestHydrants: dispatch.nearestHydrants } : {})}
+          hydrantsUnavailable={dispatch.nearestHydrantsUnavailable === true}
+          hydrantsIncomplete={dispatch.nearestHydrantsIncomplete === true}
+        />
+      ) : null}
+
+      {/* a11y-spec §3.1 #3: pre-plan and hydrants, then the map hand-off. */}
+      <View style={[cardSurface(theme), { gap: spacing.md }]}>
         {dispatch?.mapLink ? (
-          <TouchableOpacity
-            accessibilityRole="button"
+          <AlertAction
+            label="Open in maps"
             accessibilityLabel="Open the address in maps"
             onPress={() => void Linking.openURL(dispatch.mapLink as string)}
-            style={{
-              minHeight: ALERT_TARGET,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: radius.default,
-              borderWidth: 2,
-              borderColor: theme.borderStrong,
-            }}
-          >
-            <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
-              Open in maps
-            </Text>
-          </TouchableOpacity>
-        ) : null}
-
-        {dispatch ? (
-          <PrePlanPanel
-            prePlan={dispatch.prePlan}
-            unavailable={dispatch.prePlanUnavailable === true}
-            {...(dispatch.nearestHydrants ? { nearestHydrants: dispatch.nearestHydrants } : {})}
-            hydrantsUnavailable={dispatch.nearestHydrantsUnavailable === true}
-            hydrantsIncomplete={dispatch.nearestHydrantsIncomplete === true}
           />
         ) : null}
-
-        <TouchableOpacity
-          accessibilityRole="button"
+        <AlertAction
+          label="View roster"
           onPress={() => navigation.navigate('Roster', { dispatchId })}
-          style={{
-            minHeight: ALERT_TARGET,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: radius.default,
-            borderWidth: 2,
-            borderColor: theme.borderStrong,
-          }}
-        >
-          <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}>
-            View roster
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
+        />
+      </View>
+    </CanvasScrollView>
   );
 }

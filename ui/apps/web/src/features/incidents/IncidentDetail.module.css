@@ -1,3 +1,9 @@
+/* The NERIS report editor (/incidents/:id): step list, the step's form, and the review rail, each
+   a card on the canvas.
+   - below lg: one column (steps as a sideways-scrolling strip, the form, then the rail);
+   - lg: steps with the rail under them on the left, the form beside them;
+   - 1440 and up: steps, form, rail. */
+
 .layout {
   display: grid;
   /* One shrinkable column below lg: an implicit `auto` track sizes to its widest child (the
@@ -10,14 +16,65 @@
 
 @media (min-width: 1024px) {
   .layout {
-    grid-template-columns: 16rem minmax(0, 1fr);
+    grid-template-columns: 15rem minmax(0, 1fr);
+    /* The form spans both rows; the flexible second row takes its extra height, so the rail
+       sits straight under the steps instead of under the end of a long form. */
+    grid-template-rows: auto 1fr;
+  }
+
+  .stepsCard {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .formCard {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .issues {
+    grid-column: 1;
+    grid-row: 2;
   }
 }
 
 @media (min-width: 1440px) {
   .layout {
-    grid-template-columns: 16rem minmax(0, 1fr) 18rem;
+    grid-template-columns: 14rem minmax(0, 1fr) 18rem;
+    grid-template-rows: auto;
   }
+
+  .formCard {
+    grid-row: 1;
+  }
+
+  .issues {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+/* Shared card surface for the three columns (the Card primitive's look). */
+.stepsCard,
+.formCard,
+.issues {
+  min-width: 0;
+  background: var(--bx-card);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  box-shadow: var(--bx-shadow-raised);
+}
+
+/* While the report loads: the form card's shape, not a bare line of text. */
+.loading {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+/* ---- Step list: the shell's selection language - a tinted row with the amber marker ---- */
+
+.stepsCard {
+  padding: var(--bx-space-sm);
 }
 
 .steps {
@@ -25,49 +82,148 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: var(--bx-space-xs);
+  gap: 2px;
 }
 
 .stepButton {
+  display: flex;
+  align-items: center;
   width: 100%;
   min-height: var(--bx-target-office);
-  padding: var(--bx-space-sm) var(--bx-space-md);
+  padding: var(--bx-space-xs) 12px;
   text-align: left;
-  border: 1px solid var(--bx-border-decorative);
+  border: 0;
   border-radius: var(--bx-radius-md);
-  background: var(--bx-surface);
-  color: inherit;
+  background: transparent;
+  color: var(--bx-fg-muted);
   font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background-color var(--bx-duration-fast) var(--bx-ease-standard);
+}
+
+.stepButton:hover {
+  background: var(--bx-canvas);
+  color: var(--bx-fg);
 }
 
 .stepButton[aria-current='step'] {
+  background: var(--bx-accent-subtle);
+  color: var(--bx-fg);
+  font-weight: 650;
+  box-shadow: inset 3px 0 0 var(--bx-accent-indicator);
+}
+
+/* Single-column below lg: seven stacked step buttons filled a phone's first screen before any
+   field. They become one row that scrolls sideways, marked underneath like the tabs. */
+@media (max-width: 1023px) {
+  .steps {
+    display: flex;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    padding-bottom: var(--bx-space-2xs);
+  }
+
+  .steps > li {
+    flex: 0 0 auto;
+  }
+
+  .stepButton {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .stepButton[aria-current='step'] {
+    box-shadow: inset 0 -3px 0 var(--bx-accent-indicator);
+  }
+
+  /* The scroll container clips anything outside it; draw the focus ring inside the button. */
+  .stepButton:focus-visible {
+    outline-offset: -3px;
+  }
+}
+
+/* ---- The step's form ---- */
+
+.formCard {
+  display: grid;
+  gap: var(--bx-space-md);
+  padding: 20px 24px 24px;
+}
+
+.formCard > h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 26px;
   font-weight: 700;
-  border-color: var(--bx-fg);
+  letter-spacing: -0.01em;
+}
+
+.stepMeta {
+  margin: -8px 0 0;
+  padding-bottom: var(--bx-space-md);
+  border-bottom: 1px solid var(--bx-border-decorative);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.formError {
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* The step's own actions: closing the form, set off from the fields. */
+.stepActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-xs);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
 }
 
 .panel {
   display: grid;
   gap: var(--bx-space-md);
+  min-width: 0;
 }
 
-.fields {
+.panel > p,
+.submission p {
+  margin: 0;
+}
+
+.submission {
   display: grid;
-  gap: var(--bx-space-md);
+  justify-items: start;
+  gap: var(--bx-space-sm);
 }
 
-@media (min-width: 1440px) {
-  .fields {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .span {
-    grid-column: 1 / -1;
-  }
+.fields,
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: var(--bx-space-md);
 }
 
 .summary {
-  display: grid;
-  gap: var(--bx-space-md);
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+}
+
+.span,
+.wide,
+.mark,
+.fields > .stepActions,
+.summary > .stepActions {
+  grid-column: 1 / -1;
 }
 
 .mark {
@@ -86,15 +242,20 @@
   background: var(--bx-surface);
 }
 
-.times {
-  display: grid;
-  gap: var(--bx-space-md);
+.unit h3,
+.unit p {
+  margin: 0;
 }
 
-@media (min-width: 1024px) {
-  .times {
-    grid-template-columns: 1fr 1fr;
-  }
+.unit p {
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: var(--bx-space-md);
 }
 
 .timeField {
@@ -103,27 +264,38 @@
   align-content: start;
 }
 
+/* Long "Save dispatched time for Engine 301" labels wrap inside the narrow column. */
+.timeField button {
+  white-space: normal;
+  justify-self: start;
+  text-align: left;
+}
+
 .mono {
   font-family: var(--bx-font-mono);
 }
 
 .count {
   margin: 0;
+  font-size: 13px;
+  color: var(--bx-fg-muted);
   font-variant-numeric: tabular-nums;
 }
 
-.issues {
+.fieldset {
   display: grid;
   gap: var(--bx-space-sm);
-  padding: var(--bx-space-md);
+  min-width: 0;
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md) var(--bx-space-md);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-md);
-  background: var(--bx-surface);
 }
 
-.issues h2 {
-  margin: 0;
-  font-size: 1rem;
+.fieldset > legend {
+  padding: 0 var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .moduleList {
@@ -136,10 +308,20 @@
 
 .module {
   display: grid;
-  gap: var(--bx-space-2xs);
+  justify-items: start;
+  gap: var(--bx-space-xs);
   padding: var(--bx-space-md);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-md);
+}
+
+.module h3,
+.module p {
+  margin: 0;
+}
+
+.module p {
+  font-size: 14px;
 }
 
 .actions {
@@ -148,26 +330,73 @@
   gap: var(--bx-space-sm);
 }
 
-/* Fix suggestions name a unit and a time, so they are long: let them wrap instead of clipping
-   against the issues rail (Button defaults to white-space: nowrap). */
-.issue button {
-  white-space: normal;
-  text-align: left;
-  max-width: 100%;
-}
-
 .narrative {
   min-height: 12rem;
 }
 
+.statusLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
 .lockedBanner {
-  margin: 0 0 var(--bx-space-md);
-  padding: var(--bx-space-sm) var(--bx-space-md);
-  border: 1px solid var(--bx-border-strong);
+  margin: 0 0 var(--bx-space-lg);
+  padding: 12px var(--bx-space-md);
+  border: 1px solid var(--bx-border-decorative);
   border-left: 4px solid var(--bx-status-info);
-  border-radius: var(--bx-radius-md);
-  background: var(--bx-surface);
+  border-radius: var(--bx-radius-lg);
+  background: var(--bx-card);
+  box-shadow: var(--bx-shadow-raised);
   font-weight: 600;
+}
+
+/* ---- The review rail ---- */
+
+.issues {
+  display: grid;
+  gap: var(--bx-space-sm);
+  padding: 20px;
+}
+
+.issues h2,
+.review h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 650;
+}
+
+.issues > p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.missingList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.missingList > li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bx-space-xs);
+  padding: 6px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.missingList > li:first-child {
+  border-top: 0;
+}
+
+.missingList svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--bx-fg-muted);
 }
 
 .review,
@@ -176,18 +405,37 @@
   gap: var(--bx-space-sm);
 }
 
-.review h2 {
+/* The checklist below the "Before you can submit" summary, divided from it. */
+.review {
+  margin-top: var(--bx-space-sm);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.review > p {
   margin: 0;
-  font-size: 1rem;
+  font-size: 14px;
+}
+
+.ledger {
+  margin-top: var(--bx-space-sm);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
 }
 
 .ledger h3 {
   margin: 0;
 }
 
+.ledger > p {
+  margin: 0;
+}
+
 .subheading {
   margin: var(--bx-space-xs) 0 0;
-  font-size: 0.9375rem;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
 }
 
 .issueList,
@@ -208,16 +456,25 @@
 
 .issue {
   display: grid;
-  gap: var(--bx-space-xs);
-  padding: var(--bx-space-sm);
+  gap: var(--bx-space-sm);
+  padding: 12px;
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-md);
-  background: var(--bx-bg);
+  background: var(--bx-canvas);
 }
 
 .issueMessage {
   margin: 0;
+  font-size: 14px;
   overflow-wrap: anywhere;
+}
+
+/* Fix suggestions name a unit and a time, so they are long: let them wrap instead of clipping
+   against the issues rail (Button defaults to white-space: nowrap). */
+.issue button {
+  white-space: normal;
+  text-align: left;
+  max-width: 100%;
 }
 
 .refused {
@@ -230,45 +487,60 @@
 .lockBox {
   display: grid;
   gap: var(--bx-space-xs);
-  padding-top: var(--bx-space-sm);
+  margin-top: var(--bx-space-xs);
+  padding-top: var(--bx-space-md);
   border-top: 1px solid var(--bx-border-decorative);
 }
 
+/* Key-value facts: a two-column grid, never the browser's indented <dl>. */
 .facts {
   display: grid;
-  gap: var(--bx-space-xs);
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 24px;
   margin: 0;
+  font-size: 14px;
 }
 
 .facts > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--bx-space-xs);
-  align-items: center;
+  display: contents;
 }
 
 .facts dt {
-  font-weight: 600;
-}
-
-.facts dt::after {
-  content: ':';
+  font-size: 13px;
+  color: var(--bx-fg-muted);
 }
 
 .facts dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .notice {
   margin: 0;
   padding: var(--bx-space-sm) var(--bx-space-md);
   border-left: 3px solid var(--bx-status-warning);
-  background: var(--bx-surface);
+  border-radius: 0 var(--bx-radius-md) var(--bx-radius-md) 0;
+  background: var(--bx-chip-fill-warning);
+  color: var(--bx-chip-onfill-warning);
+  font-size: 14px;
 }
 
 .timeline {
+  list-style: none;
   margin: 0;
-  padding-left: var(--bx-space-lg);
-  display: grid;
-  gap: var(--bx-space-xs);
+  padding: 0;
+  font-size: 14px;
+}
+
+.timeline > li {
+  padding: 6px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.timeline > li:first-child {
+  border-top: 0;
 }

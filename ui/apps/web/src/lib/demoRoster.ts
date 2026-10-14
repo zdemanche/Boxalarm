@@ -76,7 +76,8 @@ export const DEMO_MEMBERS: readonly Member[] = SEEDS.map(
     status,
     joinDate,
     rank,
-    agencyId: 'nichols-fd',
+    // The member's own department number (architecture.md data model: `NFD-0012`).
+    agencyId: `NFD-${String(index + 1).padStart(4, '0')}`,
     roles,
   }),
 );

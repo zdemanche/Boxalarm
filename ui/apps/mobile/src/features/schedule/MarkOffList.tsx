@@ -2,11 +2,14 @@ import { spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Text, View } from 'react-native';
-import { Button, useTheme } from '../../components/ui';
+import { Button, Card, StatusChip, useTheme } from '../../components/ui';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { useScheduleRepository } from './apiScheduleRepository';
 import { ApiError, ApiTimeoutError } from '../../lib/apiClient';
 import { MarkOffBeingSentError, MarkOffNeedsConnectionError, type MarkOff } from './types';
+
+/** Field rows: primary text 17/600 (docs/design.md §1 field body). */
+const ROW_TITLE_SIZE = 17;
 
 function formatWhen(epochSeconds: number): string {
   const date = new Date(epochSeconds * 1000);
@@ -150,50 +153,74 @@ export function MarkOffList({
   if (!status && markOffs.length === 0 && !message) return null;
 
   return (
-    <View accessibilityLabel="Your mark-offs" style={{ gap: spacing.sm, marginBottom: spacing.md }}>
-      {status ? (
-        <View style={{ gap: spacing.sm }}>
-          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
-            {status}
-          </Text>
-          {load.state === 'failed' ? (
-            <Button label="Try again" variant="secondary" onPress={() => void refresh()} />
-          ) : null}
-        </View>
-      ) : null}
-      {markOffs.map((markOff) => {
-        const active = markOff.startAt <= now;
-        const when = active
-          ? `Marked unavailable until ${formatWhen(markOff.endAt)}`
-          : `Unavailable from ${formatWhen(markOff.startAt)} until ${formatWhen(markOff.endAt)}`;
-        return (
-          <View key={markOff.markoffId} style={{ gap: spacing.sm }}>
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
-              {when}
-              {markOff.reason ? ` (${markOff.reason})` : ''}
+    <View accessibilityLabel="Your mark-offs">
+      <Card title="Your mark-offs">
+        {status ? (
+          <View style={{ gap: spacing.sm }}>
+            <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+              {status}
             </Text>
-            <Button
-              label={active ? "I'm available again" : 'Cancel this mark-off'}
-              variant="secondary"
-              accessibilityLabel={`${active ? "I'm available again" : 'Cancel this mark-off'}. ${when}.`}
-              loading={ending === markOff.markoffId}
-              onPress={() => void end(markOff)}
-            />
+            {load.state === 'failed' ? (
+              <Button
+                label="Try again"
+                variant="secondary"
+                fullWidth
+                onPress={() => void refresh()}
+              />
+            ) : null}
           </View>
-        );
-      })}
-      {message ? (
-        <Text
-          accessibilityRole={message.danger ? 'alert' : undefined}
-          style={{
-            color: message.danger ? theme.status.danger : theme.fg,
-            fontSize: typeScale.body.size,
-            fontWeight: '600',
-          }}
-        >
-          {message.text}
-        </Text>
-      ) : null}
+        ) : null}
+        {markOffs.length > 0 ? (
+          <View>
+            {markOffs.map((markOff, index) => {
+              const active = markOff.startAt <= now;
+              const when = active
+                ? `Marked unavailable until ${formatWhen(markOff.endAt)}`
+                : `Unavailable from ${formatWhen(markOff.startAt)} until ${formatWhen(markOff.endAt)}`;
+              return (
+                <View
+                  key={markOff.markoffId}
+                  style={{
+                    gap: spacing.sm,
+                    paddingVertical: spacing.md,
+                    borderTopWidth: index === 0 ? 0 : 1,
+                    borderTopColor: theme.borderDecorative,
+                  }}
+                >
+                  <StatusChip
+                    status={active ? 'warning' : 'neutral'}
+                    label={active ? 'Unavailable now' : 'Upcoming'}
+                  />
+                  <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
+                    {when}
+                    {markOff.reason ? ` (${markOff.reason})` : ''}
+                  </Text>
+                  <Button
+                    label={active ? "I'm available again" : 'Cancel this mark-off'}
+                    variant="secondary"
+                    fullWidth
+                    accessibilityLabel={`${active ? "I'm available again" : 'Cancel this mark-off'}. ${when}.`}
+                    loading={ending === markOff.markoffId}
+                    onPress={() => void end(markOff)}
+                  />
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+        {message ? (
+          <Text
+            accessibilityRole={message.danger ? 'alert' : undefined}
+            style={{
+              color: message.danger ? theme.status.danger : theme.fg,
+              fontSize: typeScale.body.size,
+              fontWeight: '600',
+            }}
+          >
+            {message.text}
+          </Text>
+        ) : null}
+      </Card>
     </View>
   );
 }

@@ -73,6 +73,8 @@ export const surfacePalette = {
     borderDecorative: '#2a2d33',
     focus: '#ffd166',
     focusGap: palette.cab.background,
+    // design.md §2.2 `color.text.link`.
+    link: '#7fb8ff',
     scrim: 'rgba(0,0,0,0.72)',
     skeleton: '#2a2d33',
   },
@@ -88,6 +90,7 @@ export const surfacePalette = {
     borderDecorative: '#e4e6ea',
     focus: '#101114',
     focusGap: palette.day.background,
+    link: '#0b4fa8',
     scrim: 'rgba(16,17,20,0.55)',
     skeleton: '#e4e6ea',
   },
@@ -146,6 +149,46 @@ export const statusChipPalette = {
     info: { fill: '#e5efff', onFill: '#0a459f' },
     neutral: { fill: '#eceef1', onFill: '#33383f' },
   },
+} as const;
+
+// Web console brand layer (2026-10-11 redesign). The flat, accent-free "command console" read as
+// an unstyled wireframe; the web console now carries the same amber accent as the mobile app
+// (palette.accent) for primary actions and selection, and a dark navigation shell in both
+// palettes. Red stays reserved for alarm status. Every pair is AA-verified in index.test.ts.
+export const accentPalette = {
+  // `accent` is the text-safe amber - on a card; day's measures 4.2:1 on the grey canvas, so it is
+  // not used as text there. `indicator` draws selected-state marks (3:1 on card and canvas).
+  // `fill` is the
+  // bright apparatus amber that buttons and selected controls are painted with, under dark text -
+  // the day text-safe amber read as brown when used as a fill.
+  day: {
+    accent: palette.day.accent,
+    indicator: palette.day.accent,
+    fill: palette.cab.accent,
+    fillHover: '#dd9a35',
+    onFill: '#111318',
+    accentSubtle: '#fbf0e1',
+    onAccentSubtle: '#6b4210',
+  },
+  cab: {
+    accent: palette.cab.accent,
+    indicator: palette.cab.accent,
+    fill: palette.cab.accent,
+    fillHover: '#f0ba66',
+    onFill: '#0b0b0d',
+    accentSubtle: '#2b2012',
+    onAccentSubtle: '#f3cf94',
+  },
+} as const;
+
+/** The web sidebar - dark in day and cab alike, so navigation reads as the product's frame. */
+export const shellPalette = {
+  bg: '#111318',
+  bgRaised: '#1d2027',
+  border: '#262a32',
+  fg: '#f2f3f5',
+  fgMuted: '#9aa1ad',
+  accent: palette.cab.accent,
 } as const;
 
 export type StatusChipColors = Record<StatusRole, { fill: string; onFill: string }>;

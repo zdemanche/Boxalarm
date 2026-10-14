@@ -1,4 +1,4 @@
-import { palette, touchTarget } from '@boxalarm/design-tokens';
+import { palette, targetSize } from '@boxalarm/design-tokens';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import * as ReactNative from 'react-native';
 import { AccessibilityInfo } from 'react-native';
@@ -146,7 +146,7 @@ test('announces the confirmation for screen reader users, since the screen swaps
   announceSpy.mockRestore();
 });
 
-test('the post-submit Back link meets the N3.5 baseline touch target, not just its text height', async () => {
+test('the post-submit Back button meets the glove-sized field target, not just its text height', async () => {
   const { findByText, findByPlaceholderText, findByRole } = await render(<DefectReportScreen />);
 
   await act(async () => {
@@ -157,7 +157,7 @@ test('the post-submit Back link meets the N3.5 baseline touch target, not just i
   });
 
   const backLink = await findByRole('button', { name: 'Back' });
-  expect(backLink.props.style.minHeight).toBe(touchTarget.baseline.ios);
+  expect(backLink.props.style.minHeight).toBeGreaterThanOrEqual(targetSize.field);
 });
 
 test('the submit button label uses the cab palette token, not a hardcoded color, so it stays legible in cab mode', async () => {

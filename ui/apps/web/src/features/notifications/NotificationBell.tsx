@@ -42,7 +42,7 @@ export function NotificationBell() {
 
   return (
     <Link to="/notifications" className={styles.bell} aria-label={label} title={label}>
-      <Bell size={16} aria-hidden="true" />
+      <Bell size={18} aria-hidden="true" />
       {count ? (
         <span className={styles.bellCount} aria-hidden="true">
           {count}

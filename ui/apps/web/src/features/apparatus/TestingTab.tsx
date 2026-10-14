@@ -2,12 +2,18 @@ import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, Select, Skeleton, TextInput } from '../../components/ui';
+import { Button, Card, Select, Skeleton, StatusChip, TextInput } from '../../components/ui';
+import { daysUntil, dueLabel, formatCalendarDate } from '../../lib/dates';
+import { humanize } from '../../lib/labels';
 import { createTestRecord, getTestingSchedules } from './api';
 import type { CreateTestRecordInput, TestType } from './types';
+import styles from './Apparatus.module.css';
 
 const TEST_TYPES: TestType[] = ['HOSE', 'LADDER', 'PUMP', 'AERIAL'];
 const emptyForm: CreateTestRecordInput = { testType: 'HOSE', result: 'PASS', nextDueDate: '' };
+
+/** Inside this many days a scheduled test reads as due soon. */
+const DUE_SOON_DAYS = 30;
 
 export function TestingTab({ unitId }: { unitId: string }) {
   const auth = useAuth();
@@ -29,39 +35,55 @@ export function TestingTab({ unitId }: { unitId: string }) {
 
   if (scheduleQuery.error) {
     return (
-      <ApiForbiddenGate error={scheduleQuery.error} embedded>
-        <p>Unexpected error</p>
-      </ApiForbiddenGate>
+      <Card>
+        <ApiForbiddenGate error={scheduleQuery.error} embedded>
+          <p>Unexpected error</p>
+        </ApiForbiddenGate>
+      </Card>
     );
   }
 
   const scheduleForUnit = (scheduleQuery.data ?? []).filter((entry) => entry.unitId === unitId);
 
   return (
-    <section>
-      <h2 style={{ fontSize: 17, fontWeight: 600 }}>Testing schedules</h2>
-      {scheduleQuery.isLoading ? (
-        <Skeleton lines={2} />
-      ) : scheduleForUnit.length === 0 ? (
-        <p>No scheduled tests for this unit.</p>
-      ) : (
-        <ul>
-          {scheduleForUnit.map((entry) => (
-            <li key={entry.testType}>
-              {entry.testType} due {entry.nextDueDate}
-            </li>
-          ))}
-        </ul>
-      )}
+    <div className={styles.stack}>
+      <Card title="Testing schedule">
+        {scheduleQuery.isLoading ? (
+          <Skeleton lines={2} />
+        ) : scheduleForUnit.length === 0 ? (
+          <p className={styles.message}>No scheduled tests for this unit.</p>
+        ) : (
+          <ul aria-label="Scheduled tests" className={styles.list}>
+            {scheduleForUnit.map((entry) => {
+              const days = daysUntil(entry.nextDueDate);
+              return (
+                <li key={entry.testType} className={styles.row}>
+                  <span className={styles.rowBody}>
+                    <span className={styles.rowTitle}>{humanize(entry.testType)} test</span>
+                    <span className={styles.rowMeta}>
+                      Next due {formatCalendarDate(entry.nextDueDate)}
+                    </span>
+                  </span>
+                  {days <= DUE_SOON_DAYS ? (
+                    <StatusChip status={days < 0 ? 'danger' : 'warning'}>
+                      {dueLabel(days)}
+                    </StatusChip>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
 
-      <Card title="Log test record" style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}>
+      <Card title="Log test record">
         <form
           aria-label="Log test record"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
             mutation.mutate(form);
           }}
-          style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
+          className={styles.formGrid}
         >
           <Select
             label="Test type"
@@ -70,7 +92,7 @@ export function TestingTab({ unitId }: { unitId: string }) {
           >
             {TEST_TYPES.map((type) => (
               <option key={type} value={type}>
-                {type}
+                {humanize(type)}
               </option>
             ))}
           </Select>
@@ -91,12 +113,18 @@ export function TestingTab({ unitId }: { unitId: string }) {
             required
             onChange={(e) => setForm((prev) => ({ ...prev, nextDueDate: e.target.value }))}
           />
-          {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
-          <Button type="submit" loading={mutation.isPending} style={{ maxWidth: 240 }}>
-            Save test record
-          </Button>
+          {mutation.error ? (
+            <p role="alert" className={styles.error}>
+              {mutation.error.message}
+            </p>
+          ) : null}
+          <div className={styles.formActions}>
+            <Button type="submit" loading={mutation.isPending}>
+              Save test record
+            </Button>
+          </div>
         </form>
       </Card>
-    </section>
+    </div>
   );
 }

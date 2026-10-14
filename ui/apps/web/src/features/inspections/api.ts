@@ -61,10 +61,12 @@ export async function updateOccupancy(
   return (await response.json()) as Occupancy;
 }
 
+/** The occupancy's pre-plan, or null when none exists yet (404). Null, not undefined: TanStack
+ * Query v5 treats an undefined result as a failed query, which made "no pre-plan yet" an error. */
 export async function getPrePlan(
   tokens: AuthTokenSource,
   occupancyId: string,
-): Promise<PrePlanView | undefined> {
+): Promise<PrePlanView | null> {
   try {
     const response = await apiRequest(
       `inspections/occupancies/${encodeURIComponent(occupancyId)}/pre-plan`,
@@ -73,7 +75,7 @@ export async function getPrePlan(
     return (await response.json()) as PrePlanView;
   } catch (error) {
     const status = (error as { problem?: { status?: number } }).problem?.status;
-    if (status === 404) return undefined;
+    if (status === 404) return null;
     throw error;
   }
 }

@@ -7,6 +7,7 @@ import { ForbiddenState } from '../../components/ForbiddenState';
 import { Button, Card, Checkbox, EmptyState, PageHeader, Skeleton } from '../../components/ui';
 import { Bell } from '../../components/ui/icons';
 import { ApiError } from '../../lib/apiClient';
+import { formatCalendarDate, formatDateTime, toCalendarDate } from '../../lib/dates';
 import { canAccessPath } from '../../routing/routeTable';
 import {
   getNotificationPreferences,
@@ -77,7 +78,8 @@ function NotificationRow({ notification }: { notification: InboxNotification }) 
           {title}
         </p>
         <p className={styles.itemMeta}>
-          {notification.summary} · {new Date(notification.createdAt).toLocaleString()}
+          {notification.summary} ·{' '}
+          <span className={styles.timestamp}>{formatDateTime(notification.createdAt)}</span>
           {unread ? '' : ' · Read'}
         </p>
         {notification.items.length > 0 ? (
@@ -102,7 +104,7 @@ function NotificationRow({ notification }: { notification: InboxNotification }) 
           size="sm"
           loading={markRead.isPending}
           onClick={() => markRead.mutate()}
-          aria-label={`Mark "${title}" from ${new Date(notification.createdAt).toLocaleDateString()} read`}
+          aria-label={`Mark "${title}" from ${formatCalendarDate(toCalendarDate(notification.createdAt))} read`}
         >
           Mark read
         </Button>
@@ -151,19 +153,23 @@ function InboxSection() {
           ))}
         </ul>
       )}
-      {inbox.hasNextPage ? (
-        <Button
-          variant="secondary"
-          loading={inbox.isFetchingNextPage}
-          onClick={() => void inbox.fetchNextPage()}
-        >
-          Load older notifications
-        </Button>
-      ) : null}
-      {inbox.isFetchNextPageError ? (
-        <p role="alert" className={styles.itemMeta}>
-          Older notifications could not be loaded. Try again.
-        </p>
+      {inbox.hasNextPage || inbox.isFetchNextPageError ? (
+        <div className={styles.more}>
+          {inbox.hasNextPage ? (
+            <Button
+              variant="secondary"
+              loading={inbox.isFetchingNextPage}
+              onClick={() => void inbox.fetchNextPage()}
+            >
+              Load older notifications
+            </Button>
+          ) : null}
+          {inbox.isFetchNextPageError ? (
+            <p role="alert" className={styles.itemMeta}>
+              Older notifications could not be loaded. Try again.
+            </p>
+          ) : null}
+        </div>
       ) : null}
     </Card>
   );
@@ -282,8 +288,11 @@ function PreferencesSection() {
 export function NotificationsPage() {
   return (
     <main id="main-content">
-      <PageHeader title="Notifications" />
-      <div className={styles.stack}>
+      <PageHeader
+        title="Notifications"
+        description="Your reminders and daily digests. Dispatch alerts are delivered separately."
+      />
+      <div className={styles.layout}>
         <InboxSection />
         <PreferencesSection />
       </div>

@@ -1,0 +1,650 @@
+/* Alerts feature styles: the live roster (/alerts/roster), its panels, and alert diagnostics.
+   On the roster the call and its building sit on the left, the tone ladder and the riding board
+   on the right. Each grid is its own row so a long roster never leaves a hole under the dispatch
+   card; below lg everything is one column in reading order. */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+.grid + .grid {
+  margin-top: var(--bx-space-lg);
+}
+
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  }
+}
+
+.column {
+  display: grid;
+  /* An implicit `auto` track would size to the widest table and push the page past a phone. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--bx-space-lg);
+  align-content: start;
+  min-width: 0;
+}
+
+/* The manual-entry fallback and the lookup sit below an open call, set apart from it. */
+.grid.fallback {
+  margin-top: var(--bx-space-2xl);
+}
+
+.muted {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+/* ---- Active calls: the dashboard's live-call card (design.md §2.6 elevation.alarm) ---- */
+
+.liveCard {
+  border: 2px solid var(--bx-status-danger);
+  box-shadow:
+    inset 4px 0 0 var(--bx-status-danger),
+    var(--bx-shadow-raised);
+}
+
+.liveCard > h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--bx-space-sm);
+}
+
+.liveCard > h2::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bx-status-danger);
+  box-shadow: 0 0 0 4px var(--bx-chip-fill-danger);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.callRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: var(--bx-space-md) 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.callRow:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.callRow:last-child {
+  padding-bottom: 0;
+}
+
+.callBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 280px;
+}
+
+/* Active dispatch = alarm colour + triangle + the word "Dispatched" (design.md §2.3). */
+.callStatus {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-status-danger);
+}
+
+/* Inline, so a long ladder label wraps as text instead of dropping a "·" onto its own line. */
+.callStatus > svg {
+  vertical-align: -2px;
+  margin-right: var(--bx-space-xs);
+}
+
+.callStatusMeta {
+  color: var(--bx-fg-muted);
+}
+
+.callType {
+  font-size: var(--boxalarm-type-heading-size);
+  line-height: var(--boxalarm-type-heading-lh);
+}
+
+.callAddress {
+  overflow-wrap: anywhere;
+}
+
+/* ---- The open call ---- */
+
+.dispatchTitle {
+  margin: 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.address {
+  margin: var(--bx-space-xs) 0 0;
+  font-size: 16px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.crossStreets {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.mapLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--bx-target-office);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.narrative {
+  margin: var(--bx-space-md) 0 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-left: 3px solid var(--bx-border-decorative);
+  background: var(--bx-canvas);
+  border-radius: 0 var(--bx-radius-md) var(--bx-radius-md) 0;
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.verify {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bx-space-sm);
+  margin-bottom: var(--bx-space-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border: 2px solid var(--bx-status-danger);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
+  font-weight: 700;
+}
+
+.verify svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.updates {
+  margin-top: var(--bx-space-lg);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.updates h3 {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.updateList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.updateList > li {
+  padding: var(--bx-space-sm) 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.updateList > li:first-child {
+  border-top: 0;
+}
+
+.updateList time {
+  font-family: var(--bx-font-mono);
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.changes {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.unavailable {
+  margin: var(--bx-space-md) 0 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+/* ---- Tables inside a card: the DataTable look without a second frame ---- */
+
+.tableWrap {
+  /* Positioned, so the visually-hidden header text is clipped with the table instead of
+     widening the page on a phone. */
+  position: relative;
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--bx-border-decorative);
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-left: 0;
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-right: 0;
+}
+
+.table thead th {
+  padding-top: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bx-fg-muted);
+  white-space: nowrap;
+}
+
+.table tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child th,
+.table tbody tr:last-child td {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.quals {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.timeCell {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  white-space: nowrap;
+}
+
+.endCell {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.table thead th.endCell {
+  text-align: right;
+}
+
+/* ---- Riding board ---- */
+
+.unit {
+  padding: var(--bx-space-md) 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.unit:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.unit:last-child {
+  padding-bottom: 0;
+}
+
+.unitHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+  margin-bottom: var(--bx-space-sm);
+}
+
+.unitHead h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.oosReason {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.seats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+  gap: var(--bx-space-sm) var(--bx-space-md);
+}
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bx-space-sm);
+  margin: 0 0 var(--bx-space-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.alert svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ---- Manual entry and the dispatch-ID lookup ---- */
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-md);
+}
+
+.span {
+  grid-column: 1 / -1;
+}
+
+.formActions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.formError {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--bx-status-danger);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lookup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.lookupField {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.lookupHelp {
+  margin: var(--bx-space-md) 0 0;
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+/* ---- Tone ladder and mutual aid ---- */
+
+.subsection {
+  display: grid;
+  gap: var(--bx-space-sm);
+  font-size: 14px;
+}
+
+.subsection + .subsection {
+  margin-top: var(--bx-space-md);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.subsection h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bx-fg-muted);
+}
+
+.subsection p {
+  margin: 0;
+}
+
+.subtle {
+  color: var(--bx-fg-muted);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-xs);
+}
+
+.result {
+  margin: var(--bx-space-md) 0 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-canvas);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---- Pre-plan ---- */
+
+.prePlan {
+  display: grid;
+  gap: var(--bx-space-md);
+  align-content: start;
+}
+
+/* The Card title's own bottom margin plus the grid gap would double the space under it. */
+.prePlan > h2 {
+  margin-bottom: 0;
+}
+
+.matched {
+  margin: 0;
+  font-weight: 600;
+}
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bx-space-sm);
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-left: 4px solid var(--bx-status-warning);
+  border-radius: 0 var(--bx-radius-md) var(--bx-radius-md) 0;
+  background: var(--bx-chip-fill-warning);
+  color: var(--bx-chip-onfill-warning);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.summary {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ppSection h3 {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bx-fg-muted);
+}
+
+.ppList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.ppList > li {
+  padding: 6px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+  overflow-wrap: anywhere;
+}
+
+.ppList > li:first-child {
+  border-top: 0;
+}
+
+.hazard,
+.hydrant {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bx-space-xs);
+}
+
+.hazard svg,
+.hydrant svg {
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.hazard {
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
+
+.hydrant svg {
+  color: var(--bx-fg-muted);
+}
+
+.hydrantOos svg {
+  color: inherit;
+}
+
+.candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.candidates > li {
+  display: grid;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-md);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+.candidates h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* ---- Alert diagnostics ---- */
+
+.picker {
+  margin-bottom: var(--bx-space-md);
+}
+
+.pickerLabel {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
+}
+
+.chipRow {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+}
+
+/* The canary's per-channel results sit under its facts. */
+.facts + .chipRow {
+  margin-top: var(--bx-space-md);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: var(--bx-space-md) 0 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.checkList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 14px;
+}
+
+.checkList > li {
+  padding: 10px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.checkList > li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.diagnosis {
+  margin: var(--bx-space-sm) 0 0;
+  font-size: 14px;
+}
+
+/* A long check name wraps inside its chip on a phone instead of running off the card. */
+.wrapChip {
+  white-space: normal;
+  line-height: 1.3;
+}

@@ -1,0 +1,18 @@
+/* OpenStreetMap tiles are drawn for daylight. In the cab palette a full-brightness street map
+   wrecks night vision (the reason cab exists), so the tiles are inverted and dimmed; markers are
+   not tiles and keep their status colours. */
+:root[data-palette='cab'] .tiles {
+  filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(0.9);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-palette]) .tiles {
+    filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(0.9);
+  }
+}
+
+/* Leaflet paints #ddd under tiles that are still loading: a bright slab in the dark palettes.
+   Doubled class so it outranks leaflet.css's own .leaflet-container rule. */
+.container.container {
+  background: var(--bx-surface);
+}

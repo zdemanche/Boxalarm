@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Card, PageHeader, Skeleton, StatusChip, Tabs } from '../../components/ui';
+import { formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { listEquipment } from '../inventory/api';
 import { getApparatus } from './api';
 import { InventoryTab } from './InventoryTab';
@@ -12,8 +13,10 @@ import { MaintenanceTab } from './MaintenanceTab';
 import { ScbaTab } from './ScbaTab';
 import { ResolveDefectControl, resolveWarningFor } from './ResolveDefectControl';
 import { ServiceStatusControls } from './ServiceStatusControls';
+import { serviceStatusRole } from './StatusBadge';
 import { TestingTab } from './TestingTab';
 import type { OpenDefectSummary } from './types';
+import styles from './Apparatus.module.css';
 
 const SEVERITY_WORD: Record<OpenDefectSummary['severity'], string> = {
   MINOR: 'Minor',
@@ -71,120 +74,90 @@ export function ApparatusDetailPage() {
   }
 
   const unit = detailQuery.data;
+  const equipment = equipmentQuery.data ?? [];
 
   return (
     <main id="main-content">
       <PageHeader
         title={unit?.unitId ?? '…'}
         breadcrumbs={[{ label: 'Apparatus', to: '/apparatus' }, { label: unit?.unitId ?? '…' }]}
+        description={
+          unit ? (
+            <span className={styles.headerMeta}>
+              {/* The unit's one status chip: a change made in Service status is announced here. */}
+              <span role="status">
+                <StatusChip status={serviceStatusRole(unit.status)}>
+                  {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
+                </StatusChip>
+              </span>
+              <span>{unit.type}</span>
+              <span>
+                ID <span className={styles.mono}>{unit.apparatusId}</span>
+              </span>
+            </span>
+          ) : undefined
+        }
       />
       {detailQuery.isLoading || !unit ? (
-        <Skeleton lines={3} />
+        <Card>
+          <Skeleton lines={3} />
+        </Card>
       ) : (
-        <>
-          <Card>
-            <dl
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'max-content 1fr',
-                columnGap: 'var(--bx-space-lg)',
-                rowGap: 'var(--bx-space-sm)',
-                fontSize: 14,
-                margin: 0,
-              }}
-            >
-              <dt style={{ color: 'var(--bx-fg-muted)' }}>Type</dt>
-              <dd style={{ margin: 0 }}>{unit.type}</dd>
-              <dt style={{ color: 'var(--bx-fg-muted)' }}>Apparatus ID</dt>
-              <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>{unit.apparatusId}</dd>
-            </dl>
-            {unit.failedTests.length > 0 ? (
-              <div
-                role="alert"
-                style={{
-                  marginTop: 'var(--bx-space-md)',
-                  color: 'var(--bx-status-danger)',
-                  fontWeight: 600,
-                }}
-              >
-                Failed tests: {unit.failedTests.map((t) => t.testType).join(', ')}
-              </div>
-            ) : null}
-          </Card>
-
-          <ServiceStatusControls unit={unit} />
-
+        <div className={styles.detailGrid}>
           <Card title="Open defects">
-            {resolveWarning ? <p role="status">{resolveWarning}</p> : null}
+            {resolveWarning ? (
+              <p role="status" className={styles.notice}>
+                {resolveWarning}
+              </p>
+            ) : null}
             {unit.openDefects.length === 0 ? (
-              <p>No open defects.</p>
+              <p className={styles.message}>No open defects.</p>
             ) : (
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              <ul className={styles.list}>
                 {unit.openDefects.map((defect) => {
                   const photo = defectPhotoSrc(defect);
-                  const reported = new Date(defect.reportedAt * 1000);
+                  const reportedMs = defect.reportedAt * 1000;
                   return (
-                    <li
-                      key={defect.defectId}
-                      style={{
-                        display: 'flex',
-                        gap: 'var(--bx-space-md)',
-                        alignItems: 'flex-start',
-                        padding: 'var(--bx-space-md) 0',
-                        borderBottom: '1px solid var(--bx-border-decorative)',
-                      }}
-                    >
+                    <li key={defect.defectId} className={styles.row}>
                       {photo ? (
                         <img
                           src={photo}
                           alt={defect.description}
-                          width={120}
-                          height={90}
-                          style={{
-                            width: 120,
-                            height: 90,
-                            objectFit: 'cover',
-                            borderRadius: 8,
-                            flexShrink: 0,
-                          }}
+                          width={96}
+                          height={72}
+                          className={styles.defectPhoto}
                         />
                       ) : null}
-                      <div>
-                        <strong>{defect.description}</strong>
-                        <div
-                          style={{
-                            display: 'flex',
-                            gap: 'var(--bx-space-sm)',
-                            alignItems: 'center',
-                            marginTop: 'var(--bx-space-xs)',
-                          }}
-                        >
+                      <div className={styles.rowBody}>
+                        <strong className={styles.rowTitle}>{defect.description}</strong>
+                        <div className={styles.metaLine}>
                           <StatusChip status={SEVERITY_STATUS[defect.severity]}>
                             {SEVERITY_WORD[defect.severity]}
                           </StatusChip>
-                          <time dateTime={reported.toISOString()}>
-                            {reported.toLocaleDateString()}
-                          </time>
+                          <span className={styles.rowMeta}>
+                            Reported{' '}
+                            <time dateTime={new Date(reportedMs).toISOString()}>
+                              {formatCalendarDate(toCalendarDate(reportedMs))}
+                            </time>
+                          </span>
                         </div>
                         {photo ? null : defect.photoS3Key ? (
-                          <p style={{ margin: 'var(--bx-space-xs) 0 0', fontSize: 13 }}>
+                          <span className={styles.rowMeta}>
                             Photo on file. The apparatus record did not include a signed photo URL.
-                          </p>
+                          </span>
                         ) : (
-                          <p style={{ margin: 'var(--bx-space-xs) 0 0', fontSize: 13 }}>
-                            No photo.
-                          </p>
+                          <span className={styles.rowMeta}>No photo.</span>
                         )}
-                        <div style={{ marginTop: 'var(--bx-space-sm)' }}>
-                          <ResolveDefectControl
-                            unitId={unit.unitId}
-                            defectId={defect.defectId}
-                            description={defect.description}
-                            onResolved={(result) =>
-                              setResolveWarning(resolveWarningFor(unit.unitId, result))
-                            }
-                          />
-                        </div>
+                      </div>
+                      <div className={styles.rowAside}>
+                        <ResolveDefectControl
+                          unitId={unit.unitId}
+                          defectId={defect.defectId}
+                          description={defect.description}
+                          onResolved={(result) =>
+                            setResolveWarning(resolveWarningFor(unit.unitId, result))
+                          }
+                        />
                       </div>
                     </li>
                   );
@@ -193,53 +166,69 @@ export function ApparatusDetailPage() {
             )}
           </Card>
 
-          <Tabs
-            label="Apparatus detail sections"
-            items={[
-              {
-                value: 'maintenance',
-                label: 'Maintenance',
-                content: <MaintenanceTab apparatusId={unit.apparatusId} />,
-              },
-              {
-                // POST /{unitId}/scba resolves the unit by unitId; the due-soon feed carries the
-                // resolved apparatusId, so the tab needs both.
-                value: 'scba',
-                label: 'SCBA',
-                content: <ScbaTab unitId={unit.unitId} apparatusId={unit.apparatusId} />,
-              },
-              {
-                // Testing schedules are the one sub-resource the backend resolves and returns by
-                // display unit code, so it alone still takes unitId — see the tab-identifier note
-                // in the apparatus-service INFRA reconciliation ticket for the full picture.
-                value: 'testing',
-                label: 'Testing',
-                content: <TestingTab unitId={unit.unitId} />,
-              },
-              {
-                value: 'inventory',
-                label: 'Inventory',
-                content: <InventoryTab apparatusId={unit.apparatusId} />,
-              },
-            ]}
-          />
+          <div className={styles.detailSide}>
+            <ServiceStatusControls unit={unit} />
 
-          <Card title="Assigned equipment">
-            {equipmentQuery.isLoading ? (
-              <Skeleton lines={2} />
-            ) : (equipmentQuery.data ?? []).length === 0 ? (
-              <p>No equipment assigned.</p>
-            ) : (
-              <ul>
-                {(equipmentQuery.data ?? []).map((asset) => (
-                  <li key={asset.assetId}>
-                    <Link to={`/inventory/${asset.assetId}`}>{asset.serialNumber}</Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </>
+            <Card title="Assigned equipment">
+              {equipmentQuery.isLoading ? (
+                <Skeleton lines={2} />
+              ) : equipment.length === 0 ? (
+                <p className={styles.message}>No equipment assigned.</p>
+              ) : (
+                <ul className={styles.list}>
+                  {equipment.map((asset) => (
+                    <li key={asset.assetId} className={styles.row}>
+                      <span className={styles.rowBody}>
+                        <Link
+                          to={`/inventory/${asset.assetId}`}
+                          className={[styles.rowTitle, styles.mono].join(' ')}
+                        >
+                          {asset.serialNumber}
+                        </Link>
+                        {asset.location ? (
+                          <span className={styles.rowMeta}>{asset.location}</span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          </div>
+
+          <div className={styles.detailRecords}>
+            <Tabs
+              label="Apparatus detail sections"
+              items={[
+                {
+                  value: 'maintenance',
+                  label: 'Maintenance',
+                  content: <MaintenanceTab apparatusId={unit.apparatusId} />,
+                },
+                {
+                  // POST /{unitId}/scba resolves the unit by unitId; the due-soon feed carries the
+                  // resolved apparatusId, so the tab needs both.
+                  value: 'scba',
+                  label: 'SCBA',
+                  content: <ScbaTab unitId={unit.unitId} apparatusId={unit.apparatusId} />,
+                },
+                {
+                  // Testing schedules are the one sub-resource the backend resolves and returns by
+                  // display unit code, so it alone still takes unitId — see the tab-identifier note
+                  // in the apparatus-service INFRA reconciliation ticket for the full picture.
+                  value: 'testing',
+                  label: 'Testing',
+                  content: <TestingTab unitId={unit.unitId} />,
+                },
+                {
+                  value: 'inventory',
+                  label: 'Inventory',
+                  content: <InventoryTab apparatusId={unit.apparatusId} />,
+                },
+              ]}
+            />
+          </div>
+        </div>
       )}
     </main>
   );

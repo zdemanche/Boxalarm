@@ -1,4 +1,4 @@
-import { palette } from '@boxalarm/design-tokens';
+import { statusChipPalette } from '@boxalarm/design-tokens';
 import { render } from '@testing-library/react-native';
 import { MyPpeScreen } from './MyPpeScreen';
 
@@ -12,7 +12,10 @@ test('every assigned PPE item is visible without officer help, expired items sty
 
   const current = await findByText(/turnout_coat/);
   expect(current).toBeTruthy();
+  expect(await findByText('expires 2024-01-15')).toBeTruthy();
 
-  const expiredLabel = await findByText(/EXPIRED · expires/);
-  expect(expiredLabel).toHaveStyle({ color: palette.day.error });
+  // The status is a chip: an expired item's is the danger pair, unlike an issued item's.
+  const expiredLabel = await findByText('Expired');
+  expect(expiredLabel).toHaveStyle({ color: statusChipPalette.day.danger.onFill });
+  expect(await findByText('Issued')).toHaveStyle({ color: statusChipPalette.day.ok.onFill });
 });

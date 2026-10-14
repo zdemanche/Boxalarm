@@ -1,29 +1,54 @@
 .shell {
   display: grid;
-  grid-template-columns: var(--bx-sidebar-width, 232px) minmax(0, 1fr);
-  grid-template-rows: 56px 1fr;
-  grid-template-areas: 'sidebar topbar' 'sidebar main';
+  grid-template-columns: var(--bx-sidebar-width, 240px) minmax(0, 1fr);
+  grid-template-rows: auto 56px 1fr;
+  grid-template-areas: 'sidebar banner' 'sidebar topbar' 'sidebar main';
   min-height: 100vh;
 }
 
 .sidebar {
   grid-area: sidebar;
-  background: var(--bx-surface);
-  border-right: 1px solid var(--bx-border-decorative);
+  /* The dark shell frames the product in day and cab alike; it stays put while the page
+     scrolls. */
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  background: var(--bx-shell-bg);
+  border-right: 1px solid var(--bx-shell-border);
   display: flex;
   flex-direction: column;
-  padding: var(--bx-space-md) 0;
+  padding: var(--bx-space-md) 0 var(--bx-space-sm);
+}
+
+/* The day focus ring is near-black, invisible on the shell; amber clears 3:1 there. */
+.sidebar,
+.drawerContent {
+  --bx-focus: var(--bx-shell-accent);
+  color: var(--bx-shell-fg);
+}
+
+.banner {
+  grid-area: banner;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--bx-space-sm);
-  padding: 0 var(--bx-space-md) var(--bx-space-md);
+  gap: 10px;
+  padding: var(--bx-space-xs) 20px 20px;
   font-weight: 700;
-  font-size: 15px;
-  color: var(--bx-fg);
+  font-size: 17px;
+  color: var(--bx-shell-fg);
   letter-spacing: -0.01em;
+}
+
+.brandMark {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--bx-shell-border);
 }
 
 .navList {
@@ -31,7 +56,7 @@
   padding: 0 var(--bx-space-sm);
   display: flex;
   flex-direction: column;
-  gap: var(--bx-space-md);
+  gap: 14px;
   flex: 1;
   overflow-y: auto;
 }
@@ -47,41 +72,61 @@
 
 /* docs/design.md §2.4: no ALL CAPS, so group labels are sentence case, set small and muted. */
 .navGroupLabel {
-  margin: 0 0 var(--bx-space-xs);
-  padding: 0 var(--bx-space-sm);
+  margin: 0 0 6px;
+  padding: 0 12px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--bx-fg-muted);
+  letter-spacing: 0.02em;
+  color: var(--bx-shell-fg-muted);
 }
 
 .navLink {
   display: flex;
   align-items: center;
-  gap: var(--bx-space-sm);
+  gap: 10px;
   min-height: var(--bx-target-office);
-  padding: 0 var(--bx-space-sm);
+  padding: 0 12px;
   border-radius: var(--bx-radius-md);
-  color: var(--bx-fg-muted);
+  color: var(--bx-shell-fg-muted);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
+  transition:
+    background-color var(--bx-duration-fast) var(--bx-ease-standard),
+    color var(--bx-duration-fast) var(--bx-ease-standard);
 }
 
 .navLink:hover {
-  background: var(--bx-surface-raised);
-  color: var(--bx-fg);
+  background: var(--bx-shell-bg-raised);
+  color: var(--bx-shell-fg);
 }
 
 .navLinkActive {
-  background: var(--bx-surface-raised);
-  color: var(--bx-fg);
-  font-weight: 700;
-  box-shadow: inset 2px 0 0 var(--bx-fg);
+  background: var(--bx-shell-bg-raised);
+  color: var(--bx-shell-fg);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--bx-shell-accent);
+}
+
+.navLinkActive svg {
+  color: var(--bx-shell-accent);
 }
 
 .signOutWrap {
-  padding: var(--bx-space-sm);
-  border-top: 1px solid var(--bx-border-decorative);
+  margin-top: var(--bx-space-sm);
+  padding: var(--bx-space-sm) var(--bx-space-sm) 0;
+  border-top: 1px solid var(--bx-shell-border);
+}
+
+/* Sign out is a <button> wearing .navLink; without this it kept the native border and fill and
+   read as an empty text field. */
+.navButton {
+  width: 100%;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 /* NavDrawer — the below-md replacement for .sidebar (MAJOR-1). Scoped under .topbar so it
@@ -106,8 +151,8 @@
   left: 0;
   bottom: 0;
   width: min(280px, 84vw);
-  background: var(--bx-surface);
-  border-right: 1px solid var(--bx-border-decorative);
+  background: var(--bx-shell-bg);
+  border-right: 1px solid var(--bx-shell-border);
   z-index: 951;
   transform: translateX(-100%);
   transition: transform var(--bx-duration-base) var(--bx-ease-standard);
@@ -136,15 +181,24 @@
   right: var(--bx-space-sm);
 }
 
+/* IconButton's ghost style is drawn for light surfaces. */
+.drawerContent .drawerClose {
+  color: var(--bx-shell-fg);
+}
+
+.drawerContent .drawerClose:hover:not(:disabled) {
+  background: var(--bx-shell-bg-raised);
+}
+
 .topbar {
   grid-area: topbar;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--bx-space-md);
-  padding: 0 var(--bx-space-lg);
+  padding: 0 32px;
   border-bottom: 1px solid var(--bx-border-decorative);
-  background: var(--bx-bg);
+  background: var(--bx-card);
 }
 
 .topbarLeft {
@@ -186,8 +240,12 @@
 }
 
 .roleLabel {
+  padding: 4px 10px;
+  border-radius: var(--bx-radius-pill);
+  background: var(--bx-accent-subtle);
+  color: var(--bx-on-accent-subtle);
   font-size: 13px;
-  color: var(--bx-fg-muted);
+  font-weight: 600;
 }
 
 .main {
@@ -196,8 +254,15 @@
      step list) would widen the 1fr track past the viewport instead of wrapping or scrolling
      inside its own container. */
   min-width: 0;
-  padding: var(--bx-space-lg);
+  padding: 28px 32px 48px;
   overflow-x: hidden;
+}
+
+/* design.md §2.7 2xl: content caps at 1680px, centred, so a station wall display doesn't stretch
+   a table across 3,000px. */
+.main > main {
+  max-width: 1680px;
+  margin-inline: auto;
 }
 
 /* Must stay after the base .sidebar / .menuButton rules: at equal specificity the later rule
@@ -206,10 +271,17 @@
 @media (max-width: 767px) {
   .shell {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: 'topbar' 'main';
+    grid-template-areas: 'banner' 'topbar' 'main';
   }
   .sidebar {
     display: none;
+  }
+  /* 24px gutters on both sides cost a 390px phone an eighth of its width. */
+  .main {
+    padding: var(--bx-space-md);
+  }
+  .topbar {
+    padding: 0 var(--bx-space-sm);
   }
   /* MAJOR-1 (PR #318 review): hiding the static sidebar here used to leave no
      replacement, which left the web app with no route navigation and no Sign out below 768px (and at 200%

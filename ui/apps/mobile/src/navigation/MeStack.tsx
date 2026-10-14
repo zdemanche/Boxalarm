@@ -11,6 +11,8 @@ import { MyPpeScreen } from '../screens/me/MyPpeScreen';
 import { ProfileEditScreen } from '../screens/me/ProfileEditScreen';
 import { SelfTestScreen } from '../screens/me/SelfTestScreen';
 import { TranscriptScreen } from '../screens/me/TranscriptScreen';
+import { useTheme } from '../components/ui/theme';
+import { stackScreenOptions } from './stackScreenOptions';
 
 // Profile, certifications, transcript, inbox, preferences, self-test, diagnostics -
 // architecture.md §7.2 MeStack.
@@ -33,8 +35,9 @@ export type MeStackParamList = {
 const Stack = createNativeStackNavigator<MeStackParamList>();
 
 export function MeStack() {
+  const theme = useTheme();
   return (
-    <Stack.Navigator>
+    <Stack.Navigator screenOptions={stackScreenOptions(theme)}>
       <Stack.Screen name="MeHome" component={MeHomeScreen} options={{ title: 'Me' }} />
       <Stack.Screen
         name="Availability"
@@ -66,7 +69,11 @@ export function MeStack() {
       />
       <Stack.Screen name="MyPpe" component={MyPpeScreen} options={{ title: 'My PPE' }} />
       <Stack.Screen name="SelfTest" component={SelfTestScreen} options={{ title: 'Self-test' }} />
-      <Stack.Screen name="Diagnostics" component={DiagnosticsScreen} />
+      <Stack.Screen
+        name="Diagnostics"
+        component={DiagnosticsScreen}
+        options={{ title: 'Alert diagnostics' }}
+      />
     </Stack.Navigator>
   );
 }

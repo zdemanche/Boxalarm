@@ -3,10 +3,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, TextInput } from '../../components/ui';
+import { formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { createMaintenance, getMaintenance } from './api';
 import type { CreateMaintenanceInput } from './types';
+import styles from './Apparatus.module.css';
 
 const emptyForm = { description: '', vendor: '', cost: '', scheduledNextAt: '' };
+
+function formatEpochDate(epochSeconds: number): string {
+  return formatCalendarDate(toCalendarDate(epochSeconds * 1000));
+}
 
 // Takes the apparatus's apparatusId (not its display unitId) — matches ApparatusDetailPage's
 // own detail fetch and the real backend's maintenance endpoint, which keys directly on
@@ -31,47 +37,46 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
 
   if (query.error) {
     return (
-      <ApiForbiddenGate error={query.error} embedded>
-        <p>Unexpected error</p>
-      </ApiForbiddenGate>
+      <Card>
+        <ApiForbiddenGate error={query.error} embedded>
+          <p>Unexpected error</p>
+        </ApiForbiddenGate>
+      </Card>
     );
   }
 
   const records = [...(query.data?.records ?? [])].sort((a, b) => b.performedAt - a.performedAt);
 
   return (
-    <section>
-      <h2 style={{ fontSize: 17, fontWeight: 600 }}>Maintenance</h2>
-      {query.isLoading ? (
-        <Skeleton lines={3} />
-      ) : records.length === 0 ? (
-        <p>No maintenance recorded for this unit.</p>
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {records.map((record) => (
-            <li
-              key={record.performedAt}
-              style={{
-                padding: 'var(--bx-space-sm) 0',
-                borderBottom: '1px solid var(--bx-border-decorative)',
-              }}
-            >
-              <strong>{record.description}</strong> — {record.vendor} — ${record.cost.toFixed(2)}
-              <div style={{ fontSize: 13, color: 'var(--bx-fg-muted)' }}>
-                {new Date(record.performedAt * 1000).toLocaleDateString()}
-                {record.scheduledNextAt
-                  ? ` — next scheduled ${new Date(record.scheduledNextAt * 1000).toLocaleDateString()}`
-                  : ''}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+    <div className={styles.stack}>
+      <Card title="Maintenance history">
+        {query.isLoading ? (
+          <Skeleton lines={3} />
+        ) : records.length === 0 ? (
+          <p className={styles.message}>No maintenance recorded for this unit.</p>
+        ) : (
+          <ul className={styles.list}>
+            {records.map((record) => (
+              <li key={record.performedAt} className={styles.row}>
+                <span className={styles.rowBody}>
+                  <span className={styles.rowTitle}>{record.description}</span>
+                  <span className={styles.rowMeta}>
+                    {formatEpochDate(record.performedAt)} · {record.vendor}
+                    {record.scheduledNextAt
+                      ? ` · next scheduled ${formatEpochDate(record.scheduledNextAt)}`
+                      : ''}
+                  </span>
+                </span>
+                <span className={styles.amount}>
+                  {record.cost.toLocaleString(undefined, { style: 'currency', currency: 'USD' })}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
-      <Card
-        title="Log maintenance event"
-        style={{ marginTop: 'var(--bx-space-lg)', maxWidth: 480 }}
-      >
+      <Card title="Log maintenance event">
         <form
           aria-label="Log maintenance"
           onSubmit={(event: FormEvent) => {
@@ -86,7 +91,7 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
                 : null,
             });
           }}
-          style={{ display: 'grid', gap: 'var(--bx-space-sm)' }}
+          className={styles.formGrid}
         >
           <TextInput
             label="Description"
@@ -116,12 +121,18 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
             value={form.scheduledNextAt}
             onChange={(e) => setForm((prev) => ({ ...prev, scheduledNextAt: e.target.value }))}
           />
-          {mutation.error ? <p role="alert">{mutation.error.message}</p> : null}
-          <Button type="submit" loading={mutation.isPending} style={{ maxWidth: 240 }}>
-            Log maintenance
-          </Button>
+          {mutation.error ? (
+            <p role="alert" className={styles.error}>
+              {mutation.error.message}
+            </p>
+          ) : null}
+          <div className={styles.formActions}>
+            <Button type="submit" loading={mutation.isPending}>
+              Log maintenance
+            </Button>
+          </div>
         </form>
       </Card>
-    </section>
+    </div>
   );
 }

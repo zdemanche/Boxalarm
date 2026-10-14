@@ -1,11 +1,14 @@
+import { shellPalette } from '@boxalarm/design-tokens';
 import { NavigationContainer } from '@react-navigation/native';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../auth/AuthContext';
+import { isDemoMode } from '../auth/demoMode';
 import { SyncStatusBanner } from '../sync/SyncStatusBanner';
 import { AppTabs } from './AppTabs';
 import { AuthStack } from './AuthStack';
+import { DEMO_LINKING } from './demoLinking';
 import { GlobalReadinessBanner } from '../features/alerts/GlobalReadinessBanner';
 import { syncLockScreenPresentation } from '../features/alerts/lockScreenPresentation';
 import { flushPendingAlertNavigation, navigationRef } from './navigationRef';
@@ -30,6 +33,7 @@ export function RootNavigator() {
   return (
     <NavigationContainer
       ref={navigationRef}
+      linking={isDemoMode() ? DEMO_LINKING : undefined}
       onReady={() => {
         onNavigationReady();
         setFocusedRouteName(navigationRef.getCurrentRoute()?.name);
@@ -38,7 +42,7 @@ export function RootNavigator() {
     >
       {isAuthenticated ? (
         <View style={{ flex: 1 }}>
-          <SafeAreaView edges={['top']}>
+          <SafeAreaView edges={['top']} style={{ backgroundColor: shellPalette.bg }}>
             <SyncStatusBanner />
             <GlobalReadinessBanner focusedRouteName={focusedRouteName} />
           </SafeAreaView>

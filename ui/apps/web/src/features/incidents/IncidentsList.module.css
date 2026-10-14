@@ -1,9 +1,175 @@
+/* Incidents (/incidents): starting a report and what needs attention side by side, then every
+   report with its filters in one card. */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--bx-space-lg);
+  align-items: start;
+  margin-bottom: var(--bx-space-lg);
+}
+
+@media (min-width: 1024px) {
+  .grid {
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  }
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* The unparsed CAD text a VERIFY dispatch carries instead of an address. */
+.excerpt {
+  font-family: var(--bx-font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.muted {
+  color: var(--bx-fg-muted);
+  margin: 0;
+  font-size: 14px;
+}
+
+/* ---- Divided rows (Start a report, Needs attention, the phone result list) ---- */
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+  overflow-wrap: anywhere;
+}
+
+.row:first-child {
+  border-top: 0;
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+/* Needs attention sits in the narrow column: number and status on one line, details under. */
+.attentionRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+  overflow-wrap: anywhere;
+}
+
+.attentionRow:first-child {
+  border-top: 0;
+}
+
+.attentionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.rowLine {
+  font-size: 14px;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.groupLabel {
+  margin: var(--bx-space-md) 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--bx-fg-muted);
+}
+
+.groupLabel:first-child {
+  margin-top: 0;
+}
+
+.loadOlder {
+  margin-top: var(--bx-space-md);
+}
+
+.summary {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+/* ---- Start a report fallback: the typed dispatch ID ---- */
+
+.fallbackForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  margin-top: var(--bx-space-md);
+}
+
+.fallbackField {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+/* Lines the button up with the input, not the label above it. */
+.fallbackSubmit {
+  margin-top: 25px;
+}
+
+.createError {
+  margin-top: var(--bx-space-md);
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
+  font-size: 14px;
+}
+
+.createError p {
+  margin: 0;
+}
+
+.createErrorTitle {
+  font-weight: 600;
+}
+
+/* ---- All incidents: filters, then the results ---- */
+
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--bx-space-md);
+  gap: var(--bx-space-md) var(--bx-space-lg);
   align-items: end;
-  margin-bottom: var(--bx-space-lg);
+  padding-bottom: var(--bx-space-md);
+  margin-bottom: var(--bx-space-md);
+  border-bottom: 1px solid var(--bx-border-decorative);
 }
 
 .statusSet {
@@ -12,60 +178,64 @@
   padding: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--bx-space-sm) var(--bx-space-md);
+  gap: var(--bx-space-xs) var(--bx-space-md);
+  min-width: 0;
 }
 
 .statusSet legend {
-  font-weight: 600;
-  margin-bottom: var(--bx-space-xs);
-}
-
-.section {
-  margin-top: var(--bx-space-lg);
-}
-
-.attentionList,
-.cards {
-  list-style: none;
-  margin: 0;
   padding: 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.filterActions {
+  margin-left: auto;
+}
+
+.loadError {
   display: grid;
   gap: var(--bx-space-sm);
+  justify-items: start;
 }
 
-.attentionItem,
-.card {
-  display: grid;
-  gap: var(--bx-space-2xs);
+.loadError h3,
+.loadError p {
+  margin: 0;
+}
+
+/* Desk width: the sortable table. Below lg: the same results as tappable rows. */
+.cards {
+  display: none;
+}
+
+.cardLink {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
   min-height: var(--bx-target-office);
-  padding: var(--bx-space-md);
-  border: 1px solid var(--bx-border-decorative);
-  border-radius: var(--bx-radius-md);
-  background: var(--bx-surface);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
   color: inherit;
   text-decoration: none;
 }
 
-.cardMeta,
-.attentionMeta {
+.cards > li:first-child .cardLink {
+  border-top: 0;
+}
+
+.cardLink:hover .mono {
+  text-decoration: underline;
+}
+
+.cardBody {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--bx-space-sm);
-  align-items: center;
-}
-
-.mono {
-  font-family: var(--bx-font-mono);
-  font-weight: 600;
-}
-
-.muted {
-  color: var(--bx-fg-muted);
-  margin: 0;
-}
-
-.cards {
-  display: none;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 200px;
 }
 
 @media (max-width: 1023px) {
@@ -74,29 +244,9 @@
   }
 
   .cards {
-    display: grid;
+    display: block;
+    list-style: none;
+    margin: 0;
+    padding: 0;
   }
-}
-
-.recentCalls {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--bx-space-sm);
-}
-
-.recentCall {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--bx-space-sm);
-  padding: var(--bx-space-sm) 0;
-  border-bottom: 1px solid var(--bx-border-decorative);
-  overflow-wrap: anywhere;
-}
-
-.recentMeta {
-  color: var(--bx-fg-muted);
 }

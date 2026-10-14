@@ -1,4 +1,4 @@
-import { radius, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, useRoute, type NavigationProp } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -10,9 +10,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, StatusChip, useTheme, type SurfaceTheme } from '../../components/ui';
+import { Button, Card, Screen, StatusChip, useTheme, type SurfaceTheme } from '../../components/ui';
 import { useChecksRepository } from '../../features/checks/apiChecksRepository';
 import type {
   ChecklistItem,
@@ -30,6 +29,8 @@ import { memberCacheKey } from '../../sync/memberCache';
 import { capturePhoto, type CapturedPhoto } from '../../sync/photoCapture';
 import { formatAsOf, NoCachedDataError } from '../../sync/readThrough';
 import { useOutboxItem } from '../../sync/useOutboxItem';
+import { ROW_TEXT_SIZE } from './fieldText';
+import { RadioOption } from './RadioOption';
 
 function newIdempotencyKey(): string {
   return `check-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -310,8 +311,8 @@ export function CheckRunnerScreen() {
 
   if (!template && templateError) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg, padding: spacing.lg }}>
-        <View style={{ flex: 1, justifyContent: 'center', gap: spacing.md }}>
+      <Screen>
+        <Card>
           <Text
             accessibilityRole="alert"
             style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
@@ -324,43 +325,45 @@ export function CheckRunnerScreen() {
             variant="secondary"
             onPress={() => navigation.goBack()}
           />
-        </View>
-      </SafeAreaView>
+        </Card>
+      </Screen>
     );
   }
 
   if (!template) {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          backgroundColor: theme.bg,
-          padding: spacing.lg,
-          justifyContent: 'center',
-        }}
-      >
-        <View
-          accessibilityRole="progressbar"
-          accessibilityLabel={`Loading the ${apparatusId} check sheet`}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}
-        >
-          <ActivityIndicator color={theme.fg} />
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            Loading the {apparatusId} check sheet…
-          </Text>
-        </View>
-      </SafeAreaView>
+      <Screen>
+        <Card>
+          <View
+            accessibilityRole="progressbar"
+            accessibilityLabel={`Loading the ${apparatusId} check sheet`}
+            style={{
+              minHeight: targetSize.field,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: spacing.sm,
+            }}
+          >
+            <ActivityIndicator color={theme.fg} />
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+              Loading the {apparatusId} check sheet…
+            </Text>
+          </View>
+        </Card>
+      </Screen>
     );
   }
 
   if (template.items.length === 0) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg, padding: spacing.lg }}>
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size, marginBottom: spacing.md }}>
-          This apparatus has no check sheet yet. The apparatus officer sets one up in settings.
-        </Text>
-        <Button label="Back to apparatus" onPress={() => navigation.goBack()} />
-      </SafeAreaView>
+      <Screen>
+        <Card>
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+            This apparatus has no check sheet yet. The apparatus officer sets one up in settings.
+          </Text>
+          <Button label="Back to apparatus" onPress={() => navigation.goBack()} />
+        </Card>
+      </Screen>
     );
   }
 
@@ -531,24 +534,21 @@ export function CheckRunnerScreen() {
 
   const progress = total === 0 ? 0 : answeredCount / total;
 
+  const hasNotice =
+    restoredFrom !== null ||
+    template.cachedAt !== undefined ||
+    openDefects === null ||
+    Boolean(photoError);
+
   return (
-    <SafeAreaView
-      style={{ flex: 1, backgroundColor: theme.bg }}
-      edges={['bottom', 'left', 'right']}
-    >
-      <View
-        style={{
-          paddingHorizontal: spacing.lg,
-          paddingVertical: spacing.md,
-          gap: spacing.sm,
-          backgroundColor: theme.surface,
-          borderBottomWidth: 1,
-          borderBottomColor: theme.borderDecorative,
-        }}
-      >
+    <Screen scroll={false}>
+      <Card>
+        <Text style={{ color: theme.fgMuted, fontSize: typeScale.label.size, fontWeight: '600' }}>
+          {apparatusId} · {template.name}
+        </Text>
         <Text
           accessibilityLiveRegion="polite"
-          style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
+          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
         >
           {answeredCount} of {total} checked
         </Text>
@@ -556,14 +556,14 @@ export function CheckRunnerScreen() {
           accessibilityRole="progressbar"
           accessibilityValue={{ min: 0, max: total, now: answeredCount }}
           accessibilityLabel="Check progress"
-          style={{ height: 6, borderRadius: 3, backgroundColor: theme.borderDecorative }}
+          style={{ height: 8, borderRadius: 4, backgroundColor: theme.borderDecorative }}
         >
           <View
             style={{
               width: `${Math.round(progress * 100)}%`,
-              height: 6,
-              borderRadius: 3,
-              backgroundColor: theme.status.ok,
+              height: 8,
+              borderRadius: 4,
+              backgroundColor: theme.indicator,
             }}
           />
         </View>
@@ -575,80 +575,104 @@ export function CheckRunnerScreen() {
             onPress={markRestOk}
           />
         ) : null}
-      </View>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}>
-        {restoredFrom !== null ? (
-          <Text style={{ color: theme.status.info, fontSize: typeScale.body.size }}>
-            Restored your check in progress from {formatAsOf(restoredFrom)}.
-          </Text>
+      </Card>
+      {/* Full-bleed so the cards' edges and shadows aren't clipped by the scroll frame. */}
+      <ScrollView
+        style={{ flex: 1, marginHorizontal: -spacing.lg }}
+        contentContainerStyle={{
+          paddingHorizontal: spacing.lg,
+          paddingTop: spacing.xs,
+          paddingBottom: spacing.lg,
+          gap: spacing.md,
+        }}
+      >
+        {hasNotice ? (
+          <Card>
+            {restoredFrom !== null ? (
+              <Text style={{ color: theme.status.info, fontSize: typeScale.body.size }}>
+                Restored your check in progress from {formatAsOf(restoredFrom)}.
+              </Text>
+            ) : null}
+            {template.cachedAt !== undefined ? (
+              <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+                Offline. Using the check sheet saved on this phone as of{' '}
+                {formatAsOf(template.cachedAt)}. The check saves here and sends when you&apos;re
+                back.
+              </Text>
+            ) : null}
+            {openDefects === null ? (
+              <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
+                Existing defects for this unit couldn&apos;t be loaded, so a failed item may be
+                reported again.
+              </Text>
+            ) : null}
+            {photoError ? (
+              <Text
+                accessibilityRole="alert"
+                style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+              >
+                {photoError}
+              </Text>
+            ) : null}
+          </Card>
         ) : null}
-        {template.cachedAt !== undefined ? (
-          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
-            Offline. Using the check sheet saved on this phone as of {formatAsOf(template.cachedAt)}
-            . The check saves here and sends when you&apos;re back.
-          </Text>
-        ) : null}
+        <Card>
+          {template.items.map((item, index) => (
+            <ItemRow
+              key={item.code}
+              item={item}
+              theme={theme}
+              first={index === 0}
+              last={index === template.items.length - 1}
+              answer={results[item.code]}
+              gated={isGated(item)}
+              photoCaptured={photosCaptured[item.code] !== undefined}
+              knownDefect={
+                openDefects ? findKnownDefect(openDefects, apparatusId, item) : undefined
+              }
+              severity={severities[item.code] ?? DEFAULT_SEVERITY}
+              note={notes[item.code] ?? ''}
+              unitId={apparatusId}
+              onAnswer={(pass) =>
+                answer(
+                  item.code,
+                  pass,
+                  openDefects
+                    ? findKnownDefect(openDefects, apparatusId, item)?.severity
+                    : undefined,
+                )
+              }
+              onAddPhoto={() => void handleAddPhoto(item.code)}
+              onSeverity={(value) => setSeverities((prev) => ({ ...prev, [item.code]: value }))}
+              onNote={(value) => setNotes((prev) => ({ ...prev, [item.code]: value }))}
+            />
+          ))}
+        </Card>
         {/* One way to report a failed item - Fail on the item - so it is never filed twice
             (review m3). The separate form is for problems the sheet doesn't list. */}
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-          Something wrong with an item on this sheet? Tap Fail on it; it is reported when you
-          submit.
-        </Text>
-        <TouchableOpacity
-          accessibilityRole="button"
-          onPress={() => navigation.navigate('DefectReport', { apparatusId })}
-          style={{ alignSelf: 'flex-start', minHeight: targetSize.field, justifyContent: 'center' }}
-        >
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
-            Report something not on this sheet
+        <Card>
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            Something wrong with an item on this sheet? Tap Fail on it; it is reported when you
+            submit.
           </Text>
-        </TouchableOpacity>
-        {openDefects === null ? (
-          <Text style={{ color: theme.status.warning, fontSize: typeScale.body.size }}>
-            Existing defects for this unit couldn&apos;t be loaded, so a failed item may be reported
-            again.
-          </Text>
-        ) : null}
-        {photoError ? (
-          <Text
-            accessibilityRole="alert"
-            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
-          >
-            {photoError}
-          </Text>
-        ) : null}
-        {template.items.map((item) => (
-          <ItemRow
-            key={item.code}
-            item={item}
-            theme={theme}
-            answer={results[item.code]}
-            gated={isGated(item)}
-            photoCaptured={photosCaptured[item.code] !== undefined}
-            knownDefect={openDefects ? findKnownDefect(openDefects, apparatusId, item) : undefined}
-            severity={severities[item.code] ?? DEFAULT_SEVERITY}
-            note={notes[item.code] ?? ''}
-            unitId={apparatusId}
-            onAnswer={(pass) =>
-              answer(
-                item.code,
-                pass,
-                openDefects ? findKnownDefect(openDefects, apparatusId, item)?.severity : undefined,
-              )
-            }
-            onAddPhoto={() => void handleAddPhoto(item.code)}
-            onSeverity={(value) => setSeverities((prev) => ({ ...prev, [item.code]: value }))}
-            onNote={(value) => setNotes((prev) => ({ ...prev, [item.code]: value }))}
+          <Button
+            label="Report something not on this sheet"
+            variant="secondary"
+            onPress={() => navigation.navigate('DefectReport', { apparatusId })}
           />
-        ))}
+        </Card>
       </ScrollView>
+      {/* Submit stays in reach whatever is scrolled: a bar across the bottom of the canvas. */}
       <View
         style={{
-          padding: spacing.lg,
+          marginHorizontal: -spacing.lg,
+          marginTop: -spacing.md,
+          paddingHorizontal: spacing.lg,
+          paddingVertical: spacing.md,
           gap: spacing.sm,
           borderTopWidth: 1,
           borderTopColor: theme.borderDecorative,
-          backgroundColor: theme.surface,
+          backgroundColor: theme.card,
         }}
       >
         {submitError ? (
@@ -671,13 +695,16 @@ export function CheckRunnerScreen() {
           onPress={() => void handleSubmit()}
         />
       </View>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 interface ItemRowProps {
   item: ChecklistItem;
   theme: SurfaceTheme;
+  /** Position in the sheet's card: rows after the first are divided by a rule. */
+  first: boolean;
+  last: boolean;
   answer: boolean | undefined;
   gated: boolean;
   photoCaptured: boolean;
@@ -699,6 +726,8 @@ function ItemRow(props: ItemRowProps) {
 function ItemRowView({
   item,
   theme,
+  first,
+  last,
   answer,
   gated,
   photoCaptured,
@@ -730,9 +759,9 @@ function ItemRowView({
           gap: spacing.xs,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: radius.default,
+          borderRadius: radiusScale.lg,
           borderWidth: selected ? 0 : 1,
-          borderColor: theme.borderStrong,
+          borderColor: theme.border,
           opacity: gated ? 0.45 : 1,
           backgroundColor: selected ? fill : 'transparent',
         }}
@@ -761,12 +790,13 @@ function ItemRowView({
     <View
       style={{
         gap: spacing.sm,
-        paddingBottom: spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.borderDecorative,
+        paddingTop: first ? 0 : spacing.md,
+        paddingBottom: last ? 0 : spacing.sm,
+        borderTopWidth: first ? 0 : 1,
+        borderTopColor: theme.borderDecorative,
       }}
     >
-      <Text style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600' }}>
+      <Text style={{ color: theme.fg, fontSize: ROW_TEXT_SIZE, fontWeight: '600' }}>
         {item.label}
       </Text>
       {item.critical ? (
@@ -786,7 +816,14 @@ function ItemRowView({
           accessibilityRole="button"
           accessibilityLabel={photoCaptured ? 'Photo captured' : 'Add photo'}
           onPress={onAddPhoto}
-          style={{ minHeight: targetSize.field, justifyContent: 'center' }}
+          style={{
+            minHeight: targetSize.field,
+            justifyContent: 'center',
+            paddingHorizontal: spacing.md,
+            borderRadius: radiusScale.lg,
+            borderWidth: 1,
+            borderColor: theme.border,
+          }}
         >
           <Text
             style={{
@@ -812,7 +849,15 @@ function ItemRowView({
         {choice(false)}
       </View>
       {answer === false ? (
-        <View style={{ gap: spacing.sm }}>
+        // The defect this failure becomes, grouped on a subtle fill under the item.
+        <View
+          style={{
+            gap: spacing.sm,
+            padding: spacing.md,
+            borderRadius: radiusScale.lg,
+            backgroundColor: theme.surface,
+          }}
+        >
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
             {!knownDefect
               ? 'This is reported to the apparatus officer as a defect when you submit.'
@@ -831,44 +876,14 @@ function ItemRowView({
                 accessibilityLabel={`Severity for ${item.label}`}
                 style={{ gap: spacing.sm }}
               >
-                {SEVERITY_OPTIONS.map((option) => {
-                  const selected = severity === option.value;
-                  return (
-                    <TouchableOpacity
-                      key={option.value}
-                      accessibilityRole="radio"
-                      accessibilityState={{ checked: selected }}
-                      onPress={() => onSeverity(option.value)}
-                      style={{
-                        minHeight: targetSize.field,
-                        justifyContent: 'center',
-                        paddingHorizontal: spacing.md,
-                        borderRadius: radius.default,
-                        borderWidth: selected ? 2 : 1,
-                        borderColor: selected ? theme.fg : theme.borderStrong,
-                        backgroundColor: selected ? theme.surfaceRaised : 'transparent',
-                      }}
-                    >
-                      <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
-                        <Text
-                          accessible={false}
-                          style={{ color: theme.fg, fontSize: typeScale.body.size }}
-                        >
-                          {selected ? '●' : '○'}
-                        </Text>
-                        <Text
-                          style={{
-                            color: theme.fg,
-                            fontSize: typeScale.body.size,
-                            fontWeight: selected ? '700' : '400',
-                          }}
-                        >
-                          {option.label}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
+                {SEVERITY_OPTIONS.map((option) => (
+                  <RadioOption
+                    key={option.value}
+                    label={option.label}
+                    selected={severity === option.value}
+                    onPress={() => onSeverity(option.value)}
+                  />
+                ))}
               </View>
             </>
           )}
@@ -894,10 +909,11 @@ function ItemRowView({
             style={{
               minHeight: targetSize.field,
               borderWidth: 1,
-              borderColor: theme.borderStrong,
-              borderRadius: radius.default,
+              borderColor: theme.border,
+              borderRadius: radiusScale.md,
               padding: spacing.sm,
               color: theme.fg,
+              backgroundColor: theme.card,
               fontSize: typeScale.body.size,
               textAlignVertical: 'top',
             }}
@@ -928,8 +944,8 @@ function CompletionView({
   const seconds = summary.durationSeconds % 60;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}>
+    <Screen>
+      <Card>
         <Text
           accessibilityRole="header"
           style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
@@ -944,13 +960,22 @@ function CompletionView({
           Took {minutes > 0 ? `${minutes} min ` : ''}
           {seconds} s
         </Text>
-        {summary.defects.length > 0 ? (
-          <View style={{ gap: spacing.xs }}>
-            <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
-              Reported to the apparatus officer:
-            </Text>
-            {summary.defects.map((defect) => (
-              <Text key={defect.label} style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+      </Card>
+      {summary.defects.length > 0 ? (
+        <Card>
+          <Text style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}>
+            Reported to the apparatus officer:
+          </Text>
+          {summary.defects.map((defect) => (
+            <View
+              key={defect.label}
+              style={{
+                paddingTop: spacing.sm,
+                borderTopWidth: 1,
+                borderTopColor: theme.borderDecorative,
+              }}
+            >
+              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
                 ✕ {defect.label} —{' '}
                 {defect.plan === 'skip'
                   ? 'already reported and still open, not filed again'
@@ -958,27 +983,31 @@ function CompletionView({
                     ? `${SEVERITY_LABEL[defect.severity]}, sent as an update to the open defect`
                     : SEVERITY_LABEL[defect.severity]}
               </Text>
-            ))}
-          </View>
-        ) : null}
-        {summary.passedItemPhotos > 0 ? (
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            {summary.passedItemPhotos === 1 ? '1 photo' : `${summary.passedItemPhotos} photos`} on
-            items that passed {summary.passedItemPhotos === 1 ? 'goes' : 'go'} with the check.
-            Photos on failed items go with their defect.
-          </Text>
-        ) : null}
-        {delivery.state !== 'NOT_QUEUED' ? (
-          <DeliveryStatus
-            itemId={outboxId}
-            label={`Truck check — ${unitId}`}
-            state={delivery.state}
-            lastError={delivery.lastError}
-            isOnline={isOnline}
-          />
-        ) : null}
-        <Button label="Back to apparatus" size="alert" fullWidth onPress={onDone} />
-      </ScrollView>
-    </SafeAreaView>
+            </View>
+          ))}
+        </Card>
+      ) : null}
+      {summary.passedItemPhotos > 0 || delivery.state !== 'NOT_QUEUED' ? (
+        <Card>
+          {summary.passedItemPhotos > 0 ? (
+            <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
+              {summary.passedItemPhotos === 1 ? '1 photo' : `${summary.passedItemPhotos} photos`} on
+              items that passed {summary.passedItemPhotos === 1 ? 'goes' : 'go'} with the check.
+              Photos on failed items go with their defect.
+            </Text>
+          ) : null}
+          {delivery.state !== 'NOT_QUEUED' ? (
+            <DeliveryStatus
+              itemId={outboxId}
+              label={`Truck check — ${unitId}`}
+              state={delivery.state}
+              lastError={delivery.lastError}
+              isOnline={isOnline}
+            />
+          ) : null}
+        </Card>
+      ) : null}
+      <Button label="Back to apparatus" size="alert" fullWidth onPress={onDone} />
+    </Screen>
   );
 }

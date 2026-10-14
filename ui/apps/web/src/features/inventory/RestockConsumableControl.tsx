@@ -5,6 +5,7 @@ import { canManageInventory } from '../../auth/roles';
 import { Button, TextInput } from '../../components/ui';
 import { restockConsumable } from './api';
 import type { ConsumableStock } from './types';
+import styles from './Inventory.module.css';
 
 /**
  * Clears the reorder flag by setting a new stock level (#131, N-9: last-writer-wins, same
@@ -60,7 +61,7 @@ export function RestockConsumableControl({ item }: { item: ConsumableStock }) {
         }
         mutation.mutate(parsed);
       }}
-      style={{ display: 'flex', gap: 'var(--bx-space-sm)', alignItems: 'flex-end' }}
+      className={styles.restockForm}
     >
       <TextInput
         label="New stock level"

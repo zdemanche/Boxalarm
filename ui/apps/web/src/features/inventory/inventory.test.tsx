@@ -141,8 +141,9 @@ test('assignment shows on the asset detail (AC2)', async () => {
   await screen.findByRole('heading', { name: 'SCBA-1' });
   await user.selectOptions(await screen.findByLabelText('Member'), 'm-1');
   await user.click(screen.getByRole('button', { name: 'Save assignment' }));
+  // Named from the roster, not "MEMBER · m-1".
   await waitFor(() => {
-    expect(screen.getByText('MEMBER · m-1')).toBeTruthy();
+    expect(screen.getByText('Member · Alex Rivera')).toBeTruthy();
   });
 });
 
@@ -211,7 +212,8 @@ test('location change leaves assignment unchanged (AC3)', async () => {
   await user.click(screen.getByRole('button', { name: 'Save location' }));
   await waitFor(() => {
     expect(screen.getByText('Station 2')).toBeTruthy();
-    expect(screen.getByText('MEMBER · m-1')).toBeTruthy();
+    // No roster entry for m-1, so the id stands in for the name.
+    expect(screen.getByText('Member · m-1')).toBeTruthy();
   });
 });
 

@@ -6,6 +6,7 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, Textarea } from '../../components/ui';
 import { getConfig, putConfig } from './api';
 import type { ConfigResponse, EditableConfigType } from './types';
+import styles from './Settings.module.css';
 
 export function JsonConfigEditor({
   configType,
@@ -103,8 +104,8 @@ export function JsonConfigEditor({
   }
 
   return (
-    <Card title={label} style={{ marginTop: 'var(--bx-space-xl)' }}>
-      <p style={{ fontSize: 12, color: 'var(--bx-fg-muted)' }}>{helpText}</p>
+    <Card title={label}>
+      <p className={styles.help}>{helpText}</p>
       {configQuery.isLoading ? (
         <Skeleton lines={3} />
       ) : configQuery.error ? (
@@ -112,15 +113,13 @@ export function JsonConfigEditor({
           <p role="alert">Unable to load {label}.</p>
         </ApiForbiddenGate>
       ) : (
-        <form
-          onSubmit={handleSubmit}
-          style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 640 }}
-        >
+        <form onSubmit={handleSubmit} className={styles.form}>
           <Textarea
             label={`${label} (JSON)`}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={8}
+            spellCheck={false}
             style={{ fontFamily: 'var(--bx-font-mono)' }}
           />
           {forbiddenError ? (
@@ -130,9 +129,9 @@ export function JsonConfigEditor({
           ) : null}
           {formError ? (
             <div role="alert" aria-live="assertive">
-              <p>{formError}</p>
+              <p className={styles.message}>{formError}</p>
               {fieldErrors.length > 0 ? (
-                <ul>
+                <ul className={styles.messageList}>
                   {fieldErrors.map((fieldError) => (
                     <li key={`${fieldError.field}:${fieldError.message}`}>
                       <code>{fieldError.field}</code> {fieldError.message}
@@ -143,13 +142,15 @@ export function JsonConfigEditor({
             </div>
           ) : null}
           {conflictMessage ? (
-            <p role="alert" aria-live="assertive">
+            <p role="alert" aria-live="assertive" className={styles.message}>
               {conflictMessage}
             </p>
           ) : null}
-          <Button type="submit" loading={saveMutation.isPending} style={{ width: 'fit-content' }}>
-            Save {label}
-          </Button>
+          <div className={styles.formFooter}>
+            <Button type="submit" variant="secondary" loading={saveMutation.isPending}>
+              Save {label}
+            </Button>
+          </div>
         </form>
       )}
     </Card>

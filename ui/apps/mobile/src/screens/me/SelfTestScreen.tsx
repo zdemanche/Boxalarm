@@ -4,7 +4,7 @@ import { useOptionalAuth } from '../../auth/AuthContext';
 import { kvGet, kvSet } from '../../sync/kvStore';
 import { memberCacheKey } from '../../sync/memberCache';
 import { AccessibilityInfo, Platform, Text, View } from 'react-native';
-import { Button, Screen, StatusChip, useTheme } from '../../components/ui';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import type { SelfTestRun } from '../../features/alerts/types';
 import {
@@ -12,6 +12,7 @@ import {
   type ReadinessItem,
   type ReadinessStatus,
 } from '../../features/alerts/useAlertReadiness';
+import { ROW_TITLE_SIZE, Rows } from './MeRows';
 
 const POLL_INTERVAL_MS = 1_500;
 const MAX_POLLS = 20;
@@ -40,24 +41,15 @@ function ReadinessRow({ item }: { item: ReadinessItem }) {
   const theme = useTheme();
   const chip = READINESS_CHIP[item.status];
   return (
-    <View
-      style={{
-        minHeight: 72,
-        paddingVertical: spacing.sm,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.borderDecorative,
-        gap: spacing.xs,
-      }}
-    >
+    <View style={{ minHeight: 72, paddingVertical: spacing.md, gap: spacing.sm }}>
+      {/* Chip before the name, as before: a screen reader hears the verdict first. */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
         <StatusChip status={chip.role} label={chip.label} />
-        <Text
-          style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '600', flex: 1 }}
-        >
+        <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600', flex: 1 }}>
           {item.label}
         </Text>
       </View>
-      <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{item.detail}</Text>
+      <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>{item.detail}</Text>
       {item.status !== 'ok' && item.fix ? (
         <Button
           label={item.fixLabel ?? 'Fix'}
@@ -170,174 +162,150 @@ export function SelfTestScreen() {
   const failing = (readiness.items ?? []).filter((item) => item.status !== 'ok');
   const finished = timedOut || (run !== null && run.overallResult !== 'RUNNING');
 
+  const bodyText = { color: theme.fg, fontSize: typeScale.body.size };
+
   return (
     <Screen>
-      <Text
-        accessibilityRole="header"
-        style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-      >
-        Test my alert path
-      </Text>
+      <Card title="Is this phone ready?">
+        {readiness.items === null ? (
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            Checking this phone…
+          </Text>
+        ) : (
+          <View accessibilityLiveRegion="polite">
+            <Rows>
+              {readiness.items.map((item) => (
+                <ReadinessRow key={item.id} item={item} />
+              ))}
+            </Rows>
+          </View>
+        )}
+      </Card>
 
-      <Text
-        accessibilityRole="header"
-        style={{
-          color: theme.fg,
-          fontSize: typeScale.heading.size,
-          fontWeight: '700',
-          marginTop: spacing.lg,
-        }}
-      >
-        Is this phone ready?
-      </Text>
-      {readiness.items === null ? (
-        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-          Checking this phone…
+      <Card title="Send a test page">
+        <Text style={bodyText}>
+          Sends a test page - marked as a test, not a real call - through the same path as a real
+          one, on every channel. Put the phone down the way you leave it at night, then check it
+          rang.
         </Text>
-      ) : (
-        <View accessibilityLiveRegion="polite">
-          {readiness.items.map((item) => (
-            <ReadinessRow key={item.id} item={item} />
-          ))}
+        {last ? (
+          <Text
+            style={{
+              color: last.rang === 'yes' ? theme.status.ok : theme.status.danger,
+              fontSize: typeScale.body.size,
+              fontWeight: '700',
+            }}
+          >
+            Last test {new Date(last.at).toLocaleString()}:{' '}
+            {last.rang === 'yes' ? 'this phone rang.' : 'this phone did NOT ring.'}
+          </Text>
+        ) : null}
+        <View style={{ marginTop: spacing.sm }}>
+          <Button
+            label={running ? 'Running…' : 'Run self-test'}
+            accessibilityLabel="Run self-test"
+            size="alert"
+            fullWidth
+            loading={running}
+            onPress={() => void runSelfTest()}
+          />
         </View>
-      )}
 
-      <Text
-        accessibilityRole="header"
-        style={{
-          color: theme.fg,
-          fontSize: typeScale.heading.size,
-          fontWeight: '700',
-          marginTop: spacing.lg,
-          marginBottom: spacing.sm,
-        }}
-      >
-        Send a test page
-      </Text>
-      <Text style={{ color: theme.fg, fontSize: typeScale.body.size, marginBottom: spacing.md }}>
-        Sends a test page - marked as a test, not a real call - through the same path as a real one,
-        on every channel. Put the phone down the way you leave it at night, then check it rang.
-      </Text>
-      {last ? (
-        <Text
-          style={{
-            color: last.rang === 'yes' ? theme.status.ok : theme.status.danger,
-            fontSize: typeScale.body.size,
-            fontWeight: '700',
-            marginBottom: spacing.md,
-          }}
-        >
-          Last test {new Date(last.at).toLocaleString()}:{' '}
-          {last.rang === 'yes' ? 'this phone rang.' : 'this phone did NOT ring.'}
-        </Text>
-      ) : null}
-      <Button
-        label={running ? 'Running…' : 'Run self-test'}
-        accessibilityLabel="Run self-test"
-        size="alert"
-        fullWidth
-        loading={running}
-        onPress={() => void runSelfTest()}
-      />
+        {error ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {error}
+          </Text>
+        ) : null}
 
-      {error ? (
-        <Text
-          accessibilityRole="alert"
-          style={{
-            color: theme.status.danger,
-            fontSize: typeScale.body.size,
-            marginTop: spacing.lg,
-          }}
-        >
-          {error}
-        </Text>
-      ) : null}
-
-      {run ? (
-        <View accessibilityLiveRegion="polite" style={{ marginTop: spacing.lg }}>
-          {run.channelsTested.map((channel) => {
-            const result = run.channelResults[channel];
-            const status = !result ? 'Running…' : result.ok ? 'Pass' : 'Fail';
-            return (
-              <View key={channel} style={{ marginTop: spacing.sm }}>
-                <Text
-                  style={{
-                    color: !result ? theme.fg : result.ok ? theme.status.ok : theme.status.danger,
-                    fontSize: typeScale.body.size,
-                    fontWeight: '600',
-                  }}
-                >
-                  {CHANNEL_LABEL[channel] ?? channel}: {status}
-                  {run.runAt ? ` · ${formatTimestamp(run.runAt)}` : ''}
-                </Text>
-                {result && !result.ok && result.reason ? (
-                  <Text style={{ color: theme.status.danger, fontSize: typeScale.body.size }}>
-                    {channel.toLowerCase()}: {result.reason}
-                  </Text>
-                ) : null}
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
+        {run ? (
+          <View accessibilityLiveRegion="polite" style={{ marginTop: spacing.sm }}>
+            <Rows>
+              {run.channelsTested.map((channel) => {
+                const result = run.channelResults[channel];
+                const status = !result ? 'Running…' : result.ok ? 'Pass' : 'Fail';
+                return (
+                  <View key={channel} style={{ paddingVertical: spacing.sm, gap: 2 }}>
+                    <Text
+                      style={{
+                        color: !result
+                          ? theme.fg
+                          : result.ok
+                            ? theme.status.ok
+                            : theme.status.danger,
+                        fontSize: ROW_TITLE_SIZE,
+                        fontWeight: '600',
+                      }}
+                    >
+                      {CHANNEL_LABEL[channel] ?? channel}: {status}
+                      {run.runAt ? ` · ${formatTimestamp(run.runAt)}` : ''}
+                    </Text>
+                    {result && !result.ok && result.reason ? (
+                      <Text style={{ color: theme.status.danger, fontSize: typeScale.body.size }}>
+                        {channel.toLowerCase()}: {result.reason}
+                      </Text>
+                    ) : null}
+                  </View>
+                );
+              })}
+            </Rows>
+          </View>
+        ) : null}
+      </Card>
 
       {finished ? (
-        <View style={{ marginTop: spacing.lg, gap: spacing.md }}>
-          <Text
-            accessibilityRole="header"
-            style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
-          >
-            Did your phone ring?
-          </Text>
-          <View
-            accessibilityRole="radiogroup"
-            accessibilityLabel="Did your phone ring?"
-            style={{ gap: spacing.md }}
-          >
-            <Button
-              label="Yes, it rang"
-              size="alert"
-              fullWidth
-              variant={rang === 'yes' ? 'primary' : 'secondary'}
-              selected={rang === 'yes'}
-              onPress={() => answerRang('yes')}
-            />
-            <Button
-              label="No, it didn't ring"
-              size="alert"
-              fullWidth
-              variant={rang === 'no' ? 'danger' : 'secondary'}
-              selected={rang === 'no'}
-              onPress={() => answerRang('no')}
-            />
-          </View>
-          {rang === 'yes' ? (
-            <StatusChip status="ok" label="This phone rang for a test page" />
-          ) : null}
-          {rang === 'no' ? (
-            <View accessibilityRole="alert" style={{ gap: spacing.sm }}>
-              <StatusChip status="danger" label="This phone did not ring" />
-              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-                You may not hear a real page. Before your next call:
-              </Text>
-              {failing.map((item) => (
-                <Text key={item.id} style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-                  • Fix &quot;{item.label}&quot; above.
-                </Text>
-              ))}
-              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-                •{' '}
-                {Platform.OS === 'ios'
-                  ? 'Set the ring/silent switch to ring, turn the ringer volume up, and allow Boxalarm in every Focus (Sleep, Do Not Disturb).'
-                  : 'Turn the alarm volume up - pages ring on the alarm volume, not the ringer - and check Bedtime / Do Not Disturb lets Boxalarm through.'}
-              </Text>
-              <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-                • Run the test again. If it still doesn't ring, tell your officer - text and voice
-                pages still reach you, and radio tone-out is unchanged.
-              </Text>
+        <Card title="Did your phone ring?">
+          <View style={{ gap: spacing.md }}>
+            <View
+              accessibilityRole="radiogroup"
+              accessibilityLabel="Did your phone ring?"
+              style={{ gap: spacing.md }}
+            >
+              <Button
+                label="Yes, it rang"
+                size="alert"
+                fullWidth
+                variant={rang === 'yes' ? 'primary' : 'secondary'}
+                selected={rang === 'yes'}
+                onPress={() => answerRang('yes')}
+              />
+              <Button
+                label="No, it didn't ring"
+                size="alert"
+                fullWidth
+                variant={rang === 'no' ? 'danger' : 'secondary'}
+                selected={rang === 'no'}
+                onPress={() => answerRang('no')}
+              />
             </View>
-          ) : null}
-        </View>
+            {rang === 'yes' ? (
+              <StatusChip status="ok" label="This phone rang for a test page" />
+            ) : null}
+            {rang === 'no' ? (
+              <View accessibilityRole="alert" style={{ gap: spacing.sm }}>
+                <StatusChip status="danger" label="This phone did not ring" />
+                <Text style={bodyText}>You may not hear a real page. Before your next call:</Text>
+                {failing.map((item) => (
+                  <Text key={item.id} style={bodyText}>
+                    • Fix &quot;{item.label}&quot; above.
+                  </Text>
+                ))}
+                <Text style={bodyText}>
+                  •{' '}
+                  {Platform.OS === 'ios'
+                    ? 'Set the ring/silent switch to ring, turn the ringer volume up, and allow Boxalarm in every Focus (Sleep, Do Not Disturb).'
+                    : 'Turn the alarm volume up - pages ring on the alarm volume, not the ringer - and check Bedtime / Do Not Disturb lets Boxalarm through.'}
+                </Text>
+                <Text style={bodyText}>
+                  • Run the test again. If it still doesn't ring, tell your officer - text and voice
+                  pages still reach you, and radio tone-out is unchanged.
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </Card>
       ) : null}
     </Screen>
   );

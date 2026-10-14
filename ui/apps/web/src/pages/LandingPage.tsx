@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, Navigate } from 'react-router-dom';
-import { spacing, typography } from '@boxalarm/design-tokens';
 import { useAuth, type Role } from '../auth/AuthContext';
 import { canUpdateServiceStatus, primaryRole } from '../auth/roles';
 import { canAccessPath, firstGrantedNavPath } from '../routing/routeTable';
@@ -18,7 +17,17 @@ import type { ExpiringCertification } from '../features/training/types';
 import { ApiError } from '../lib/apiClient';
 import { useStations } from '../lib/useStations';
 import { ApiForbiddenGate } from '../components/ApiForbiddenGate';
-import { Button, Card, Skeleton, Stat } from '../components/ui';
+import {
+  Button,
+  Card,
+  PageHeader,
+  Skeleton,
+  Stat,
+  StatusChip,
+  buttonClassName,
+} from '../components/ui';
+import { AlertTriangle, GraduationCap, Truck, Users, Wrench } from '../components/ui/icons';
+import { daysUntil, formatCalendarDate, relativeDays } from '../lib/dates';
 import { MemberHome, OwnRecordCards } from './MemberHome';
 import styles from './LandingPage.module.css';
 
@@ -95,8 +104,14 @@ function ActiveCalls({ canOpenRoster }: { canOpenRoster: boolean }) {
     refetchInterval: ACTIVE_CALL_REFRESH_MS,
   });
 
+  // design.md §2.6 elevation.alarm: the 2px alarm border marks a live call, and only a live
+  // call - an empty, loading or failed read keeps the plain card.
+  const hasLiveCalls = !query.error && (query.data?.dispatches.length ?? 0) > 0;
   return (
-    <Card title="Active calls" className={styles.callCard}>
+    <Card
+      title="Active calls"
+      className={[styles.callCard, hasLiveCalls ? styles.callCardLive : ''].join(' ')}
+    >
       <ActiveCallsBody
         isLoading={query.isLoading}
         error={query.error}
@@ -142,24 +157,37 @@ function ActiveCallsBody({
       <p className={styles.tileMessage}>
         Dispatched in the last {windowLabel} (as of {asOf}):
       </p>
-      <ul className={styles.list}>
+      <ul className={styles.callList}>
         {data.dispatches.map((dispatch) => (
-          <li key={dispatch.dispatchId} className={styles.listItem}>
-            <strong>{dispatch.incidentType ?? 'Unknown call type'}</strong>
-            {' — '}
-            {dispatch.address ?? 'No address on the dispatch'}
-            {dispatch.crossStreets ? ` (${dispatch.crossStreets})` : null}
-            <span className={styles.meta}>
-              {' · '}dispatched {formatTime(dispatch.dispatchedAt * 1000)} · tone{' '}
-              {dispatch.toneLadder.currentToneSequence}
-            </span>
+          <li key={dispatch.dispatchId} className={styles.callRow}>
+            <div className={styles.callBody}>
+              {/* design.md §2.3: active dispatch = alarm colour + triangle + the word. */}
+              <span className={styles.callStatus}>
+                <AlertTriangle size={14} aria-hidden="true" />
+                Dispatched{' '}
+                <span className={styles.mono}>{formatTime(dispatch.dispatchedAt * 1000)}</span>
+                <span className={styles.meta}>
+                  {' '}
+                  · tone {dispatch.toneLadder.currentToneSequence}
+                </span>
+              </span>
+              <strong className={styles.callType}>
+                {dispatch.incidentType ?? 'Unknown call type'}
+              </strong>
+              <span className={styles.callAddress}>
+                {dispatch.address ?? 'No address on the dispatch'}
+                {dispatch.crossStreets ? (
+                  <span className={styles.meta}> ({dispatch.crossStreets})</span>
+                ) : null}
+              </span>
+            </div>
             {canOpenRoster ? (
-              <>
-                {' · '}
-                <Link to={`/alerts/roster?dispatchId=${encodeURIComponent(dispatch.dispatchId)}`}>
-                  Live roster
-                </Link>
-              </>
+              <Link
+                className={buttonClassName({ variant: 'primary' })}
+                to={`/alerts/roster?dispatchId=${encodeURIComponent(dispatch.dispatchId)}`}
+              >
+                Live roster
+              </Link>
             ) : null}
           </li>
         ))}
@@ -267,12 +295,22 @@ function ExpiringCertifications({
     body = (
       <>
         <ul className={styles.list}>
-          {sorted.slice(0, EXPIRING_CERTS_SHOWN).map((cert) => (
-            <li key={cert.certId} className={styles.listItem}>
-              <strong>{memberName(members, cert.memberId)}</strong> — {cert.certType}
-              <span className={styles.meta}> · expires {cert.expiryDate}</span>
-            </li>
-          ))}
+          {sorted.slice(0, EXPIRING_CERTS_SHOWN).map((cert) => {
+            const days = daysUntil(cert.expiryDate);
+            return (
+              <li key={cert.certId} className={styles.listItem}>
+                <strong>{memberName(members, cert.memberId)}</strong> — {cert.certType}
+                <span className={styles.metaLine}>
+                  <StatusChip status={days < 0 ? 'danger' : 'warning'}>
+                    {days < 0 ? 'Expired' : 'Expiring'}
+                  </StatusChip>
+                  <span className={styles.meta}>
+                    {formatCalendarDate(cert.expiryDate)} · {relativeDays(days)}
+                  </span>
+                </span>
+              </li>
+            );
+          })}
         </ul>
         {hidden > 0 ? (
           <p className={styles.tileMessage}>
@@ -362,11 +400,15 @@ function CommandConsole() {
               <Stat
                 label="Apparatus in service"
                 value={apparatusQuery.isLoading ? '—' : `${inService} / ${apparatus.length}`}
+                to="/apparatus"
+                icon={Truck}
               />
               <Stat
                 label="Out of service"
                 value={apparatusQuery.isLoading ? '—' : outOfService}
                 alarm={outOfService > 0}
+                to="/apparatus"
+                icon={Wrench}
               />
             </>
           ) : null}
@@ -374,6 +416,8 @@ function CommandConsole() {
             <Stat
               label="Active members"
               value={membersQuery.isLoading ? '—' : `${activeMembers} / ${members.length}`}
+              to="/personnel"
+              icon={Users}
             />
           ) : null}
           {canViewExpiring ? (
@@ -382,6 +426,8 @@ function CommandConsole() {
               value={expiringValue}
               hint={expiringHint}
               alarm={typeof expiringValue === 'number' && expiringValue > 0}
+              to={canAccessPath('/certifications', auth.roles) ? '/certifications' : undefined}
+              icon={GraduationCap}
             />
           ) : null}
         </div>
@@ -400,7 +446,7 @@ function CommandConsole() {
           />
         ) : null}
         {auth.roles.some((r) => NERIS_COMPLIANCE_ROLES.includes(r)) ? (
-          <NerisComplianceTile />
+          <NerisComplianceTile className={styles.wide} />
         ) : null}
       </div>
 
@@ -423,8 +469,15 @@ export function LandingPage() {
   }
 
   return (
-    <main id="main-content" style={{ padding: spacing.lg }}>
-      <h1 style={{ fontSize: typography.size.xl, margin: 0 }}>{ROLE_LABEL[role]}</h1>
+    <main id="main-content">
+      <PageHeader
+        title={ROLE_LABEL[role]}
+        description={new Date().toLocaleDateString(undefined, {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+        })}
+      />
       {DASHBOARD_ROLES.includes(role) ? <CommandConsole /> : <MemberHome />}
     </main>
   );

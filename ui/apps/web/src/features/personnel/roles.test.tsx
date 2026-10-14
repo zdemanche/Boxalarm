@@ -102,17 +102,17 @@ test('a chief grants and removes roles through a confirm step that names the cha
   renderDetail(['CHIEF']);
 
   const form = await screen.findByRole('form', { name: 'Member roles' });
-  const memberBox = within(form).getByRole('checkbox', { name: 'MEMBER' }) as HTMLInputElement;
+  const memberBox = within(form).getByRole('checkbox', { name: 'Member' }) as HTMLInputElement;
   expect(memberBox.checked).toBe(true);
   expect(memberBox.disabled).toBe(true);
   expect(memberBox.getAttribute('aria-describedby')).toBe('member-role-note');
 
-  await user.click(within(form).getByRole('checkbox', { name: 'OFFICER' }));
-  await user.click(within(form).getByRole('checkbox', { name: 'TRAINING' }));
+  await user.click(within(form).getByRole('checkbox', { name: 'Officer' }));
+  await user.click(within(form).getByRole('checkbox', { name: 'Training officer' }));
   await user.click(within(form).getByRole('button', { name: 'Review role changes' }));
 
   const dialog = await screen.findByRole('dialog', { name: 'Change roles for Sam Lee?' });
-  expect(within(dialog).getByText(/Grant OFFICER, remove TRAINING\./)).toBeTruthy();
+  expect(within(dialog).getByText(/Grant Officer, remove Training officer\./)).toBeTruthy();
   expect(within(dialog).getByText(/within an hour/)).toBeTruthy();
   expect(puts).toEqual([]);
 
@@ -125,7 +125,7 @@ test('a chief grants and removes roles through a confirm step that names the cha
     "Roles saved. The change applies when the member's app next refreshes its session, within one hour.",
   );
   expect(
-    (within(form).getByRole('checkbox', { name: 'OFFICER' }) as HTMLInputElement).checked,
+    (within(form).getByRole('checkbox', { name: 'Officer' }) as HTMLInputElement).checked,
   ).toBe(true);
 });
 
@@ -136,7 +136,7 @@ test('removing ADMIN or CHIEF warns that rights last until the session refreshes
   renderDetail(['CHIEF']);
 
   const form = await screen.findByRole('form', { name: 'Member roles' });
-  await user.click(within(form).getByRole('checkbox', { name: 'ADMIN' }));
+  await user.click(within(form).getByRole('checkbox', { name: 'Admin' }));
   await user.click(within(form).getByRole('button', { name: 'Review role changes' }));
 
   const dialog = await screen.findByRole('dialog', { name: 'Change roles for Sam Lee?' });
@@ -150,7 +150,7 @@ test('granting a role shows no session warning', async () => {
   renderDetail(['CHIEF']);
 
   const form = await screen.findByRole('form', { name: 'Member roles' });
-  await user.click(within(form).getByRole('checkbox', { name: 'OFFICER' }));
+  await user.click(within(form).getByRole('checkbox', { name: 'Officer' }));
   await user.click(within(form).getByRole('button', { name: 'Review role changes' }));
 
   const dialog = await screen.findByRole('dialog', { name: 'Change roles for Sam Lee?' });
@@ -174,7 +174,7 @@ test("shows the server's own words when the save fails, and keeps the dialog ope
   renderDetail(['ADMIN']);
 
   const form = await screen.findByRole('form', { name: 'Member roles' });
-  await user.click(within(form).getByRole('checkbox', { name: 'CHIEF' }));
+  await user.click(within(form).getByRole('checkbox', { name: 'Chief' }));
   await user.click(within(form).getByRole('button', { name: 'Review role changes' }));
   const dialog = await screen.findByRole('dialog');
   await user.click(within(dialog).getByRole('button', { name: 'Save roles' }));
@@ -203,7 +203,7 @@ test('an officer sees the roles but cannot edit them', async () => {
   renderDetail(['OFFICER']);
 
   await screen.findByRole('heading', { name: 'Roles' });
-  expect(screen.getByText('MEMBER, OFFICER')).toBeTruthy();
+  expect(screen.getByText('Member, Officer')).toBeTruthy();
   expect(screen.queryByRole('form', { name: 'Member roles' })).toBeNull();
 });
 
@@ -218,12 +218,12 @@ test('a chief cannot edit their own roles', async () => {
 
 describe('describeRoleChange', () => {
   test.each([
-    [['MEMBER'], ['MEMBER', 'OFFICER'], 'Grant OFFICER'],
-    [['MEMBER', 'TRAINING'], ['MEMBER'], 'Remove TRAINING'],
+    [['MEMBER'], ['MEMBER', 'OFFICER'], 'Grant Officer'],
+    [['MEMBER', 'TRAINING'], ['MEMBER'], 'Remove Training officer'],
     [
       ['MEMBER', 'TRAINING'],
       ['MEMBER', 'OFFICER', 'CHIEF'],
-      'Grant OFFICER, CHIEF, remove TRAINING',
+      'Grant Officer, Chief, remove Training officer',
     ],
     [['MEMBER'], ['MEMBER'], ''],
   ] as const)('%j -> %j reads %j', (before, after, expected) => {

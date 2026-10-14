@@ -1,25 +1,140 @@
-.wrapper {
+/* Shared full-page and inline state screens: Forbidden (403), the retryable API error, and the
+   placeholder page. A full-page state is one centred card on the canvas; an embedded state is a
+   compact panel that sits inside the card or tab it replaces. */
+
+/* Full page: the card sits in the optical centre of the content area, not pinned to its top. */
+.page {
+  display: grid;
+  place-items: center;
+  min-height: min(70vh, 640px);
+  padding: var(--bx-space-lg) 0;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  width: 100%;
+  max-width: 480px;
+  padding: 36px 32px 32px;
+  text-align: center;
+  background: var(--bx-card);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-lg);
+  box-shadow: var(--bx-shadow-raised);
+}
+
+/* Inside a Card, tab panel or form: the same message, compact and left-aligned. */
+.inline {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--bx-space-md);
+  padding: var(--bx-space-md);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+/* The inline layout without its own panel, for a state that already fills a Card. */
+.plain {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+.inlineBody {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--bx-space-sm);
-  padding: var(--bx-space-2xl) var(--bx-space-lg);
-  max-width: 60ch;
+  gap: var(--bx-space-xs);
+  min-width: 0;
 }
 
-.icon {
-  color: var(--bx-status-danger);
+/* The glyph in a soft tinted disc: amber for "restricted", red for "something failed". */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  margin-bottom: var(--bx-space-xs);
+  border-radius: var(--bx-radius-pill);
+  background: var(--bx-accent-subtle);
+  color: var(--bx-on-accent-subtle);
+}
+
+.inline .badge {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 0;
+}
+
+.badgeDanger {
+  background: var(--bx-chip-fill-danger);
+  color: var(--bx-chip-onfill-danger);
 }
 
 .title {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
+  line-height: 28px;
   font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--bx-fg);
+}
+
+.inline .title {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 650;
+  letter-spacing: 0;
 }
 
 .message {
   margin: 0;
-  color: var(--bx-fg-muted);
+  font-size: 15px;
+  color: var(--bx-fg);
+}
+
+.inline .message {
   font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.detail {
+  margin: 0;
+  max-width: 46ch;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--bx-fg-muted);
+}
+
+.inline .detail {
+  max-width: none;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
+.inline .actions {
+  justify-content: flex-start;
+  margin-top: var(--bx-space-xs);
+}
+
+@media (max-width: 767px) {
+  .page {
+    min-height: 0;
+    padding: var(--bx-space-md) 0;
+  }
+
+  .card {
+    padding: var(--bx-space-lg) var(--bx-space-md);
+  }
 }

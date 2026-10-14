@@ -1,47 +1,202 @@
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--bx-space-md);
-}
-
-.statGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--bx-space-md);
-  margin-top: var(--bx-space-lg);
-}
-
-.sections {
+/* /reporting. Every tab follows one rhythm: a toolbar card (the report's period on the left, its
+   export on the right), the headline figures as stat tiles, then the detail cards in a grid. */
+.panel {
   display: grid;
   gap: var(--bx-space-lg);
   margin-top: var(--bx-space-lg);
 }
 
-.meta {
-  margin: var(--bx-space-sm) 0 0;
-  color: var(--bx-fg-muted);
+/* --- Toolbar --------------------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--bx-space-md) var(--bx-space-lg);
+}
+
+.toolbarStart {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--bx-space-md);
+  min-width: 0;
+}
+
+.toolbarNotes {
+  display: grid;
+  gap: var(--bx-space-xs);
+  margin-top: var(--bx-space-md);
   font-size: 14px;
 }
 
-.warning {
-  margin: var(--bx-space-md) 0 0;
-  padding: var(--bx-space-sm) var(--bx-space-md);
-  border-left: 3px solid var(--bx-status-warning);
-  background: var(--bx-surface);
+.toolbarNotes:empty {
+  display: none;
+}
+
+.toolbarNotes p {
+  margin: 0;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--bx-space-md);
 }
 
 .exportRow {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+/* --- Figures --------------------------------------------------------------------------- */
+
+.statGrid {
+  display: grid;
+  /* Two-up on a phone rather than one tall tile per row. */
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(170px, calc(50% - var(--bx-space-md) / 2)), 1fr)
+  );
   gap: var(--bx-space-md);
+}
+
+/* Figures inside a card: flat tinted panels, not cards nested in a card. */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  gap: var(--bx-space-sm);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px var(--bx-space-md);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+}
+
+.metricLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--bx-fg-muted);
+}
+
+.metricValue {
+  font-size: 24px;
+  line-height: 1.15;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--bx-fg);
+}
+
+.metricValueAlarm {
+  color: var(--bx-status-danger);
+}
+
+.metricHint {
+  font-size: 12px;
+  color: var(--bx-fg-muted);
+}
+
+/* --- Detail cards ---------------------------------------------------------------------- */
+
+.sectionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+.meta {
+  margin: 0 0 var(--bx-space-md);
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.toolbar .meta {
+  margin: 0;
+}
+
+.prose {
+  margin: var(--bx-space-md) 0 0;
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.warning {
+  margin: 0;
+  padding: var(--bx-space-sm) var(--bx-space-md);
+  border-radius: var(--bx-radius-md);
+  background: var(--bx-chip-fill-warning);
+  color: var(--bx-chip-onfill-warning);
+  font-size: 14px;
+}
+
+.cardNote {
+  margin-bottom: var(--bx-space-md);
 }
 
 .decisionRow {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--bx-space-md);
+  gap: var(--bx-space-sm);
   margin-top: var(--bx-space-md);
+}
+
+.decisionRow + .warning {
+  margin-top: var(--bx-space-md);
+}
+
+.cardTable {
+  margin-top: var(--bx-space-md);
+}
+
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bx-space-xs);
+  font-weight: 600;
+}
+
+/* --- Export (the toolbar's end) -------------------------------------------------------- */
+
+.exportBlock {
+  display: grid;
+  justify-items: end;
+  gap: var(--bx-space-sm);
+  min-width: 0;
+  margin-left: auto;
+}
+
+.exportNote {
+  margin: 0;
+  max-width: 44ch;
+  font-size: 14px;
+  text-align: right;
+}
+
+.exportMeta {
+  color: var(--bx-fg-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 767px) {
+  .exportBlock {
+    justify-items: start;
+    margin-left: 0;
+  }
+
+  .exportNote {
+    text-align: left;
+  }
 }

@@ -1,0 +1,141 @@
+/* Shared page layout for the inventory screens. */
+
+.stack {
+  display: grid;
+  gap: var(--bx-space-lg);
+  min-width: 0;
+  align-content: start;
+}
+
+/* Main column plus a narrower column of secondary cards at desktop; one column below 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: var(--bx-space-lg);
+  align-items: start;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The row above a table: what it shows on the left, its view filter on the right. */
+.tableTools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  min-height: var(--bx-target-office);
+}
+
+.tableSummary {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.tableWithTools {
+  display: grid;
+  gap: var(--bx-space-sm);
+  min-width: 0;
+}
+
+.cellMeta {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+/* Key-value facts: label column sized to its longest label, never the browser's indented dl. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 24px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-md);
+  align-items: start;
+}
+
+.formActions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.formGrid > .message,
+.formGrid > .error {
+  grid-column: 1 / -1;
+}
+
+.error {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bx-status-danger);
+}
+
+.lifecycleActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-sm);
+}
+
+.cardIntro {
+  margin: 0 0 var(--bx-space-md);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+/* Restock: the row's inline form wraps under its trigger on a narrow table cell. */
+.restockForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--bx-space-sm);
+  padding: var(--bx-space-xs) 0;
+}
+
+.restockForm > :first-child {
+  width: 140px;
+}
+
+/* "In service  Equipment asset": the chip, then what the page is. */
+.headerMeta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-sm);
+}

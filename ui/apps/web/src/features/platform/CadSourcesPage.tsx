@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
+import { canAccessPath } from '../../routing/routeTable';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import {
   Button,
@@ -15,6 +16,7 @@ import {
   TextInput,
   Textarea,
 } from '../../components/ui';
+import { Plus } from '../../components/ui/icons';
 import {
   getCadSources,
   newCadEmailAddress,
@@ -32,6 +34,7 @@ import {
   type CadTestParseResult,
   type RotatedWebhookKey,
 } from './types';
+import styles from './CadSourcesPage.module.css';
 
 const QUERY_KEY = ['platform', 'cad-sources'];
 
@@ -207,102 +210,148 @@ export function CadSourcesPage() {
   const errors = fieldErrorsOf(saveError);
 
   return (
-    <main id="main-content">
+    <main id="main-content" className={styles.page}>
       <PageHeader
         title="CAD sources"
-        breadcrumbs={[{ label: 'Settings', to: '/settings' }, { label: 'CAD sources' }]}
+        description="Which CAD systems may page the department, and how their dispatch text is read."
+        // Chiefs manage CAD sources but can't open /settings (ADMIN only); a linked crumb
+        // would dead-end them on Forbidden.
+        breadcrumbs={[
+          {
+            label: 'Settings',
+            to: canAccessPath('/settings', auth.roles) ? '/settings' : undefined,
+          },
+          { label: 'CAD sources' },
+        ]}
       />
-      <Card title="How CAD dispatches reach the app">
-        <p>
-          A CAD system can page the department by <strong>email</strong> (to the source&apos;s own
-          address, from an allowed sender whose mail passes SPF and DKIM) or by a{' '}
-          <strong>signed webhook</strong>. Anything that fails those checks is dropped and alarmed -
-          it never pages. A message that passes but that the template cannot read still pages, as
-          raw text with the address &quot;SEE DISPATCH TEXT&quot;, flagged VERIFY.
-        </p>
-        <p>Radio tone-out stays the page of record alongside the app.</p>
-        {query.data?.webhookUrl ? (
-          <p>
-            Webhook address: <code>{query.data.webhookUrl}</code>
-          </p>
-        ) : null}
-        {query.data && !query.data.emailDomain ? (
-          <p>Email ingress is not set up for this deployment yet; only the webhook is available.</p>
-        ) : null}
-      </Card>
-
-      {query.isLoading ? (
-        <Skeleton lines={4} />
-      ) : query.error ? (
-        <ApiForbiddenGate error={query.error} embedded>
-          <p role="alert">Unable to load the CAD sources.</p>
-        </ApiForbiddenGate>
-      ) : (
-        <form onSubmit={handleSubmit} noValidate>
-          {drafts.length === 0 ? <p>No CAD sources yet.</p> : null}
-          {drafts.map((draft, index) => (
-            <SourceEditor
-              key={draft.saved ? draft.sourceId : `new-${index}`}
-              draft={draft}
-              index={index}
-              errors={errors.filter((e) => e.field.startsWith(`sources[${index}]`))}
-              onChange={(patch) => update(index, patch)}
-              onRemove={() => setDrafts((current) => current.filter((_, i) => i !== index))}
-              emailDomainConfigured={Boolean(query.data?.emailDomain)}
-            />
-          ))}
-          <div style={{ display: 'flex', gap: 'var(--bx-space-sm)', flexWrap: 'wrap' }}>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setDrafts((current) => [...current, newDraft()])}
-            >
-              Add CAD source
-            </Button>
-            <Button type="submit" loading={save.isPending}>
-              Save CAD sources
-            </Button>
-          </div>
-          {saveError instanceof ApiError && saveError.problem.status === 403 ? (
-            <ApiForbiddenGate error={saveError} embedded>
-              <span />
-            </ApiForbiddenGate>
-          ) : saveError instanceof ApiError && saveError.problem.status === 409 ? (
-            <p role="alert">
-              Someone else changed the CAD sources. The latest version is shown - review and save
-              again.
-            </p>
-          ) : saveError ? (
-            <div role="alert">
-              <p>The CAD sources were not saved.</p>
-              {errors.length > 0 ? (
-                <ul>
-                  {errors.map((e) => (
-                    <li key={`${e.field}-${e.message}`}>
-                      <code>{e.field}</code>: {e.message}
-                    </li>
-                  ))}
-                </ul>
+      <div className={styles.layout}>
+        <div className={styles.aside}>
+          <Card title="How CAD dispatches reach the app">
+            <div className={styles.prose}>
+              <p>
+                A CAD system can page the department by <strong>email</strong> (to the source&apos;s
+                own address, from an allowed sender whose mail passes SPF and DKIM) or by a{' '}
+                <strong>signed webhook</strong>. Anything that fails those checks is dropped and
+                alarmed - it never pages.
+              </p>
+              <p>
+                A message that passes but that the template cannot read still pages, as raw text
+                with the address &quot;SEE DISPATCH TEXT&quot;, flagged VERIFY.
+              </p>
+              <p className={styles.muted}>
+                Radio tone-out stays the page of record alongside the app.
+              </p>
+              {query.data?.webhookUrl ? (
+                <div className={styles.addressBlock}>
+                  <span className={styles.addressLabel}>Webhook address</span>
+                  <code>{query.data.webhookUrl}</code>
+                </div>
+              ) : null}
+              {query.data && !query.data.emailDomain ? (
+                <p className={styles.muted}>
+                  Email ingress is not set up for this deployment yet; only the webhook is
+                  available.
+                </p>
               ) : null}
             </div>
-          ) : null}
-          {saveMessage ? <p role="status">{saveMessage}</p> : null}
-          {(query.data?.warnings ?? []).length > 0 ? (
-            // The server's non-blocking warnings about the saved sources - rendered as sent, so
-            // a warning the backend adds later is visible without a web release.
-            <div role="status">
-              <p>Warnings about the saved sources:</p>
-              <ul>
-                {(query.data?.warnings ?? []).map((w) => (
-                  <li key={`${w.field}-${w.message}`}>
-                    <code>{w.field}</code>: {w.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </form>
-      )}
+          </Card>
+        </div>
+
+        <div className={styles.main}>
+          {query.isLoading ? (
+            <Card>
+              <Skeleton lines={4} />
+            </Card>
+          ) : query.error ? (
+            <Card>
+              <ApiForbiddenGate error={query.error} embedded>
+                <p role="alert">Unable to load the CAD sources.</p>
+              </ApiForbiddenGate>
+            </Card>
+          ) : (
+            <form onSubmit={handleSubmit} noValidate className={styles.sources}>
+              {drafts.length === 0 ? (
+                <Card>
+                  <div className={styles.prose}>
+                    <p>
+                      <strong>No CAD sources yet.</strong>
+                    </p>
+                    <p className={styles.muted}>
+                      Add one for each CAD system allowed to page the department.
+                    </p>
+                  </div>
+                </Card>
+              ) : null}
+              {drafts.map((draft, index) => (
+                <SourceEditor
+                  key={draft.saved ? draft.sourceId : `new-${index}`}
+                  draft={draft}
+                  index={index}
+                  errors={errors.filter((e) => e.field.startsWith(`sources[${index}]`))}
+                  onChange={(patch) => update(index, patch)}
+                  onRemove={() => setDrafts((current) => current.filter((_, i) => i !== index))}
+                  emailDomainConfigured={Boolean(query.data?.emailDomain)}
+                />
+              ))}
+              <Card>
+                <div className={styles.saveBar}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setDrafts((current) => [...current, newDraft()])}
+                  >
+                    <Plus size={16} aria-hidden="true" />
+                    Add CAD source
+                  </Button>
+                  <Button type="submit" loading={save.isPending}>
+                    Save CAD sources
+                  </Button>
+                </div>
+                <div className={styles.feedback}>
+                  {saveError instanceof ApiError && saveError.problem.status === 403 ? (
+                    <ApiForbiddenGate error={saveError} embedded>
+                      <span />
+                    </ApiForbiddenGate>
+                  ) : saveError instanceof ApiError && saveError.problem.status === 409 ? (
+                    <p role="alert">
+                      Someone else changed the CAD sources. The latest version is shown - review and
+                      save again.
+                    </p>
+                  ) : saveError ? (
+                    <div role="alert">
+                      <p>The CAD sources were not saved.</p>
+                      {errors.length > 0 ? (
+                        <ul>
+                          {errors.map((e) => (
+                            <li key={`${e.field}-${e.message}`}>
+                              <code>{e.field}</code>: {e.message}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {saveMessage ? <p role="status">{saveMessage}</p> : null}
+                  {(query.data?.warnings ?? []).length > 0 ? (
+                    // The server's non-blocking warnings about the saved sources - rendered as
+                    // sent, so a warning the backend adds later is visible without a web release.
+                    <div role="status">
+                      <p>Warnings about the saved sources:</p>
+                      <ul>
+                        {(query.data?.warnings ?? []).map((w) => (
+                          <li key={`${w.field}-${w.message}`}>
+                            <code>{w.field}</code>: {w.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              </Card>
+            </form>
+          )}
+        </div>
+      </div>
     </main>
   );
 }
@@ -328,102 +377,107 @@ function SourceEditor({
   const [removeOpen, setRemoveOpen] = useState(false);
 
   return (
-    <Card title={title}>
-      <div style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 640 }}>
-        <TextInput
-          label="Name"
-          value={draft.label}
-          onChange={(e) => onChange({ label: e.target.value })}
-          error={errorFor('label')}
-          required
-        />
-        <TextInput
-          label="Source id"
-          help={
-            draft.saved
-              ? 'Fixed once saved: it is part of the email address and the webhook key id.'
-              : 'Lower-case letters, digits and dashes, e.g. county-cad.'
-          }
-          value={draft.sourceId}
-          onChange={(e) => onChange({ sourceId: e.target.value })}
-          readOnly={draft.saved}
-          error={errorFor('sourceId')}
-          required
-        />
+    <Card
+      title={title}
+      actions={
+        <Button type="button" variant="secondary" onClick={() => setRemoveOpen(true)}>
+          Remove {title}
+        </Button>
+      }
+    >
+      <div className={styles.editor}>
+        <div className={styles.fieldGrid}>
+          <TextInput
+            label="Name"
+            value={draft.label}
+            onChange={(e) => onChange({ label: e.target.value })}
+            error={errorFor('label')}
+            required
+          />
+          <TextInput
+            label="Source id"
+            help={
+              draft.saved
+                ? 'Fixed once saved: it is part of the email address and the webhook key id.'
+                : 'Lower-case letters, digits and dashes, e.g. county-cad.'
+            }
+            value={draft.sourceId}
+            onChange={(e) => onChange({ sourceId: e.target.value })}
+            readOnly={draft.saved}
+            error={errorFor('sourceId')}
+            required
+          />
+        </div>
         <Checkbox
           label="Enabled (a disabled source never pages)"
           checked={draft.enabled}
           onCheckedChange={(checked) => onChange({ enabled: checked })}
         />
 
-        <fieldset>
-          <legend>Email</legend>
-          <Checkbox
-            label="Accept dispatch email for this source"
-            checked={draft.emailEnabled}
-            onCheckedChange={(checked) => onChange({ emailEnabled: checked })}
-          />
-          <Textarea
-            label="Allowed senders"
-            help="One per line: an exact address (dispatch@cad.county.gov, preferred) or a domain (cad.county.gov) - a domain entry allows every mailbox at that domain. The sender's mail must also pass SPF/DKIM/DMARC for its own domain, so never add a relay's or mail provider's domain."
-            rows={3}
-            value={draft.sendersText}
-            onChange={(e) => onChange({ sendersText: e.target.value })}
-            error={
-              errors.find((e) => e.field.startsWith(`sources[${index}].allowedSenders`))?.message
-            }
-          />
-          {draft.view?.emailAddress && draft.emailEnabled ? (
-            <>
+        <div className={styles.channels}>
+          <fieldset className={styles.fieldset}>
+            <legend className={styles.legend}>Email</legend>
+            <Checkbox
+              label="Accept dispatch email for this source"
+              checked={draft.emailEnabled}
+              onCheckedChange={(checked) => onChange({ emailEnabled: checked })}
+            />
+            <Textarea
+              label="Allowed senders"
+              help="One per line: an exact address (dispatch@cad.county.gov, preferred) or a domain (cad.county.gov) - a domain entry allows every mailbox at that domain. The sender's mail must also pass SPF/DKIM/DMARC for its own domain, so never add a relay's or mail provider's domain."
+              rows={3}
+              value={draft.sendersText}
+              onChange={(e) => onChange({ sendersText: e.target.value })}
+              error={
+                errors.find((e) => e.field.startsWith(`sources[${index}].allowedSenders`))?.message
+              }
+            />
+            {draft.view?.emailAddress && draft.emailEnabled ? (
+              <>
+                <p>
+                  Send dispatches to: <code>{draft.view.emailAddress}</code>
+                </p>
+                <NewEmailAddress sourceId={draft.sourceId} label={draft.label} />
+              </>
+            ) : draft.emailEnabled ? (
               <p>
-                Send dispatches to: <code>{draft.view.emailAddress}</code>
+                {emailDomainConfigured
+                  ? 'The address is shown after you save.'
+                  : 'Email ingress is not set up for this deployment.'}
               </p>
-              <NewEmailAddress sourceId={draft.sourceId} label={draft.label} />
-            </>
-          ) : draft.emailEnabled ? (
-            <p>
-              {emailDomainConfigured
-                ? 'The address is shown after you save.'
-                : 'Email ingress is not set up for this deployment.'}
-            </p>
-          ) : null}
-        </fieldset>
+            ) : null}
+          </fieldset>
 
-        <fieldset>
-          <legend>Webhook</legend>
-          <Checkbox
-            label="Accept signed webhook requests for this source"
-            checked={draft.webhookEnabled}
-            onCheckedChange={(checked) => onChange({ webhookEnabled: checked })}
-          />
-          {draft.saved ? <WebhookKey draft={draft} /> : <p>Save the source to create its key.</p>}
-        </fieldset>
+          <fieldset className={styles.fieldset}>
+            <legend className={styles.legend}>Webhook</legend>
+            <Checkbox
+              label="Accept signed webhook requests for this source"
+              checked={draft.webhookEnabled}
+              onCheckedChange={(checked) => onChange({ webhookEnabled: checked })}
+            />
+            {draft.saved ? <WebhookKey draft={draft} /> : <p>Save the source to create its key.</p>}
+          </fieldset>
+        </div>
 
         {draft.rules.incidentNumber.mode === 'none' || !draft.rules.incidentNumber.value.trim() ? (
-          <p role="note">
+          <p role="note" className={styles.note}>
             <strong>Warning:</strong> no incident number rule. Dispatches from this source are told
             apart by their text only, so an identical resend within 10 minutes is dropped and CAD
             updates to a call page as new calls. Add an incident number rule if the CAD sends one.
           </p>
         ) : null}
-        <TextInput
-          label="CAD time zone"
-          help="The IANA zone the CAD writes its times in, e.g. America/New_York (the default). Used to order CAD updates by their dispatch time."
-          value={draft.timeZone}
-          placeholder="America/New_York"
-          onChange={(e) => onChange({ timeZone: e.target.value })}
-          error={errorFor('timeZone')}
-        />
+        <div className={styles.narrow}>
+          <TextInput
+            label="CAD time zone"
+            help="The IANA zone the CAD writes its times in, e.g. America/New_York (the default). Used to order CAD updates by their dispatch time."
+            value={draft.timeZone}
+            placeholder="America/New_York"
+            onChange={(e) => onChange({ timeZone: e.target.value })}
+            error={errorFor('timeZone')}
+          />
+        </div>
         <ParserEditor draft={draft} index={index} errors={errors} onChange={onChange} />
 
-        <Button
-          type="button"
-          variant="danger"
-          onClick={() => setRemoveOpen(true)}
-          style={{ width: 'fit-content' }}
-        >
-          Remove {title}
-        </Button>
         {/* Save permanently deletes a removed source's webhook secret and API keys (backend
             cadSources/handler.ts, security review M5) - the page's most destructive action, so
             it is confirmed like the others, with the consequence named. */}
@@ -478,7 +532,7 @@ function NewEmailAddress({ sourceId, label }: { sourceId: string; label: string 
 function CopyButton({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null);
   return (
-    <span style={{ display: 'inline-flex', gap: 'var(--bx-space-sm)', alignItems: 'center' }}>
+    <span className={styles.copyRow}>
       <Button
         type="button"
         variant="secondary"
@@ -569,7 +623,7 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
   }
 
   return (
-    <div>
+    <div className={styles.stack}>
       {hasKey ? (
         <p>
           POST to <code>{draft.view?.webhookEndpoint ?? '(save to see the address)'}</code>. Key id{' '}
@@ -582,14 +636,16 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
       ) : (
         <p>No key yet: the webhook refuses every request until one is created.</p>
       )}
-      <Button type="button" variant="secondary" onClick={() => setConfirmOpen(true)}>
-        {hasKey ? 'Rotate webhook key' : 'Create webhook key'}
-      </Button>
-      {hasKey ? (
-        <Button type="button" variant="danger" onClick={() => setRevokeOpen(true)}>
-          Revoke previous key now
+      <div className={styles.actions}>
+        <Button type="button" variant="secondary" onClick={() => setConfirmOpen(true)}>
+          {hasKey ? 'Rotate webhook key' : 'Create webhook key'}
         </Button>
-      ) : null}
+        {hasKey ? (
+          <Button type="button" variant="danger" onClick={() => setRevokeOpen(true)}>
+            Revoke previous key now
+          </Button>
+        ) : null}
+      </div>
       {revoked ? <p role="status">The previous key no longer works.</p> : null}
       <ConfirmDialog
         open={revokeOpen}
@@ -630,13 +686,13 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
         }
       >
         {rotated ? (
-          <>
-            <dl>
+          <div className={styles.result}>
+            <dl className={styles.dl}>
               {rotated.webhookUrl ? (
                 <>
                   <dt>Address (POST)</dt>
                   <dd>
-                    <code style={{ wordBreak: 'break-all' }}>{rotated.webhookUrl}</code>{' '}
+                    <code>{rotated.webhookUrl}</code>{' '}
                     <CopyButton label="Copy address" value={rotated.webhookUrl} />
                   </dd>
                 </>
@@ -647,12 +703,11 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
               </dd>
               <dt>Key</dt>
               <dd>
-                <code style={{ wordBreak: 'break-all' }}>{rotated.secret}</code>{' '}
-                <CopyButton label="Copy key" value={rotated.secret} />
+                <code>{rotated.secret}</code> <CopyButton label="Copy key" value={rotated.secret} />
               </dd>
               <dt>x-api-key</dt>
               <dd>
-                <code style={{ wordBreak: 'break-all' }}>{rotated.apiKey}</code>{' '}
+                <code>{rotated.apiKey}</code>{' '}
                 <CopyButton label="Copy x-api-key" value={rotated.apiKey} /> - send it as the{' '}
                 <code>x-api-key</code> header on every request. It is this source&apos;s own
                 capacity; without it API Gateway refuses the request.
@@ -680,12 +735,12 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
               one paste-ready block for the CAD vendor: the address, every header, the signature
               rule, the body and retry rules, and the responses to expect.
             </p>
-            <p role="note">
+            <p role="note" className={styles.note}>
               <strong>Testing the feed:</strong> a successful test message pages every eligible
               member and starts the tone ladder, exactly like a real call - there is no test flag.
               Coordinate any positive test before it is sent.
             </p>
-          </>
+          </div>
         ) : null}
       </Dialog>
     </div>
@@ -740,8 +795,8 @@ function ParserEditor({
   const testErrors = fieldErrorsOf(testError);
 
   return (
-    <fieldset>
-      <legend>
+    <fieldset className={`${styles.fieldset} ${styles.rules}`}>
+      <legend className={styles.legend}>
         Parser template{draft.view?.parser ? ` (version ${draft.view.parser.version})` : ''}
       </legend>
       <p>
@@ -755,10 +810,7 @@ function ParserEditor({
           e.field.startsWith(`sources[${index}].parser.fields.${field}`),
         )?.message;
         return (
-          <div
-            key={field}
-            style={{ display: 'grid', gridTemplateColumns: 'minmax(10rem, 14rem) 1fr', gap: 8 }}
-          >
+          <div key={field} className={styles.ruleRow}>
             <Select
               label={`${FIELD_LABELS[field]}: read by`}
               value={rule.mode}
@@ -796,13 +848,13 @@ function ParserEditor({
       >
         Test parse
       </Button>
-      <div role="status" aria-live="polite">
+      <div role="status" aria-live="polite" className={styles.result}>
         {result?.status === 'PARSED' ? (
-          <div>
+          <div className={styles.result}>
             <p>
               <strong>Structured.</strong> This dispatch would page as:
             </p>
-            <dl>
+            <dl className={styles.dl}>
               {CAD_FIELDS.filter((f) => result.fields[f]).map((f) => (
                 <div key={f}>
                   <dt>{FIELD_LABELS[f]}</dt>

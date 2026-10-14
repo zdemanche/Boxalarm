@@ -56,10 +56,13 @@ test('renders certifications and hours by category from the API', async () => {
     return { json: async () => ({}) };
   });
 
-  const { findByText } = await render(<TranscriptScreen />);
+  const { findByLabelText, getByText } = await render(<TranscriptScreen />);
 
-  expect(await findByText('FF1 — CURRENT')).toBeTruthy();
-  expect(await findByText('Ladders: 4h')).toBeTruthy();
+  // Each certification is a row with its status chip, each category a row with its hours.
+  expect(await findByLabelText('FF1, Current')).toBeTruthy();
+  expect(getByText('Current')).toBeTruthy();
+  expect(await findByLabelText('Ladders, 4 hours')).toBeTruthy();
+  expect(getByText('4 h')).toBeTruthy();
 });
 
 test('shows an error message instead of hanging when the transcript fetch fails', async () => {

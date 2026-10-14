@@ -10,9 +10,12 @@ import {
   PageHeader,
   Select,
   Skeleton,
+  StatusChip,
   Textarea,
   TextInput,
 } from '../../components/ui';
+import { AlertTriangle } from '../../components/ui/icons';
+import type { StatusRole } from '@boxalarm/design-tokens';
 import {
   assignRidingSeat,
   getDispatch,
@@ -33,6 +36,7 @@ import type {
   ManualDispatchInput,
   RosterEntry,
 } from './types';
+import styles from './Alerts.module.css';
 
 const REFETCH_INTERVAL_MS = 10_000;
 const RECEIPT_CHANNELS = ['push', 'sms', 'voice'];
@@ -51,6 +55,25 @@ function ackLabel(status: RosterEntry['ackStatus']): string {
   if (status === 'DIRECT_TO_SCENE') return 'Direct to scene';
   if (status === 'NOT_RESPONDING') return 'Not responding';
   return 'Awaiting response';
+}
+
+/** design.md §2.3: both kinds of responding are ok; not responding and no answer are neutral. */
+function ackRole(status: RosterEntry['ackStatus']): StatusRole {
+  return status === 'RESPONDING' || status === 'DIRECT_TO_SCENE' ? 'ok' : 'neutral';
+}
+
+function receiptLabel(status: DeliveryReceipt['status']): string {
+  return status === 'SENT_UNCONFIRMED'
+    ? 'Sent, not confirmed delivered'
+    : status.charAt(0) + status.slice(1).toLowerCase();
+}
+
+/** Delivered/opened ok, failed alarm, sent-but-unconfirmed a caution (a11y-spec §1.8). */
+function receiptRole(status: DeliveryReceipt['status']): StatusRole {
+  if (status === 'DELIVERED' || status === 'OPENED') return 'ok';
+  if (status === 'FAILED') return 'danger';
+  if (status === 'SENT_UNCONFIRMED') return 'warning';
+  return 'info';
 }
 
 const OTHER_TOWN = '__other__';
@@ -155,10 +178,7 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
   const errorFor = (field: string) => fieldErrors.find((e) => e.field === field)?.message;
 
   return (
-    <Card
-      title="Enter dispatch manually"
-      style={{ maxWidth: 480, marginBottom: 'var(--bx-space-xl)' }}
-    >
+    <Card title="Enter dispatch manually">
       <form
         aria-label="Enter dispatch manually"
         onSubmit={(event: FormEvent) => {
@@ -180,7 +200,9 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
               .filter(Boolean),
           });
         }}
-        style={{ display: 'grid', gap: 'var(--bx-space-md)' }}
+        // Short fields pair up on a desk-width screen so the fallback form isn't a page-long
+        // column; narrative and submit always span the row.
+        className={styles.formGrid}
       >
         {(
           [
@@ -212,13 +234,15 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
           value={unitsText}
           onChange={(e) => setUnitsText(e.target.value)}
         />
-        <Textarea
-          label="Narrative"
-          required
-          value={form.narrative}
-          onChange={(e) => setForm((prev) => ({ ...prev, narrative: e.target.value }))}
-          error={errorFor('narrative')}
-        />
+        <div className={styles.span}>
+          <Textarea
+            label="Narrative"
+            required
+            value={form.narrative}
+            onChange={(e) => setForm((prev) => ({ ...prev, narrative: e.target.value }))}
+            error={errorFor('narrative')}
+          />
+        </div>
         <TextInput
           label="Operator-entered reference"
           required
@@ -227,13 +251,17 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
           error={errorFor('externalDispatchId')}
         />
         {formError ? (
-          <p role="alert" aria-live="assertive">
+          <p role="alert" aria-live="assertive" className={styles.formError}>
             {formError}
           </p>
         ) : null}
-        <Button type="submit" loading={mutation.isPending}>
-          {mutation.isPending ? 'Submitting…' : 'Submit dispatch'}
-        </Button>
+        <div className={styles.formActions}>
+          {/* Primary even beside the live calls' buttons: when CAD is down this pages the
+              department, and it must be the obvious button on the form. */}
+          <Button type="submit" loading={mutation.isPending}>
+            {mutation.isPending ? 'Submitting…' : 'Submit dispatch'}
+          </Button>
+        </div>
       </form>
     </Card>
   );
@@ -250,8 +278,8 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
 function ReceiptsUnavailable({ error }: { error: unknown }) {
   const refused = error instanceof ApiError && error.problem.status === 403;
   return (
-    <Card title="Delivery receipts" style={{ marginTop: 'var(--bx-space-lg)' }}>
-      <p role="status">
+    <Card title="Delivery receipts">
+      <p role="status" className={styles.muted}>
         {refused
           ? 'You do not have access to delivery receipts.'
           : 'Delivery receipts are temporarily unavailable. The roster and responses above are unaffected; receipts retry on their own.'}
@@ -288,17 +316,15 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   }
 
   return (
-    <Card title="Delivery receipts" style={{ marginTop: 'var(--bx-space-lg)' }}>
-      <div role="region" aria-label="Delivery receipts" tabIndex={0} style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+    <Card title="Delivery receipts">
+      <div role="region" aria-label="Delivery receipts" tabIndex={0} className={styles.tableWrap}>
+        <table className={styles.table}>
           <caption className="visually-hidden">Delivery receipts</caption>
           <thead>
             <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Member
-              </th>
+              <th scope="col">Member</th>
               {RECEIPT_CHANNELS.map((channel) => (
-                <th key={channel} scope="col" style={{ textAlign: 'left' }}>
+                <th key={channel} scope="col">
                   {channel.toUpperCase()}
                 </th>
               ))}
@@ -307,17 +333,20 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
           <tbody>
             {[...byMember.entries()].map(([memberId, channels]) => (
               <tr key={memberId}>
-                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  {nameOf(memberId)}
-                </th>
+                <th scope="row">{nameOf(memberId)}</th>
                 {RECEIPT_CHANNELS.map((channel) => {
                   const receipt = channels.get(channel);
-                  const label = !receipt
-                    ? '—'
-                    : receipt.status === 'SENT_UNCONFIRMED'
-                      ? 'Sent, not confirmed delivered'
-                      : receipt.status.charAt(0) + receipt.status.slice(1).toLowerCase();
-                  return <td key={channel}>{label}</td>;
+                  return (
+                    <td key={channel}>
+                      {receipt ? (
+                        <StatusChip status={receiptRole(receipt.status)}>
+                          {receiptLabel(receipt.status)}
+                        </StatusChip>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  );
                 })}
               </tr>
             ))}
@@ -346,24 +375,16 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card title="Live roster">
-      <div role="region" aria-label="Live roster" tabIndex={0} style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <div role="region" aria-label="Live roster" tabIndex={0} className={styles.tableWrap}>
+        <table className={styles.table}>
           <caption className="visually-hidden">Live roster</caption>
           <thead>
             <tr>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Member
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Status
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Quals
-              </th>
-              <th scope="col" style={{ textAlign: 'left' }}>
-                Assigned
-              </th>
-              <th scope="col">
+              <th scope="col">Member</th>
+              <th scope="col">Status</th>
+              <th scope="col">Quals</th>
+              <th scope="col">Assigned</th>
+              <th scope="col" className={styles.endCell}>
                 <span className="visually-hidden">Delivery</span>
               </th>
             </tr>
@@ -371,13 +392,15 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
           <tbody>
             {(query.data ?? []).map((entry) => (
               <tr key={entry.memberId}>
-                <th scope="row" style={{ textAlign: 'left', fontWeight: 500 }}>
-                  {entry.name}
-                </th>
-                <td>{ackLabel(entry.ackStatus)}</td>
-                <td>{entry.quals.join(', ')}</td>
-                <td>{entry.assignedApparatusId ?? '—'}</td>
+                <th scope="row">{entry.name}</th>
                 <td>
+                  <StatusChip status={ackRole(entry.ackStatus)}>
+                    {ackLabel(entry.ackStatus)}
+                  </StatusChip>
+                </td>
+                <td className={styles.quals}>{entry.quals.join(', ')}</td>
+                <td className={styles.mono}>{entry.assignedApparatusId ?? '—'}</td>
+                <td className={styles.endCell}>
                   <Link
                     to={`/alerts/diagnostics?dispatchId=${encodeURIComponent(dispatchId)}&memberId=${encodeURIComponent(entry.memberId)}`}
                     aria-label={`Delivery diagnostics for ${entry.name}`}
@@ -456,21 +479,28 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
   );
 
   return (
-    <Card title="Riding board" style={{ marginTop: 'var(--bx-space-lg)' }}>
+    <Card title="Riding board">
       {assignError ? (
-        <p role="alert" aria-live="assertive" style={{ color: 'var(--bx-status-danger)' }}>
+        <p role="alert" aria-live="assertive" className={styles.alert}>
+          <AlertTriangle size={16} aria-hidden="true" />
           {assignError}
         </p>
       ) : null}
       {(boardQuery.data?.apparatus ?? []).map((unit) => (
-        <div key={unit.apparatusId} style={{ marginBottom: 'var(--bx-space-md)' }}>
-          <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>{unit.unitId}</h3>
-          {!unit.assignable ? (
-            <p style={{ color: 'var(--bx-status-danger)' }}>
-              Out of service{unit.outOfServiceReason ? `: ${unit.outOfServiceReason}` : ''}
-            </p>
-          ) : null}
-          <ul>
+        <div key={unit.apparatusId} className={styles.unit}>
+          <div className={styles.unitHead}>
+            <h3>{unit.unitId}</h3>
+            {/* Out of service = alarm colour + glyph + the words, then the reason. */}
+            {!unit.assignable ? (
+              <>
+                <StatusChip status="danger">Out of service</StatusChip>
+                {unit.outOfServiceReason ? (
+                  <span className={styles.oosReason}>{unit.outOfServiceReason}</span>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+          <ul className={styles.seats}>
             {unit.positions.map((position) => (
               <li key={position.code}>
                 <Select
@@ -499,6 +529,10 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
           </ul>
         </div>
       ))}
+      {boardQuery.isLoading ? <Skeleton lines={3} /> : null}
+      {boardQuery.data && boardQuery.data.apparatus.length === 0 ? (
+        <p className={styles.muted}>No apparatus on the riding board.</p>
+      ) : null}
     </Card>
   );
 }
@@ -517,20 +551,35 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
       </ApiForbiddenGate>
     );
   }
-  if (!query.data) return <Skeleton lines={3} />;
+  if (!query.data) {
+    return (
+      <Card>
+        <Skeleton lines={3} />
+      </Card>
+    );
+  }
 
   return (
-    <Card>
-      {query.data.verifyRequired ? <VerifyBanner /> : null}
-      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{query.data.incidentType}</h2>
-      <p>{query.data.address}</p>
-      {query.data.crossStreets ? <p>Cross streets: {query.data.crossStreets}</p> : null}
-      {query.data.mapLink ? (
-        <a href={query.data.mapLink} target="_blank" rel="noreferrer">
-          Open in maps
-        </a>
-      ) : null}
-      <p>{query.data.narrative}</p>
+    <>
+      <Card>
+        {query.data.verifyRequired ? <VerifyBanner /> : null}
+        <h2 className={styles.dispatchTitle}>{query.data.incidentType}</h2>
+        <p className={styles.address}>{query.data.address}</p>
+        {query.data.crossStreets ? (
+          <p className={styles.crossStreets}>Cross streets: {query.data.crossStreets}</p>
+        ) : null}
+        {query.data.mapLink ? (
+          <a href={query.data.mapLink} target="_blank" rel="noreferrer" className={styles.mapLink}>
+            Open in maps
+          </a>
+        ) : null}
+        {query.data.narrative ? <p className={styles.narrative}>{query.data.narrative}</p> : null}
+        <DispatchUpdates
+          updates={query.data.updates}
+          unavailable={query.data.updatesUnavailable === true}
+        />
+      </Card>
+      {/* Its own card under the call, not nested inside it. */}
       <PrePlanPanel
         prePlan={query.data.prePlan}
         unavailable={query.data.prePlanUnavailable === true}
@@ -538,28 +587,19 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
         hydrantsUnavailable={query.data.nearestHydrantsUnavailable === true}
         hydrantsIncomplete={query.data.nearestHydrantsIncomplete === true}
       />
-      <DispatchUpdates
-        updates={query.data.updates}
-        unavailable={query.data.updatesUnavailable === true}
-      />
-    </Card>
+    </>
   );
 }
 
 /** A RAW (fail-open) CAD dispatch: the location is only in the dispatch text below. */
 export function VerifyBanner() {
   return (
-    <div
-      role="alert"
-      style={{
-        border: '2px solid var(--bx-color-danger, #b00020)',
-        borderRadius: 8,
-        padding: 'var(--bx-space-sm)',
-        fontWeight: 700,
-      }}
-    >
-      VERIFY: the CAD message could not be read automatically. The location is in the dispatch text
-      below - confirm it by radio before responding.
+    <div role="alert" className={styles.verify}>
+      <AlertTriangle size={18} aria-hidden="true" />
+      <span>
+        VERIFY: the CAD message could not be read automatically. The location is in the dispatch
+        text below - confirm it by radio before responding.
+      </span>
     </div>
   );
 }
@@ -598,15 +638,17 @@ export function DispatchUpdates({
   unavailable: boolean;
 }) {
   if (unavailable) {
-    return <p role="status">CAD updates for this call could not be loaded.</p>;
+    return (
+      <p role="status" className={styles.unavailable}>
+        CAD updates for this call could not be loaded.
+      </p>
+    );
   }
   if (!updates || updates.length === 0) return null;
   return (
-    <section aria-labelledby="dispatch-updates-heading">
-      <h3 id="dispatch-updates-heading" style={{ fontSize: 17, fontWeight: 600 }}>
-        CAD updates ({updates.length})
-      </h3>
-      <ol>
+    <section aria-labelledby="dispatch-updates-heading" className={styles.updates}>
+      <h3 id="dispatch-updates-heading">CAD updates ({updates.length})</h3>
+      <ol className={styles.updateList}>
         {updates.map((update) => (
           <li key={update.updateId}>
             <time dateTime={new Date(update.receivedAt * 1000).toISOString()}>
@@ -614,7 +656,7 @@ export function DispatchUpdates({
             </time>
             : {update.summary}
             {update.changes.filter((c) => c.field !== 'narrative').length > 0 ? (
-              <ul>
+              <ul className={styles.changes}>
                 {update.changes
                   .filter((c) => c.field !== 'narrative')
                   .map((c) => (
@@ -662,28 +704,26 @@ function formatWindow(seconds: number): string {
 function ActiveCallRow({ dispatch, onOpen }: { dispatch: ActiveDispatch; onOpen: () => void }) {
   const ladder = dispatch.toneLadder;
   return (
-    <li
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 'var(--bx-space-sm)',
-        padding: 'var(--bx-space-sm) 0',
-        borderTop: '1px solid var(--bx-border-decorative)',
-      }}
-    >
-      <div>
-        <strong>{dispatch.incidentType ?? 'Unknown call type'}</strong>
-        {' — '}
-        {dispatch.address ?? 'No address on the dispatch'}
-        {dispatch.crossStreets ? ` (${dispatch.crossStreets})` : null}
-        <div style={{ color: 'var(--bx-fg-muted)', fontSize: 14 }}>
-          dispatched {formatClock(dispatch.dispatchedAt)} · tone {ladder.currentToneSequence} ·{' '}
-          {ladderLabel(ladder.status)}
-        </div>
+    <li className={styles.callRow}>
+      <div className={styles.callBody}>
+        {/* design.md §2.3: active dispatch = alarm colour + triangle + the word, as on the
+            dashboard's Active calls card. */}
+        <span className={styles.callStatus}>
+          <AlertTriangle size={14} aria-hidden="true" />
+          Dispatched <span className={styles.mono}>{formatClock(dispatch.dispatchedAt)}</span>
+          <span className={styles.callStatusMeta}>
+            · tone {ladder.currentToneSequence} · {ladderLabel(ladder.status)}
+          </span>
+        </span>
+        <strong className={styles.callType}>{dispatch.incidentType ?? 'Unknown call type'}</strong>
+        <span className={styles.callAddress}>
+          {dispatch.address ?? 'No address on the dispatch'}
+          {dispatch.crossStreets ? (
+            <span className={styles.callStatusMeta}> ({dispatch.crossStreets})</span>
+          ) : null}
+        </span>
       </div>
-      <Button variant="primary" size="sm" onClick={onOpen}>
+      <Button variant="primary" onClick={onOpen}>
         Open roster
       </Button>
     </li>
@@ -703,23 +743,25 @@ function ActiveCallsCard({ onOpen }: { onOpen: (dispatchId: string) => void }) {
     refetchInterval: REFETCH_INTERVAL_MS,
   });
 
+  const hasLiveCalls = !query.error && (query.data?.dispatches.length ?? 0) > 0;
   return (
-    <Card title="Active calls" style={{ marginBottom: 'var(--bx-space-lg)' }}>
+    // design.md §2.6 elevation.alarm - a live call only: the alarm edge plus a dot on the title,
+    // the same treatment as the dashboard's Active calls card.
+    <Card title="Active calls" className={hasLiveCalls ? styles.liveCard : undefined}>
       {query.isLoading ? <Skeleton lines={2} /> : null}
       {query.error ? (
-        <p role="status">
-          Active calls aren't available right now. Enter a dispatch ID below to open a call
-          directly.
+        <p role="status" className={styles.muted}>
+          Active calls aren&rsquo;t available right now. Open a call directly by its dispatch ID.
         </p>
       ) : null}
       {query.data ? (
         query.data.dispatches.length === 0 ? (
-          <p>
+          <p className={styles.muted}>
             No calls dispatched in the last {formatWindow(query.data.activeWindowSeconds)} (as of{' '}
             {formatClock(query.data.asOf)}).
           </p>
         ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          <ul className={styles.list}>
             {[...query.data.dispatches]
               .sort((a, b) => b.dispatchedAt - a.dispatchedAt)
               .map((dispatch) => (
@@ -731,6 +773,47 @@ function ActiveCallsCard({ onOpen }: { onOpen: (dispatchId: string) => void }) {
               ))}
           </ul>
         )
+      ) : null}
+    </Card>
+  );
+}
+
+/** Was Enter-only with no visible way to submit. */
+function OpenCallCard({
+  dispatchId,
+  onOpen,
+}: {
+  dispatchId: string | null;
+  onOpen: (dispatchId: string) => void;
+}) {
+  return (
+    <Card title="Open a call">
+      <form
+        aria-label="Open a call by dispatch ID"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          const value = String(new FormData(event.currentTarget).get('dispatchId') ?? '').trim();
+          if (value) onOpen(value);
+        }}
+        className={styles.lookup}
+      >
+        <div className={styles.lookupField}>
+          <TextInput
+            key={dispatchId ?? ''}
+            label="Dispatch ID"
+            name="dispatchId"
+            defaultValue={dispatchId ?? ''}
+          />
+        </div>
+        <Button type="submit" variant="secondary">
+          Open
+        </Button>
+      </form>
+      {!dispatchId ? (
+        <p className={styles.lookupHelp}>
+          Opens any call&rsquo;s roster, receipts, and riding board — including one past the active
+          window.
+        </p>
       ) : null}
     </Card>
   );
@@ -749,54 +832,63 @@ export function AlertsRosterPage() {
   // /alerts/roster, so it never reaches this check; see PR notes on the ticket's "officer,
   // chief, admin" text vs. the existing, tested route-guard invariant.
   const canEnterManually = auth.roles.some((r) => r === 'OFFICER' || r === 'CHIEF');
+  const open = (id: string) => setSearchParams({ dispatchId: id });
 
   return (
     <main id="main-content">
       <PageHeader
         title={!dispatchId ? 'Live roster' : 'Alert'}
+        description={
+          !dispatchId
+            ? 'Calls dispatched in the last few hours, and who is responding to each.'
+            : 'The call, who is responding, delivery to each member, and who is riding.'
+        }
         actions={
           dispatchId ? (
-            <Button variant="secondary" size="sm" onClick={() => setSearchParams({})}>
+            <Button variant="secondary" onClick={() => setSearchParams({})}>
               All active calls
             </Button>
           ) : undefined
         }
       />
 
-      {!dispatchId ? (
-        <ActiveCallsCard onOpen={(id) => setSearchParams({ dispatchId: id })} />
-      ) : null}
+      {!dispatchId ? <ActiveCallsCard onOpen={open} /> : null}
 
+      {/* Reading order is the phone's order (call, building, tone ladder, roster, receipts,
+          riding board); at desk width the ladder and riding board move to the right column. */}
       {dispatchId ? (
         <>
-          <DispatchHeader dispatchId={dispatchId} />
-          <ToneLadderPanel dispatchId={dispatchId} />
-          <RosterTable dispatchId={dispatchId} />
-          <ReceiptsTable dispatchId={dispatchId} />
-          <RidingBoardSection dispatchId={dispatchId} />
+          <div className={styles.grid}>
+            <div className={styles.column}>
+              <DispatchHeader dispatchId={dispatchId} />
+            </div>
+            <div className={styles.column}>
+              <ToneLadderPanel dispatchId={dispatchId} />
+            </div>
+          </div>
+          <div className={styles.grid}>
+            <div className={styles.column}>
+              <RosterTable dispatchId={dispatchId} />
+              <ReceiptsTable dispatchId={dispatchId} />
+            </div>
+            <div className={styles.column}>
+              <RidingBoardSection dispatchId={dispatchId} />
+            </div>
+          </div>
         </>
       ) : null}
 
       {/* Manual-entry fallback and direct dispatch-id lookup: first on the screen when no call
           is open, below the call when one is. */}
-      <div style={{ marginTop: dispatchId ? 'var(--bx-space-2xl)' : 0 }}>
+      <div className={[styles.grid, dispatchId ? styles.fallback : ''].join(' ')}>
         {canEnterManually ? (
-          <ManualEntryForm onCreated={(id) => setSearchParams({ dispatchId: id })} />
+          <div className={styles.column}>
+            <ManualEntryForm onCreated={open} />
+          </div>
         ) : null}
-
-        <TextInput
-          label="Dispatch ID"
-          defaultValue={dispatchId ?? ''}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter') return;
-            const value = (e.target as HTMLInputElement).value.trim();
-            if (value) setSearchParams({ dispatchId: value });
-          }}
-          style={{ maxWidth: 320, marginBottom: 'var(--bx-space-lg)' }}
-        />
-        {!dispatchId ? (
-          <p>Enter a dispatch ID to see its roster, receipts, and riding board.</p>
-        ) : null}
+        <div className={styles.column}>
+          <OpenCallCard dispatchId={dispatchId} onOpen={open} />
+        </div>
       </div>
     </main>
   );

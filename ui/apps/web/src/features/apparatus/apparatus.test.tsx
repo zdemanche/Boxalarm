@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -7,6 +7,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { User, UserManager } from 'oidc-client-ts';
 import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
+import { formatCalendarDate } from '../../lib/dates';
 import { RequireRole } from '../../routing/RequireRole';
 import { ApparatusDetailPage, defectPhotoSrc } from './ApparatusDetailPage';
 import { ApparatusListPage } from './ApparatusListPage';
@@ -242,10 +243,12 @@ test('Testing tab filters the schedule by the display unitId, which is what the 
   await screen.findByRole('heading', { name: 'L1' });
   await user.click(screen.getByRole('tab', { name: 'Testing' }));
 
-  expect(await screen.findByText(/HOSE due 2026-11-01/)).toBeTruthy();
-  // "PUMP" alone also matches an <option> in the unrelated "Log test record" select below, so
-  // assert on the schedule-list wording specifically.
-  expect(screen.queryByText(/PUMP due 2026-11-05/)).toBeNull();
+  // "Pump" alone also matches an <option> in the unrelated "Log test record" select below, so
+  // assert on the schedule list itself.
+  const schedule = await screen.findByRole('list', { name: 'Scheduled tests' });
+  expect(schedule.textContent).toContain('Hose test');
+  expect(schedule.textContent).toContain(formatCalendarDate('2026-11-01'));
+  expect(schedule.textContent).not.toContain('Pump');
 });
 
 test('Maintenance tab fetches from the apparatusId-keyed endpoint, matching the page detail fetch (finding #4)', async () => {
@@ -388,8 +391,47 @@ test('the apparatus due-soon panel lists a unit inside the reminder window and o
   renderApp(['CHIEF']);
   await screen.findByRole('heading', { name: 'Apparatus' });
 
-  expect(await screen.findByText(/Engine 301: due/)).toBeTruthy();
-  expect(screen.queryByText(/Truck 304: due/)).toBeNull();
+  const panel = (await screen.findByRole('heading', { name: 'Maintenance due soon' }))
+    .parentElement!;
+  expect(await within(panel).findByText('Engine 301')).toBeTruthy();
+  expect(within(panel).queryByText('Truck 304')).toBeNull();
+});
+
+test('the due-soon panel flags overdue maintenance as an alarm and lists it first', async () => {
+  // Noon local, N calendar days from today: the chip counts whole days, so pin the date.
+  const atNoon = (offsetDays: number) => {
+    const today = new Date();
+    return Math.floor(
+      new Date(today.getFullYear(), today.getMonth(), today.getDate() + offsetDays, 12).getTime() /
+        1000,
+    );
+  };
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          { apparatusId: 'a1', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
+          { apparatusId: 'a2', unitId: 'Truck 304', type: 'Ladder', status: 'IN_SERVICE' },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: atNoon(5) }),
+    ),
+    http.get('/api/v1/apparatus/a2/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: atNoon(-35) }),
+    ),
+  );
+
+  renderApp(['CHIEF']);
+  const overdue = await screen.findByText('Overdue · 35 days');
+  expect(overdue.closest('[data-status="danger"]')).toBeTruthy();
+  const dueSoon = await screen.findByText('Due in 5 days');
+  expect(dueSoon.closest('[data-status="warning"]')).toBeTruthy();
+
+  const items = within(overdue.closest('ul')!).getAllByRole('listitem');
+  expect(items[0]?.textContent).toContain('Truck 304');
+  expect(items[1]?.textContent).toContain('Engine 301');
 });
 
 test('registry links each unit to its unitId-keyed detail route, not the apparatusId (C2)', async () => {

@@ -134,13 +134,16 @@ function statusFixture(status: Member['status'] = 'ACTIVE'): {
 
 // Post-merge MAJOR-2: choosing a status never saves by itself; a confirmation states the
 // consequence, and only its confirm button saves.
+// The status picker's visible label: 'New status', or 'Reinstate as' for a retired member.
+const STATUS_FIELD = /^(New status|Reinstate as)$/;
+
 test('choosing a status alone never saves; LOA is confirmed with its consequence, then applied', async () => {
   const { puts } = statusFixture('ACTIVE');
   const user = userEvent.setup();
   renderPersonnel(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
 
-  const select = screen.getByLabelText('New member status') as HTMLSelectElement;
+  const select = screen.getByLabelText('New status') as HTMLSelectElement;
   select.focus();
   await user.keyboard('{ArrowDown}{ArrowDown}');
   await user.selectOptions(select, 'LOA');
@@ -162,7 +165,7 @@ test('cancelling the confirmation saves nothing', async () => {
   const user = userEvent.setup();
   renderPersonnel(['CHIEF'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  await user.selectOptions(screen.getByLabelText('New member status'), 'RETIRED');
+  await user.selectOptions(screen.getByLabelText('New status'), 'RETIRED');
   await user.click(screen.getByRole('button', { name: 'Change status' }));
   const dialog = await screen.findByRole('dialog');
   expect(dialog.textContent).toContain('permanent');
@@ -176,7 +179,7 @@ test('offers only the statuses the server accepts: never PROBATIONARY, and RETIR
   renderPersonnel(['ADMIN'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
   const options = () =>
-    Array.from((screen.getByLabelText('New member status') as HTMLSelectElement).options)
+    Array.from((screen.getByLabelText(STATUS_FIELD) as HTMLSelectElement).options)
       .map((option) => option.value)
       .filter(Boolean);
   expect(options()).toEqual(['ACTIVE', 'LOA', 'RETIRED']);
@@ -194,7 +197,7 @@ test('a chief can reinstate a retired member after confirming', async () => {
   const user = userEvent.setup();
   renderPersonnel(['CHIEF'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  await user.selectOptions(screen.getByLabelText('New member status'), 'ACTIVE');
+  await user.selectOptions(screen.getByLabelText('Reinstate as'), 'ACTIVE');
   await user.click(screen.getByRole('button', { name: 'Reinstate member' }));
   const dialog = await screen.findByRole('dialog');
   expect(dialog.textContent).toContain('paged again');
@@ -206,7 +209,7 @@ test('an officer has no status control', async () => {
   statusFixture('ACTIVE');
   renderPersonnel(['OFFICER'], '/personnel/m1');
   await screen.findByRole('heading', { name: 'Sam Lee' });
-  expect(screen.queryByLabelText('New member status')).toBeNull();
+  expect(screen.queryByLabelText(STATUS_FIELD)).toBeNull();
 });
 
 test('CHIEF can issue PPE, consistent with inspections write-access (MAJOR-3)', async () => {

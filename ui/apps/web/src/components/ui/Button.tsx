@@ -24,6 +24,15 @@ const VARIANT_CLASS: Record<ButtonVariant, string | undefined> = {
   danger: styles.danger,
 };
 
+/** Button styling for a router `<Link>`: navigation stays a real link (open in new tab, history,
+ * the right screen-reader role) while matching the buttons beside it. */
+export function buttonClassName({
+  variant = 'primary',
+  size = 'md',
+}: { variant?: ButtonVariant; size?: ButtonSize } = {}): string {
+  return [styles.button, SIZE_CLASS[size], VARIANT_CLASS[variant]].filter(Boolean).join(' ');
+}
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     variant = 'primary',
@@ -41,9 +50,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <button
       ref={ref}
       type="button"
-      className={[styles.button, SIZE_CLASS[size], VARIANT_CLASS[variant], className]
-        .filter(Boolean)
-        .join(' ')}
+      className={[buttonClassName({ variant, size }), className].filter(Boolean).join(' ')}
       // `loading` never sets the native `disabled` attribute — a disabled button drops focus to
       // <body> the instant it's set, stranding keyboard/screen-reader users on submit
       // (docs/a11y-spec.md:367: "never disabled"). It stays focusable and its accessible state is

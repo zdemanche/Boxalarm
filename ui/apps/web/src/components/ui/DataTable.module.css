@@ -1,7 +1,9 @@
 .wrapper {
   overflow-x: auto;
+  background: var(--bx-card);
   border: 1px solid var(--bx-border-decorative);
   border-radius: var(--bx-radius-lg);
+  box-shadow: var(--bx-shadow-raised);
 }
 
 .table {
@@ -16,6 +18,12 @@
   text-align: left;
   vertical-align: middle;
   border-bottom: 1px solid var(--bx-border-decorative);
+}
+
+/* Column headers and the row-header column (unit, hydrant and asset IDs) never break mid-token
+   ("HYD-/001"); the wrapper scrolls instead. */
+.table th {
+  white-space: nowrap;
 }
 
 .table thead th {
@@ -55,7 +63,12 @@
 }
 
 .table tbody tr:hover {
-  background: var(--bx-surface-raised);
+  background: var(--bx-surface);
+}
+
+.table tbody tr:last-child td,
+.table tbody tr:last-child th {
+  border-bottom: 0;
 }
 
 .stateRow td {

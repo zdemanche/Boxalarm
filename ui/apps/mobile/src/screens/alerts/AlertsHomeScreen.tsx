@@ -1,15 +1,24 @@
-import { radius, spacing, typeScale } from '@boxalarm/design-tokens';
+import { spacing, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { FlatList, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Platform, RefreshControl, Text, TouchableOpacity, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Button, StatusChip, useTheme } from '../../components/ui';
+import { Button, Card, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
 import { formatClock, formatElapsed } from '../../features/alerts/elapsed';
 import { useActiveDispatches, type ActiveCall } from '../../features/alerts/useActiveDispatches';
 import type { DetailFailure } from '../../features/alerts/useAlertDetail';
 import type { AlertsStackParamList } from '../../navigation/AlertsStack';
+import {
+  CanvasScrollView,
+  Chevron,
+  LiveCard,
+  LiveDot,
+  Notice,
+  noticeText,
+  ROW_SECONDARY,
+  rowDivider,
+} from './alertsUi';
 
 // Review m7: "can't reach" and "refused" need different words - a refusal will not fix itself
 // by moving to signal.
@@ -27,7 +36,7 @@ function failureLead(failure: DetailFailure | null): string {
 /** 72dp: the alert-path target floor (a11y-spec §1.11) - this row opens a live call. */
 const CALL_ROW_MIN_HEIGHT = 72;
 
-function CallRow({ call, onOpen }: { call: ActiveCall; onOpen: () => void }) {
+function CallRow({ call, index, onOpen }: { call: ActiveCall; index: number; onOpen: () => void }) {
   const theme = useTheme();
   const dispatchedMs = call.dispatchedAt * 1000;
   const type = call.incidentType ?? 'Dispatch';
@@ -40,38 +49,56 @@ function CallRow({ call, onOpen }: { call: ActiveCall; onOpen: () => void }) {
       onPress={onOpen}
       style={{
         minHeight: CALL_ROW_MIN_HEIGHT,
-        padding: spacing.md,
-        marginBottom: spacing.sm,
-        borderRadius: radius.card,
-        borderWidth: 2,
-        borderColor: theme.status.danger,
-        backgroundColor: theme.surface,
-        gap: 4,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.sm,
+        paddingVertical: spacing.sm,
+        ...rowDivider(theme, index),
       }}
     >
-      <Text
-        style={{ color: theme.status.warning, fontSize: typeScale.heading.size, fontWeight: '700' }}
-      >
-        {type.toUpperCase()}
-        {call.toneSequence > 1 ? ` · TONE ${call.toneSequence}` : ''}
-      </Text>
-      <Text style={{ color: theme.fg, fontSize: typeScale.display.size, fontWeight: '700' }}>
-        {address}
-      </Text>
-      {call.crossStreets ? (
-        <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-          x {call.crossStreets}
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text
+          style={{
+            color: theme.status.danger,
+            fontSize: typeScale.subheading.size,
+            fontWeight: '800',
+            letterSpacing: 0.5,
+          }}
+        >
+          {type.toUpperCase()}
+          {call.toneSequence > 1 ? ` · TONE ${call.toneSequence}` : ''}
         </Text>
-      ) : null}
-      <Text
-        style={{ color: theme.fgMuted, fontSize: typeScale.mono.size, fontFamily: 'monospace' }}
-      >
-        {call.fromPageOnly ? 'received' : 'dispatched'} {formatClock(dispatchedMs)} ·{' '}
-        {formatElapsed(dispatchedMs)}
-      </Text>
-      {call.fromPageOnly ? (
-        <StatusChip status="warning" label="Received on this phone - not in the server list yet" />
-      ) : null}
+        <Text
+          style={{
+            color: theme.fg,
+            fontSize: typeScale.title.size,
+            lineHeight: typeScale.title.lineHeight,
+            fontWeight: '800',
+          }}
+        >
+          {address}
+        </Text>
+        {call.crossStreets ? (
+          <Text style={{ color: theme.fg, ...ROW_SECONDARY }}>x {call.crossStreets}</Text>
+        ) : null}
+        <Text
+          style={{
+            color: theme.fgMuted,
+            fontSize: typeScale.mono.size,
+            fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+          }}
+        >
+          {call.fromPageOnly ? 'received' : 'dispatched'} {formatClock(dispatchedMs)} ·{' '}
+          {formatElapsed(dispatchedMs)}
+        </Text>
+        {call.fromPageOnly ? (
+          <StatusChip
+            status="warning"
+            label="Received on this phone - not in the server list yet"
+          />
+        ) : null}
+      </View>
+      <Chevron />
     </TouchableOpacity>
   );
 }
@@ -105,116 +132,106 @@ export function AlertsHomeScreen() {
   const asOf = active.updatedAt ? formatClock(active.updatedAt) : null;
   const unreachable = active.failure !== null;
 
-  const header = (
-    <View style={{ gap: spacing.sm, marginBottom: spacing.md }}>
-      <Text
-        accessibilityRole="header"
-        style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-      >
-        Alerts
+  const status = unreachable ? (
+    <Notice tone="warning" accessibilityLiveRegion="polite">
+      <Text style={noticeText(theme, 'warning')}>
+        {active.source === 'cached' && asOf
+          ? `${failureLead(active.failure)} Showing active calls saved on this phone at ${asOf} - they may have changed.`
+          : `${failureLead(active.failure)} No call list is saved on this phone yet.`}
       </Text>
-      {unreachable ? (
-        <View
-          accessibilityLiveRegion="polite"
-          style={{
-            padding: spacing.md,
-            borderRadius: radius.default,
-            borderLeftWidth: 4,
-            borderLeftColor: theme.status.warning,
-            backgroundColor: theme.surface,
-          }}
-        >
-          <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
-            {active.source === 'cached' && asOf
-              ? `▲ ${failureLead(active.failure)} Showing active calls saved on this phone at ${asOf} - they may have changed.`
-              : `▲ ${failureLead(active.failure)} No call list is saved on this phone yet.`}
-          </Text>
-        </View>
-      ) : asOf ? (
-        <Text style={{ color: theme.fgMuted, fontSize: typeScale.caption.size }}>
-          Updated {asOf}
-        </Text>
-      ) : null}
-      {active.truncated ? (
-        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-          Showing the most recent active calls only.
-        </Text>
-      ) : null}
-    </View>
-  );
+    </Notice>
+  ) : asOf ? (
+    <Text style={{ color: theme.fgMuted, fontSize: typeScale.caption.size }}>Updated {asOf}</Text>
+  ) : null;
 
   const empty = active.loading ? (
-    <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-      Loading active calls…
-    </Text>
+    <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>Loading active calls…</Text>
   ) : unreachable ? null : (
-    <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+    <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>
       No active calls. Calls appear here as soon as you're paged, even if you dismiss the
       notification.
     </Text>
   );
 
+  const open = (item: ActiveCall) =>
+    navigation.navigate('AlertDetail', {
+      dispatchId: item.dispatchId,
+      payload: {
+        dispatchId: item.dispatchId,
+        incidentType: item.incidentType ?? 'Dispatch',
+        address: item.address ?? '',
+        ...(item.crossStreets ? { crossStreets: item.crossStreets } : {}),
+        toneSequence: item.toneSequence,
+        // A server row's time is the dispatch time; a page-only row's is receipt.
+        ...(item.fromPageOnly ? {} : { dispatchedAt: item.dispatchedAt * 1000 }),
+        receivedAt: item.dispatchedAt * 1000,
+      },
+    });
+
+  const live = active.calls.length > 0;
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
-      <FlatList
-        data={active.calls}
-        keyExtractor={(call) => call.dispatchId}
-        contentContainerStyle={{ padding: spacing.lg, flexGrow: 1 }}
-        ListHeaderComponent={header}
-        ListEmptyComponent={empty ?? undefined}
-        refreshControl={
-          <RefreshControl
-            refreshing={active.refreshing}
-            onRefresh={() => void active.refresh()}
-            accessibilityLabel="Pull to refresh active calls"
-          />
-        }
-        renderItem={({ item }) => (
-          <CallRow
-            call={item}
-            onOpen={() =>
-              navigation.navigate('AlertDetail', {
-                dispatchId: item.dispatchId,
-                payload: {
-                  dispatchId: item.dispatchId,
-                  incidentType: item.incidentType ?? 'Dispatch',
-                  address: item.address ?? '',
-                  ...(item.crossStreets ? { crossStreets: item.crossStreets } : {}),
-                  toneSequence: item.toneSequence,
-                  // A server row's time is the dispatch time; a page-only row's is receipt.
-                  ...(item.fromPageOnly ? {} : { dispatchedAt: item.dispatchedAt * 1000 }),
-                  receivedAt: item.dispatchedAt * 1000,
-                },
-              })
-            }
-          />
-        )}
-        ListFooterComponent={
-          <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
-            {/* Pull-to-refresh is an accelerator only (a11y-spec N3): a real button too. */}
+    <CanvasScrollView
+      refreshControl={
+        <RefreshControl
+          refreshing={active.refreshing}
+          onRefresh={() => void active.refresh()}
+          accessibilityLabel="Pull to refresh active calls"
+        />
+      }
+    >
+      {/* Active calls first: a live card (alarm edge) while there is a call to go to. */}
+      <LiveCard live={live}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+          {live ? <LiveDot /> : null}
+          <Text
+            accessibilityRole="header"
+            style={{ color: theme.fg, fontSize: typeScale.heading.size, fontWeight: '700' }}
+          >
+            Active calls
+          </Text>
+        </View>
+        {status}
+        {live
+          ? active.calls.map((call, index) => (
+              <CallRow key={call.dispatchId} call={call} index={index} onOpen={() => open(call)} />
+            ))
+          : empty}
+        {active.truncated ? (
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+            Showing the most recent active calls only.
+          </Text>
+        ) : null}
+        {/* Pull-to-refresh is an accelerator only (a11y-spec N3): a real button too. */}
+        <Button
+          label={active.refreshing ? 'Refreshing…' : 'Refresh'}
+          variant="secondary"
+          accessibilityLabel="Refresh active calls"
+          loading={active.refreshing}
+          fullWidth
+          onPress={() => void active.refresh()}
+        />
+      </LiveCard>
+
+      {canEnterManually || canReport ? (
+        <Card title="Officer actions">
+          {canEnterManually ? (
             <Button
-              label={active.refreshing ? 'Refreshing…' : 'Refresh'}
-              variant="secondary"
-              accessibilityLabel="Refresh active calls"
-              loading={active.refreshing}
-              onPress={() => void active.refresh()}
+              label="Enter dispatch manually"
+              fullWidth
+              onPress={() => navigation.navigate('ManualEntry')}
             />
-            {canEnterManually ? (
-              <Button
-                label="Enter dispatch manually"
-                onPress={() => navigation.navigate('ManualEntry')}
-              />
-            ) : null}
-            {canReport ? (
-              <Button
-                label="Start a report"
-                variant="secondary"
-                onPress={() => navigation.navigate('ReportDispatches')}
-              />
-            ) : null}
-          </View>
-        }
-      />
-    </SafeAreaView>
+          ) : null}
+          {canReport ? (
+            <Button
+              label="Start a report"
+              variant="secondary"
+              fullWidth
+              onPress={() => navigation.navigate('ReportDispatches')}
+            />
+          ) : null}
+        </Card>
+      ) : null}
+    </CanvasScrollView>
   );
 }

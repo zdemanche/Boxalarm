@@ -3,6 +3,8 @@ import { Component, type ReactNode } from 'react';
 import { StatusBar, Text, View } from 'react-native';
 import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './auth/AuthContext';
+import { DemoAuthProvider, isDemoMode } from './auth/demoMode';
+import { seedDemoAlerts } from './features/alerts/demoAlerts';
 import { usePushNotificationRouting } from './features/alerts/usePushNotificationRouting';
 import { usePushTokenRegistration } from './features/alerts/usePushTokenRegistration';
 import { RootNavigator } from './navigation/RootNavigator';
@@ -46,17 +48,22 @@ class ConfigErrorBoundary extends Component<{ children: ReactNode }, { failed: b
   }
 }
 
+// Decided once at startup: DEMO_MODE comes from the build's .env.
+const SessionProvider = isDemoMode() ? DemoAuthProvider : AuthProvider;
+// The demo opens with a live call to answer (features/alerts/demoAlerts.ts).
+if (isDemoMode()) seedDemoAlerts();
+
 export function App() {
   return (
     <ConfigErrorBoundary>
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
         <ConnectivityProvider>
-          <AuthProvider>
-            <StatusBar barStyle="default" />
+          <SessionProvider>
+            <StatusBar barStyle="light-content" />
             <PushTokenSync />
             <SyncEngine />
             <RootNavigator />
-          </AuthProvider>
+          </SessionProvider>
         </ConnectivityProvider>
       </SafeAreaProvider>
     </ConfigErrorBoundary>

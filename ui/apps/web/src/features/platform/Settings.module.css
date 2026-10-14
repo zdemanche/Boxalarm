@@ -1,0 +1,259 @@
+/* /settings - department configuration. Two grids with the same column template, so the
+   status row lines up with the editors below it: the wide column holds the forms people edit,
+   the narrow one the links, records and export. One column under 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+.layout + .layout {
+  margin-top: var(--bx-space-lg);
+}
+
+/* The status row's two cards share a height. */
+.topRow {
+  align-items: stretch;
+}
+
+.column {
+  display: grid;
+  gap: var(--bx-space-lg);
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Shared card internals ------------------------------------------------------------- */
+
+.lead {
+  margin: 0 0 var(--bx-space-md);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.help {
+  margin: calc(-1 * var(--bx-space-xs)) 0 var(--bx-space-md);
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.form {
+  display: grid;
+  gap: var(--bx-space-md);
+  min-width: 0;
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+/* Save sits at the end of its form, on the right. */
+.formFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--bx-space-sm);
+}
+
+.formFooterSplit {
+  justify-content: space-between;
+}
+
+.message {
+  margin: 0;
+  font-size: 14px;
+}
+
+.messageList {
+  margin: var(--bx-space-xs) 0 0;
+  padding-left: var(--bx-space-lg);
+  font-size: 14px;
+}
+
+.status {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+/* --- Divided rows (links, check-sheet items, export files) ------------------------------ */
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.rows:last-child > .row:last-child {
+  padding-bottom: 0;
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rowTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.rowTitle a {
+  color: inherit;
+}
+
+.rowMeta {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.rowGlyph {
+  flex-shrink: 0;
+  color: var(--bx-fg-faint);
+}
+
+/* --- Cutover status ---------------------------------------------------------------------- */
+
+.statusBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--bx-space-sm);
+}
+
+.statusBlock p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* --- Check sheet ------------------------------------------------------------------------ */
+
+.item {
+  display: block;
+  padding: var(--bx-space-md) 0;
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.itemFieldset {
+  display: grid;
+  gap: var(--bx-space-sm);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* A grid item, not the fieldset's rendered legend, so it lays out like any row heading. */
+.itemLegend {
+  float: left;
+  width: 100%;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  align-items: start;
+}
+
+.itemOptions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--bx-space-xs) var(--bx-space-lg);
+}
+
+.itemOptions > button {
+  margin-left: auto;
+}
+
+.empty {
+  margin: 0;
+  padding: var(--bx-space-md);
+  border: 1px dashed var(--bx-border-decorative);
+  border-radius: var(--bx-radius-md);
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+/* --- Records retention -------------------------------------------------------------------- */
+
+.subsection {
+  margin-top: var(--bx-space-lg);
+  padding-top: var(--bx-space-md);
+  border-top: 1px solid var(--bx-border-decorative);
+}
+
+.subheading {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--bx-fg);
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bx-space-xs);
+  list-style: none;
+  margin: var(--bx-space-sm) 0 0;
+  padding: 0;
+}
+
+.badges li {
+  font-family: var(--bx-font-mono);
+}
+
+.dangerRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  margin-top: var(--bx-space-sm);
+}
+
+.feedback {
+  display: grid;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
+.feedback:empty {
+  display: none;
+}

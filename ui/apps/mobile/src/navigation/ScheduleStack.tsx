@@ -3,6 +3,8 @@ import { AvailabilityScreen } from '../screens/schedule/AvailabilityScreen';
 import { ShiftBoardScreen } from '../screens/schedule/ShiftBoardScreen';
 import { ShiftDetailScreen } from '../screens/schedule/ShiftDetailScreen';
 import { TrainingEventsScreen } from '../screens/schedule/TrainingEventsScreen';
+import { useTheme } from '../components/ui/theme';
+import { stackScreenOptions } from './stackScreenOptions';
 
 // Shift board, shift detail/claim, availability, training events - architecture.md §7.2
 // ScheduleStack.
@@ -16,8 +18,9 @@ export type ScheduleStackParamList = {
 const Stack = createNativeStackNavigator<ScheduleStackParamList>();
 
 export function ScheduleStack() {
+  const theme = useTheme();
   return (
-    <Stack.Navigator>
+    <Stack.Navigator screenOptions={stackScreenOptions(theme)}>
       <Stack.Screen
         name="ShiftBoard"
         component={ShiftBoardScreen}

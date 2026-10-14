@@ -1,0 +1,59 @@
+.section + .section {
+  margin-top: var(--bx-space-lg);
+}
+
+.heading {
+  margin: 0 0 var(--bx-space-xs);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bx-fg-muted);
+}
+
+/* Divided rows: the unit and what it needs on the left, its one action on the right. */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: 12px 0;
+  border-top: 1px solid var(--bx-border-decorative);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.item:first-child {
+  border-top: none;
+  padding-top: var(--bx-space-xs);
+}
+
+.item:last-child {
+  padding-bottom: 0;
+}
+
+.item > span {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.item a {
+  font-weight: 600;
+}
+
+.message {
+  margin: 0;
+  color: var(--bx-fg-muted);
+  font-size: 14px;
+}
+
+.message + .message,
+.message + .list,
+.list + .message {
+  margin-top: var(--bx-space-xs);
+}

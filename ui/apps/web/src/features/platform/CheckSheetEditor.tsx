@@ -4,8 +4,10 @@ import { useAuth } from '../../auth/AuthContext';
 import { ApiError, problemFieldErrors, type ProblemFieldError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Checkbox, Skeleton, TextInput } from '../../components/ui';
+import { Plus } from '../../components/ui/icons';
 import { getConfig, putConfig } from './api';
 import type { ConfigResponse } from './types';
+import styles from './Settings.module.css';
 
 /** One row of the department's default check sheet (platform config CHECKLIST_DEFAULTS). */
 export interface CheckSheetItem {
@@ -152,8 +154,8 @@ export function CheckSheetEditor() {
   }
 
   return (
-    <Card title="Check sheet" style={{ marginTop: 'var(--bx-space-xl)' }}>
-      <p>
+    <Card title="Check sheet">
+      <p className={styles.lead}>
         The truck check for any unit that has no check sheet of its own. Mark an item critical when
         it must be looked at on its own every time (brakes, SCBA pressure): the app never includes
         it in &ldquo;Mark the other items OK&rdquo;.
@@ -165,82 +167,62 @@ export function CheckSheetEditor() {
           <p role="alert">Unable to load the check sheet.</p>
         </ApiForbiddenGate>
       ) : (
-        <form
-          aria-label="Check sheet"
-          onSubmit={handleSubmit}
-          style={{ display: 'grid', gap: 'var(--bx-space-md)', maxWidth: 720 }}
-        >
-          {items.length === 0 ? <p>No items yet. Add the first one.</p> : null}
-          <ol style={{ display: 'grid', gap: 'var(--bx-space-md)', paddingLeft: 0, margin: 0 }}>
+        <form aria-label="Check sheet" onSubmit={handleSubmit} className={styles.form}>
+          {items.length === 0 ? (
+            <p className={styles.empty}>No items yet. Add the first one.</p>
+          ) : null}
+          <ol className={styles.rows}>
             {items.map((item, index) => (
-              <li
-                key={index}
-                style={{
-                  listStyle: 'none',
-                  display: 'grid',
-                  gap: 'var(--bx-space-sm)',
-                  paddingBottom: 'var(--bx-space-md)',
-                  borderBottom: '1px solid var(--bx-border-decorative)',
-                }}
-              >
-                <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 8 }}>
-                  <legend style={{ fontWeight: 600 }}>
+              <li key={index} className={styles.item}>
+                <fieldset className={styles.itemFieldset}>
+                  <legend className={styles.itemLegend}>
                     Item {index + 1}
                     {item.label ? `: ${item.label}` : ''}
                   </legend>
-                  <TextInput
-                    label="What to check"
-                    value={item.label}
-                    onChange={(e) => update(index, { label: e.target.value })}
-                  />
-                  <TextInput
-                    label="Code"
-                    optional
-                    help="Leave blank to make one from the name. Changing it later starts a new history for the item."
-                    value={item.code}
-                    error={codeErrors[index]}
-                    onChange={(e) => update(index, { code: e.target.value })}
-                  />
-                  <Checkbox
-                    label="Needs a photo"
-                    checked={item.requiresPhoto}
-                    onCheckedChange={(checked) => update(index, { requiresPhoto: checked })}
-                  />
-                  <Checkbox
-                    label="Critical — must be answered on its own"
-                    checked={item.critical}
-                    onCheckedChange={(checked) => update(index, { critical: checked })}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    aria-label={`Remove item ${index + 1}${item.label ? `, ${item.label}` : ''}`}
-                    onClick={() => {
-                      setSaved(false);
-                      setItems((current) => current.filter((_, i) => i !== index));
-                    }}
-                    style={{ width: 'fit-content' }}
-                  >
-                    Remove
-                  </Button>
+                  <div className={styles.fieldGrid}>
+                    <TextInput
+                      label="What to check"
+                      value={item.label}
+                      onChange={(e) => update(index, { label: e.target.value })}
+                    />
+                    <TextInput
+                      label="Code"
+                      optional
+                      help="Leave blank to make one from the name. Changing it later starts a new history for the item."
+                      value={item.code}
+                      error={codeErrors[index]}
+                      onChange={(e) => update(index, { code: e.target.value })}
+                      style={{ fontFamily: 'var(--bx-font-mono)' }}
+                    />
+                  </div>
+                  <div className={styles.itemOptions}>
+                    <Checkbox
+                      label="Needs a photo"
+                      checked={item.requiresPhoto}
+                      onCheckedChange={(checked) => update(index, { requiresPhoto: checked })}
+                    />
+                    <Checkbox
+                      label="Critical — must be answered on its own"
+                      checked={item.critical}
+                      onCheckedChange={(checked) => update(index, { critical: checked })}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      aria-label={`Remove item ${index + 1}${item.label ? `, ${item.label}` : ''}`}
+                      onClick={() => {
+                        setSaved(false);
+                        setItems((current) => current.filter((_, i) => i !== index));
+                      }}
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </fieldset>
               </li>
             ))}
           </ol>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => {
-              setSaved(false);
-              setItems((current) => [
-                ...current,
-                { code: '', label: '', requiresPhoto: false, critical: false },
-              ]);
-            }}
-            style={{ width: 'fit-content' }}
-          >
-            Add item
-          </Button>
           {forbiddenError ? (
             <ApiForbiddenGate error={forbiddenError} embedded>
               <p role="alert">Could not save the check sheet.</p>
@@ -248,9 +230,9 @@ export function CheckSheetEditor() {
           ) : null}
           {formError ? (
             <div role="alert">
-              <p>{formError}</p>
+              <p className={styles.message}>{formError}</p>
               {fieldErrors.length > 0 ? (
-                <ul>
+                <ul className={styles.messageList}>
                   {fieldErrors.map((fieldError) => (
                     <li key={`${fieldError.field}:${fieldError.message}`}>
                       <code>{fieldError.field}</code> {fieldError.message}
@@ -260,10 +242,30 @@ export function CheckSheetEditor() {
               ) : null}
             </div>
           ) : null}
-          <p role="status">{saved ? 'Check sheet saved.' : ''}</p>
-          <Button type="submit" loading={saveMutation.isPending} style={{ width: 'fit-content' }}>
-            Save check sheet
-          </Button>
+          <div className={[styles.formFooter, styles.formFooterSplit].join(' ')}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setSaved(false);
+                setItems((current) => [
+                  ...current,
+                  { code: '', label: '', requiresPhoto: false, critical: false },
+                ]);
+              }}
+            >
+              <Plus size={16} aria-hidden="true" />
+              Add item
+            </Button>
+            <div className={styles.formFooter}>
+              <p role="status" className={styles.status}>
+                {saved ? 'Check sheet saved.' : ''}
+              </p>
+              <Button type="submit" variant="secondary" loading={saveMutation.isPending}>
+                Save check sheet
+              </Button>
+            </div>
+          </div>
         </form>
       )}
     </Card>

@@ -1,9 +1,9 @@
 import {
-  elevation,
-  palette,
-  radius,
+  radiusScale,
   spacing,
-  touchTarget,
+  statusPalette,
+  targetSize,
+  typeScale,
   typography,
 } from '@boxalarm/design-tokens';
 import { useEffect, useRef, useState, type ElementRef } from 'react';
@@ -13,16 +13,19 @@ import {
   Linking,
   Text,
   TouchableOpacity,
-  useColorScheme,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../auth/AuthContext';
 import { buildForgotPasswordUrl } from '../auth/config';
+import { Button, useTheme } from '../components/ui';
 
+/** The first screen a member sees, and the one place the product is named: the dark frame
+ * (header and tab bar colours) in both palettes, the wordmark, and one amber action within thumb
+ * reach. It sits under no stack header, so it owns every safe-area edge itself. */
 export function SignInScreen() {
   const { signIn } = useAuth();
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const { shell } = useTheme();
   const [error, setError] = useState<string | null>(null);
   const errorRef = useRef<ElementRef<typeof Text>>(null);
 
@@ -60,92 +63,86 @@ export function SignInScreen() {
   };
 
   return (
-    <SafeAreaView
-      style={{
-        flex: 1,
-        backgroundColor: tokens.background,
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: spacing.lg,
-      }}
-    >
-      <Text
-        accessibilityRole="header"
+    <SafeAreaView style={{ flex: 1, backgroundColor: shell.bg }}>
+      <View
         style={{
-          color: tokens.foreground,
-          fontSize: typography.size.display,
-          fontWeight: '700',
-          marginBottom: spacing.xs,
-        }}
-      >
-        Boxalarm
-      </Text>
-      <Text
-        style={{
-          color: tokens.foreground,
-          opacity: 0.7,
-          fontSize: typography.size.base,
-          marginBottom: spacing.xl,
-        }}
-      >
-        Nichols Fire Department
-      </Text>
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel="Sign in"
-        onPress={handleSignIn}
-        style={{
-          minWidth: 240,
-          minHeight: touchTarget.baseline.ios,
+          flex: 1,
           alignItems: 'center',
           justifyContent: 'center',
-          paddingHorizontal: spacing.xl,
-          paddingVertical: spacing.md,
-          backgroundColor: tokens.accent,
-          borderRadius: radius.default,
-          shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: elevation.level1.shadowOpacity,
-          shadowRadius: elevation.level1.shadowRadius,
-          elevation: elevation.level1.androidElevation,
-        }}
-      >
-        <Text style={{ color: tokens.background, fontSize: typography.size.lg, fontWeight: '600' }}>
-          Sign in
-        </Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        accessibilityRole="button"
-        accessibilityLabel="Forgot password"
-        onPress={handleForgotPassword}
-        style={{
-          minWidth: 240,
-          minHeight: touchTarget.baseline.ios,
-          alignItems: 'center',
-          justifyContent: 'center',
-          marginTop: spacing.md,
-          paddingHorizontal: spacing.xl,
-          paddingVertical: spacing.md,
-          borderRadius: radius.default,
-          borderWidth: 1,
-          borderColor: tokens.foreground,
+          paddingHorizontal: spacing.lg,
         }}
       >
         <Text
-          style={{ color: tokens.foreground, fontSize: typography.size.base, fontWeight: '500' }}
+          accessibilityRole="header"
+          style={{
+            color: shell.fg,
+            fontSize: typography.size.display,
+            fontWeight: '800',
+            letterSpacing: -1,
+          }}
         >
-          Forgot password
+          Boxalarm
         </Text>
-      </TouchableOpacity>
-      {error && (
-        <Text
-          ref={errorRef}
-          accessible
-          style={{ color: tokens.error, fontSize: typography.size.sm, marginTop: spacing.md }}
+        <View
+          accessible={false}
+          style={{
+            width: spacing.xl,
+            height: spacing.xs,
+            borderRadius: radiusScale.pill,
+            backgroundColor: shell.accent,
+            marginVertical: spacing.md,
+          }}
+        />
+        <Text style={{ color: shell.fgMuted, fontSize: typeScale.heading.size }}>
+          Nichols Fire Department
+        </Text>
+      </View>
+      <View
+        style={{
+          width: '100%',
+          maxWidth: 480,
+          alignSelf: 'center',
+          gap: spacing.sm,
+          paddingHorizontal: spacing.lg,
+          paddingBottom: spacing.xl,
+        }}
+      >
+        <Button label="Sign in" accessibilityLabel="Sign in" fullWidth onPress={handleSignIn} />
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Forgot password"
+          onPress={handleForgotPassword}
+          style={{
+            minHeight: targetSize.field,
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingHorizontal: spacing.lg,
+            borderRadius: radiusScale.lg,
+            borderWidth: 1,
+            borderColor: shell.border,
+            backgroundColor: shell.bgRaised,
+          }}
         >
-          {error}
-        </Text>
-      )}
+          <Text style={{ color: shell.fg, fontSize: typeScale.label.size, fontWeight: '700' }}>
+            Forgot password
+          </Text>
+        </TouchableOpacity>
+        {error && (
+          <Text
+            ref={errorRef}
+            accessible
+            style={{
+              // The frame is dark in both palettes, so the error takes the dark palette's red.
+              color: statusPalette.cab.danger,
+              fontSize: typeScale.body.size,
+              marginTop: spacing.sm,
+              textAlign: 'center',
+            }}
+          >
+            {error}
+          </Text>
+        )}
+      </View>
     </SafeAreaView>
   );
 }

@@ -1,0 +1,60 @@
+/* /audit-log: the lookup on the left, the record's history beside it; one column under 1024px. */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(0, 2fr);
+  align-items: start;
+  gap: var(--bx-space-lg);
+}
+
+@media (max-width: 1023px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.form {
+  display: grid;
+  gap: var(--bx-space-md);
+}
+
+.formFooter {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.validation {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-status-danger);
+}
+
+.lead {
+  margin: 0;
+  font-size: 14px;
+  color: var(--bx-fg-muted);
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.diffList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--bx-font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.diffList li + li {
+  margin-top: 2px;
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--bx-space-md);
+}

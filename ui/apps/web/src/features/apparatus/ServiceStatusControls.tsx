@@ -4,8 +4,8 @@ import { useAuth } from '../../auth/AuthContext';
 import { canUpdateServiceStatus } from '../../auth/roles';
 import { Button, Card, StatusChip, TextInput } from '../../components/ui';
 import { setServiceStatus } from './api';
-import { serviceStatusRole } from './StatusBadge';
 import type { ApparatusDetail } from './types';
+import styles from './Apparatus.module.css';
 
 function formatElapsed(elapsedSeconds: number): string {
   const days = Math.floor(elapsedSeconds / 86400);
@@ -13,6 +13,10 @@ function formatElapsed(elapsedSeconds: number): string {
   return `${days} day${days === 1 ? '' : 's'}`;
 }
 
+/**
+ * The unit's service-status controls. The status chip itself sits in the page header beside the
+ * unit's name (and announces the change); this card says why it is out and changes it.
+ */
 export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -34,19 +38,20 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
 
   return (
     <Card title="Service status">
-      <p role="status">
-        <StatusChip status={serviceStatusRole(unit.status)}>
-          {unit.status === 'IN_SERVICE' ? 'In service' : 'Out of service'}
-        </StatusChip>
-      </p>
       {unit.status === 'OUT_OF_SERVICE' && unit.outOfService ? (
-        <p>
+        <p className={styles.statusReason}>
           {unit.outOfService.reason} since {formatElapsed(unit.outOfService.elapsedSeconds)} ago
         </p>
       ) : null}
+      {unit.failedTests.length > 0 ? (
+        <div role="alert" className={styles.failedTests}>
+          <StatusChip status="danger">Failed tests</StatusChip>
+          {unit.failedTests.map((t) => t.testType).join(', ')}
+        </div>
+      ) : null}
 
       {!canControl ? (
-        <p>
+        <p className={styles.message}>
           Changing service status is limited to officers, the apparatus officer, the chief and the
           administrator.
         </p>
@@ -61,7 +66,7 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
             }
             mutation.mutate({ status: 'OUT_OF_SERVICE', reason: reason.trim() });
           }}
-          style={{ display: 'grid', gap: 'var(--bx-space-sm)', maxWidth: 480, marginTop: 16 }}
+          className={styles.formStack}
         >
           <TextInput
             label="Reason"
@@ -70,18 +75,28 @@ export function ServiceStatusControls({ unit }: { unit: ApparatusDetail }) {
             required
             error={formError ?? undefined}
           />
-          <Button type="submit" style={{ maxWidth: 240 }}>
-            Place out of service
-          </Button>
+          <div className={styles.formActions}>
+            <Button type="submit" variant="secondary" loading={mutation.isPending}>
+              Place out of service
+            </Button>
+          </div>
         </form>
       ) : (
-        <Button
-          type="button"
-          onClick={() => mutation.mutate({ status: 'IN_SERVICE' })}
-          style={{ marginTop: 16 }}
-        >
-          Return to service
-        </Button>
+        <>
+          {formError ? (
+            <p role="alert" className={styles.error} style={{ marginBottom: 'var(--bx-space-sm)' }}>
+              {formError}
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            variant="secondary"
+            loading={mutation.isPending}
+            onClick={() => mutation.mutate({ status: 'IN_SERVICE' })}
+          >
+            Return to service
+          </Button>
+        </>
       )}
     </Card>
   );

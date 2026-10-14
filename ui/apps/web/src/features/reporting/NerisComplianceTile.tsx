@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { Button, Card, Skeleton, Stat } from '../../components/ui';
+import { Button, Card, Skeleton, StatusChip } from '../../components/ui';
 import { ApiError } from '../../lib/apiClient';
 import { canAccessPath } from '../../routing/routeTable';
 import { getNerisCompliance } from './api';
@@ -23,19 +23,47 @@ function formatAge(hours: number): string {
 
 function DraftItem({ draft, canOpen }: { draft: NerisOpenDraft; canOpen: boolean }) {
   const label = `Incident ${draft.id}`;
+  const overdue = draft.ageHours > DUE_HOURS;
   return (
     <li className={styles.item}>
-      {canOpen ? (
-        <Link to={`/incidents/${encodeURIComponent(draft.id)}`}>{label}</Link>
-      ) : (
-        <strong>{label}</strong>
-      )}
-      <span className={styles.meta}>
-        {' · '}
-        {formatAge(draft.ageHours)} · {draft.ownerName?.trim() || 'Unknown member'}
-        {draft.locked ? ' · locked' : ''}
+      <span className={styles.itemBody}>
+        {canOpen ? (
+          <Link to={`/incidents/${encodeURIComponent(draft.id)}`} className={styles.itemTitle}>
+            {label}
+          </Link>
+        ) : (
+          <strong className={styles.itemTitle}>{label}</strong>
+        )}
+        <span className={styles.meta}>
+          {formatAge(draft.ageHours)} · {draft.ownerName?.trim() || 'Unknown member'}
+          {draft.locked ? ' · locked' : ''}
+        </span>
       </span>
+      {overdue ? <StatusChip status="danger">Past 72 h</StatusChip> : null}
     </li>
+  );
+}
+
+/** A figure inside the card: a flat tinted panel, not a card nested in a card. */
+function Metric({
+  label,
+  value,
+  hint,
+  alarm = false,
+}: {
+  label: string;
+  value: ReactNode;
+  hint: ReactNode;
+  alarm?: boolean;
+}) {
+  return (
+    <div className={styles.metric}>
+      <span className={styles.metricLabel}>{label}</span>
+      <span className={[styles.metricValue, alarm ? styles.metricValueAlarm : ''].join(' ')}>
+        {value}
+      </span>
+      {hint ? <span className={styles.metricHint}>{hint}</span> : null}
+    </div>
   );
 }
 
@@ -43,7 +71,7 @@ function DraftItem({ draft, canOpen }: { draft: NerisOpenDraft; canOpen: boolean
  * Chief-dashboard tile for GET reporting/neris-compliance: on-time submission rate, rejection
  * rate and the oldest open drafts. A failed read never renders as a healthy zero.
  */
-export function NerisComplianceTile() {
+export function NerisComplianceTile({ className }: { className?: string } = {}) {
   const auth = useAuth();
   const query = useQuery({
     queryKey: ['reporting', 'neris-compliance'],
@@ -73,9 +101,9 @@ export function NerisComplianceTile() {
     const drafts = data.openDrafts;
     const draftCount = drafts.length >= DRAFTS_CAP ? `${DRAFTS_CAP}+` : String(drafts.length);
     body = (
-      <>
-        <div className={styles.statGrid}>
-          <Stat
+      <div className={styles.layout}>
+        <div className={styles.metrics}>
+          <Metric
             label="Submitted within 72 h"
             value={data.submittedWithin72hPct === null ? '—' : `${data.submittedWithin72hPct}%`}
             hint={
@@ -84,7 +112,7 @@ export function NerisComplianceTile() {
                 : `Of ${data.eligibleCount} reports due in the last ${data.windowDays} days.`
             }
           />
-          <Stat
+          <Metric
             label="Rejection rate"
             value={data.rejectionRate === null ? '—' : `${data.rejectionRate}%`}
             hint={
@@ -98,27 +126,38 @@ export function NerisComplianceTile() {
             }
             alarm={(data.rejectionRate ?? 0) > 0}
           />
-          <Stat
+          <Metric
             label="Open drafts"
             value={draftCount}
+            hint={
+              drafts.some((draft) => draft.ageHours > DUE_HOURS)
+                ? 'Some are past the 72-hour NERIS window.'
+                : null
+            }
             alarm={drafts.some((draft) => draft.ageHours > DUE_HOURS)}
           />
         </div>
-        {drafts.length === 0 ? (
-          <p className={styles.message}>No open incident drafts.</p>
-        ) : (
-          <>
-            <p className={styles.message}>Oldest open drafts:</p>
-            <ul className={styles.list} aria-label="Oldest open drafts">
-              {drafts.slice(0, DRAFTS_SHOWN).map((draft) => (
-                <DraftItem key={draft.id} draft={draft} canOpen={canOpen} />
-              ))}
-            </ul>
-          </>
-        )}
-      </>
+        <div className={styles.drafts}>
+          {drafts.length === 0 ? (
+            <p className={styles.message}>No open incident drafts.</p>
+          ) : (
+            <>
+              <h3 className={styles.subheading}>Oldest open drafts</h3>
+              <ul className={styles.list} aria-label="Oldest open drafts">
+                {drafts.slice(0, DRAFTS_SHOWN).map((draft) => (
+                  <DraftItem key={draft.id} draft={draft} canOpen={canOpen} />
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </div>
     );
   }
 
-  return <Card title="NERIS compliance">{body}</Card>;
+  return (
+    <Card title="NERIS compliance" className={className}>
+      {body}
+    </Card>
+  );
 }

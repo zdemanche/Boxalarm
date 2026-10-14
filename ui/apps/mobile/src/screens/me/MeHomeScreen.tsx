@@ -1,39 +1,28 @@
-import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
+import { spacing, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Alert, Text, TouchableOpacity, View } from 'react-native';
-import { Button, Screen, useTheme, type SurfaceTheme } from '../../components/ui';
+import { AccessibilityInfo, Alert, Text, View } from 'react-native';
+import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { retryPendingUnregister, useAuth, type SignOutResult } from '../../auth/AuthContext';
+import { useAlertReadiness } from '../../features/alerts/useAlertReadiness';
 import { useMeRepository } from '../../features/me/apiMeRepository';
 import { MarkOffList } from '../../features/schedule/MarkOffList';
 import type { LosapTotal, MemberProfile, Qualification } from '../../features/me/types';
 import * as syncManager from '../../sync/syncManager';
+import { InfoRow, NavRow, Rows } from './MeRows';
 
-function NavRow({
-  label,
-  onPress,
-  theme,
-}: {
-  label: string;
-  onPress: () => void;
-  theme: SurfaceTheme;
-}) {
-  return (
-    <TouchableOpacity
-      accessibilityRole="button"
-      onPress={onPress}
-      style={{
-        minHeight: targetSize.field,
-        justifyContent: 'center',
-        paddingHorizontal: spacing.lg,
-        paddingVertical: spacing.md,
-        borderBottomWidth: 1,
-        borderBottomColor: theme.borderDecorative,
-      }}
-    >
-      <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>{label}</Text>
-    </TouchableOpacity>
-  );
+/**
+ * The header's status: whether this phone can wake the member for a page - the same device checks
+ * that raise the red readiness banner, so the two never disagree. "Checking" until they have run.
+ */
+function readinessChip(
+  items: readonly unknown[] | null,
+  blocking: readonly unknown[],
+): { status: StatusRole; label: string } {
+  if (items === null) return { status: 'neutral', label: 'Checking this phone' };
+  return blocking.length > 0
+    ? { status: 'danger', label: 'Phone may not wake you' }
+    : { status: 'ok', label: 'Phone ready for pages' };
 }
 
 /**
@@ -128,6 +117,7 @@ export function MeHomeScreen() {
   const navigation = useNavigation();
   const theme = useTheme();
   const repository = useMeRepository();
+  const readiness = useAlertReadiness();
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [quals, setQuals] = useState<Qualification[]>([]);
   const [losap, setLosap] = useState<LosapTotal | null>(null);
@@ -179,116 +169,169 @@ export function MeHomeScreen() {
     };
   }, [repository]);
 
+  const go = (screen: string) => () => navigation.navigate(screen as never);
+  const chip = readinessChip(readiness.items, readiness.blocking);
+  const initials = profile ? `${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}` : '';
+
   return (
     <Screen>
-      <View style={{ alignItems: 'center', marginBottom: spacing.md }}>
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
-        >
-          {profile ? `${profile.firstName} ${profile.lastName}` : ''}
-        </Text>
-        {profile && (
-          <Text
+      <Card>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
+          <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
             style={{
-              color: theme.fgMuted,
-              fontSize: typeScale.body.size,
-              marginTop: spacing.xs,
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: theme.accentSubtle,
             }}
           >
-            {profile.rank}
-          </Text>
-        )}
-      </View>
-      {/* F2.5 / design.md F-06: marking off is the member's core self-service task, so it is the
-          first action on Me - it was unreachable from anywhere in the app. */}
-      <View style={{ marginBottom: spacing.md }}>
-        <Button
-          label="Mark unavailable"
-          size="alert"
-          fullWidth
-          accessibilityLabel="Mark unavailable. Choose how long you won't be alerted."
-          onPress={() => navigation.navigate('Availability' as never)}
-        />
-      </View>
-      <MarkOffList />
-      <NavRow
-        label="Edit profile"
-        theme={theme}
-        onPress={() => navigation.navigate('ProfileEdit' as never)}
-      />
-      <View
-        style={{
-          paddingHorizontal: spacing.lg,
-          paddingVertical: spacing.md,
-          borderBottomWidth: 1,
-          borderBottomColor: theme.borderDecorative,
-        }}
-      >
-        <Text
-          accessibilityRole="header"
-          style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
-        >
-          My qualifications
+            <Text
+              style={{
+                color: theme.onAccentSubtle,
+                fontSize: typeScale.title.size,
+                fontWeight: '700',
+              }}
+            >
+              {initials}
+            </Text>
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text
+              accessibilityRole="header"
+              style={{ color: theme.fg, fontSize: typeScale.title.size, fontWeight: '700' }}
+            >
+              {profile ? `${profile.firstName} ${profile.lastName}` : ''}
+            </Text>
+            {profile && (
+              <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                {profile.rank}
+              </Text>
+            )}
+          </View>
+        </View>
+        <StatusChip status={chip.status} label={chip.label} />
+        {/* F2.5 / design.md F-06: marking off is the member's core self-service task, so it is the
+            first action on Me - it was unreachable from anywhere in the app. */}
+        <View style={{ marginTop: spacing.sm }}>
+          <Button
+            label="Mark unavailable"
+            size="alert"
+            fullWidth
+            accessibilityLabel="Mark unavailable. Choose how long you won't be alerted."
+            onPress={go('Availability')}
+          />
+        </View>
+        <MarkOffList />
+      </Card>
+
+      {/* Second on Me, not last: the self-test is how a member proves this phone will wake them. */}
+      <Card title="Notifications & phone readiness">
+        <Rows>
+          <NavRow
+            title="Test my alert path"
+            detail="Send a test page and check this phone rings"
+            onPress={go('SelfTest')}
+          />
+          <NavRow
+            title="Why didn't I get the page?"
+            detail="Delivery timeline for your recent pages"
+            onPress={go('Diagnostics')}
+          />
+          <NavRow
+            title="Notifications"
+            detail="Reminders about certifications, PPE and apparatus"
+            onPress={go('Inbox')}
+          />
+          <NavRow
+            title="Notification preferences"
+            detail="Mute reminders. Dispatch alerts can't be muted."
+            onPress={go('NotificationPreferences')}
+          />
+        </Rows>
+      </Card>
+
+      <Card title="Profile & qualifications">
+        <Rows>
+          <NavRow
+            title="Edit profile"
+            detail={profile ? (profile.phone ?? 'No phone number on file') : undefined}
+            onPress={go('ProfileEdit')}
+          />
+          <View style={{ paddingVertical: spacing.sm }}>
+            <Text
+              accessibilityRole="header"
+              style={{ color: theme.fgMuted, fontSize: typeScale.label.size, fontWeight: '600' }}
+            >
+              My qualifications
+            </Text>
+            {quals.map((qual) => (
+              <InfoRow
+                key={qual.qualCode}
+                title={qual.qualCode}
+                accessibilityLabel={`${qual.qualCode} — ${
+                  qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'
+                }`}
+                trailing={
+                  <StatusChip
+                    status={qual.currentlyEligible ? 'ok' : 'warning'}
+                    label={qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
+                  />
+                }
+              />
+            ))}
+          </View>
+          <NavRow
+            title="Certifications"
+            detail="What you hold and when it expires"
+            onPress={go('Certifications')}
+          />
+        </Rows>
+      </Card>
+
+      <Card title="Training & LOSAP">
+        <Rows>
+          <NavRow
+            title={losap ? 'Attendance & LOSAP' : 'Attendance'}
+            detail={losap ? `${losap.totalPoints} pts this year` : undefined}
+            accessibilityLabel={
+              losap ? `Attendance & LOSAP (${losap.totalPoints} pts this year)` : 'Attendance'
+            }
+            onPress={go('Attendance')}
+          />
+          <NavRow
+            title="Transcript"
+            detail="Certifications and training hours"
+            onPress={go('Transcript')}
+          />
+        </Rows>
+      </Card>
+
+      <Card title="My gear">
+        <Rows>
+          <NavRow title="My equipment" onPress={go('MyEquipment')} />
+          <NavRow title="My PPE" onPress={go('MyPpe')} />
+        </Rows>
+      </Card>
+
+      <Card>
+        <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+          Signing out stops Boxalarm pages on this phone.
         </Text>
-        {quals.map((qual) => (
-          <Text key={qual.qualCode} style={{ color: theme.fg, marginTop: spacing.xs }}>
-            {qual.qualCode} — {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
-          </Text>
-        ))}
-      </View>
-      <NavRow
-        label={losap ? `Attendance & LOSAP (${losap.totalPoints} pts this year)` : 'Attendance'}
-        theme={theme}
-        onPress={() => navigation.navigate('Attendance' as never)}
-      />
-      <NavRow
-        label="Certifications"
-        theme={theme}
-        onPress={() => navigation.navigate('Certifications' as never)}
-      />
-      <NavRow
-        label="My equipment"
-        theme={theme}
-        onPress={() => navigation.navigate('MyEquipment' as never)}
-      />
-      <NavRow label="My PPE" theme={theme} onPress={() => navigation.navigate('MyPpe' as never)} />
-      <NavRow
-        label="Transcript"
-        theme={theme}
-        onPress={() => navigation.navigate('Transcript' as never)}
-      />
-      <NavRow
-        label="Notifications"
-        theme={theme}
-        onPress={() => navigation.navigate('Inbox' as never)}
-      />
-      <NavRow
-        label="Notification preferences"
-        theme={theme}
-        onPress={() => navigation.navigate('NotificationPreferences' as never)}
-      />
-      <NavRow
-        label="Test my alert path"
-        theme={theme}
-        onPress={() => navigation.navigate('SelfTest' as never)}
-      />
-      <NavRow
-        label="Why didn't I get the page?"
-        theme={theme}
-        onPress={() => navigation.navigate('Diagnostics' as never)}
-      />
-      <View style={{ paddingTop: spacing.lg }}>
         <Button
           label={signingOut ? 'Signing out…' : 'Sign out'}
           variant="danger"
+          fullWidth
           accessibilityLabel={
             signingOut ? 'Signing out.' : 'Sign out. Boxalarm pages stop on this phone.'
           }
           disabled={signingOut}
           onPress={() => void confirmSignOut(signOutWithProgress, profile?.phone, memberId)}
         />
-      </View>
+      </Card>
     </Screen>
   );
 }

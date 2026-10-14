@@ -2,6 +2,10 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* A <select> sizes to its longest option; without these a long option widened the whole form
+     past a phone's width, where AppShell's overflow-x: hidden clipped it out of reach. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .label {
@@ -16,12 +20,13 @@
 }
 
 .control {
+  max-width: 100%;
   min-height: var(--bx-target-office);
   padding: 0 var(--bx-space-sm);
   font-size: 14px;
   font-family: var(--bx-font-ui);
   color: var(--bx-fg);
-  background: var(--bx-surface-raised);
+  background: var(--bx-card);
   border: 1px solid var(--bx-border);
   border-radius: var(--bx-radius-md);
 }
@@ -62,18 +67,19 @@ textarea.control {
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  border: 1px solid var(--bx-border-strong);
+  border: 1px solid var(--bx-border);
   border-radius: var(--bx-radius-sm);
-  background: var(--bx-surface-raised);
+  background: var(--bx-card);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
 .checkboxRoot[data-state='checked'] {
-  background: var(--bx-fg);
-  border-color: var(--bx-fg);
-  color: var(--bx-bg);
+  background: var(--bx-accent-fill);
+  /* The edge, not the bright fill, carries the 3:1 boundary of the checked box. */
+  border-color: var(--bx-accent-indicator);
+  color: var(--bx-on-accent-fill);
 }
 
 .checkboxRoot:focus-visible {

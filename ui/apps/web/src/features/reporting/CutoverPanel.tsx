@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { canRecordCutoverDecision } from '../../auth/roles';
-import { Button, Card, ConfirmDialog, DataTable, Stat, StatusChip } from '../../components/ui';
+import { Button, Card, ConfirmDialog, DataTable, StatusChip } from '../../components/ui';
 import { getCutoverDecision, recordCutoverDecision } from './api';
 import {
   formatDate,
@@ -12,7 +12,7 @@ import {
   isoDateToEpochSeconds,
   todayIsoDate,
 } from './format';
-import { QueryState, useDateRange } from './ReportingPage';
+import { Metric, QueryState, ReportToolbar, useDateRange } from './ReportingPage';
 import type { CutoverDecisionStatus } from './types';
 import styles from './ReportingPage.module.css';
 
@@ -53,21 +53,21 @@ export function CutoverPanel() {
   });
 
   return (
-    <>
-      {range.fields}
+    <div className={styles.panel}>
+      <ReportToolbar start={range.fields} />
       {range.valid ? (
         <QueryState query={query}>
           {(view) => (
-            <div className={styles.sections}>
+            <>
               <Card title="Cutover decision">
-                <div className={styles.statGrid}>
-                  <Stat label="Decision" value={decisionLabel(view.decision)} />
-                  <Stat
+                <div className={styles.metrics}>
+                  <Metric label="Decision" value={decisionLabel(view.decision)} />
+                  <Metric
                     label="Decided by"
                     value={view.decider ?? '—'}
                     hint={view.decidedAt ? formatDate(view.decidedAt) : undefined}
                   />
-                  <Stat
+                  <Metric
                     label="Retained paging"
                     value={
                       <StatusChip status={view.retainedPagingRequired ? 'warning' : 'ok'}>
@@ -76,7 +76,7 @@ export function CutoverPanel() {
                     }
                   />
                 </div>
-                <p className={styles.meta}>
+                <p className={styles.prose}>
                   Radio tone-out paging is a department operational decision made outside this app
                   (N1.9) — this page records only whether Boxalarm&apos;s own delivery data has been
                   accepted as meeting the department&apos;s threshold. Accepting this decision does
@@ -110,25 +110,25 @@ export function CutoverPanel() {
               </Card>
               {view.deliveryBaseline ? (
                 <Card title="Delivery-rate baseline">
-                  <div className={styles.statGrid}>
-                    <Stat
+                  <div className={styles.metrics}>
+                    <Metric
                       label="Delivery rate"
                       value={formatPercent(view.deliveryBaseline.deliveryRate)}
                       alarm={!view.deliveryBaseline.meetsThreshold}
                       hint={`Threshold ${formatPercent(view.deliveryBaseline.threshold)}`}
                     />
-                    <Stat
+                    <Metric
                       label="Missed pages"
                       value={view.deliveryBaseline.missedPageCount}
                       alarm={view.deliveryBaseline.missedPageCount > 0}
                     />
-                    <Stat
+                    <Metric
                       label="Time to first ack (median)"
                       value={formatDuration(view.deliveryBaseline.timeToFirstAckMedianSeconds)}
                       hint={`Average ${formatDuration(view.deliveryBaseline.timeToFirstAckAverageSeconds)}`}
                     />
                   </div>
-                  <div className={styles.sections}>
+                  <div className={styles.cardTable}>
                     <DataTable
                       caption="Delivery rate by member"
                       rowKey={(r) => r.memberId}
@@ -166,7 +166,7 @@ export function CutoverPanel() {
                   </div>
                 </Card>
               ) : null}
-            </div>
+            </>
           )}
         </QueryState>
       ) : null}
@@ -190,6 +190,6 @@ export function CutoverPanel() {
           await mutation.mutateAsync('defer');
         }}
       />
-    </>
+    </div>
   );
 }

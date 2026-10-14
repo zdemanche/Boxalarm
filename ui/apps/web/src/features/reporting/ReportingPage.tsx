@@ -15,8 +15,19 @@ import {
   Tabs,
   TextInput,
 } from '../../components/ui';
-import { ClipboardList, LayoutDashboard } from '../../components/ui/icons';
+import {
+  CalendarClock,
+  CalendarX,
+  ClipboardList,
+  Clock,
+  FileText,
+  GraduationCap,
+  LayoutDashboard,
+  Users,
+  Wrench,
+} from '../../components/ui/icons';
 import { ApiError } from '../../lib/apiClient';
+import { formatCalendarDate, formatElapsed, parseCalendarDate } from '../../lib/dates';
 import { canAccessPath } from '../../routing/routeTable';
 import {
   getDashboard,
@@ -41,6 +52,9 @@ import styles from './ReportingPage.module.css';
 
 const MAX_TREND_RANGE_DAYS = 731;
 
+/** Incident IDs are compared character by character, so they read in mono (design §2.4). */
+const MONO = { fontFamily: 'var(--bx-font-mono)' } as const;
+
 /** Loading → Skeleton; 403 → ForbiddenState; any other error → retryable ApiErrorState. */
 export function QueryState<T>({
   query,
@@ -49,12 +63,23 @@ export function QueryState<T>({
   query: UseQueryResult<T>;
   children: (data: T) => ReactNode;
 }) {
-  if (query.isLoading) return <Skeleton lines={5} />;
+  if (query.isLoading) {
+    return (
+      <Card>
+        <Skeleton lines={5} />
+      </Card>
+    );
+  }
   if (query.error) {
-    if (query.error instanceof ApiError && query.error.problem.status === 403) {
-      return <ForbiddenState problem={query.error.problem} embedded headingLevel="h2" />;
-    }
-    return <ApiErrorState embedded headingLevel="h2" onRetry={() => void query.refetch()} />;
+    return (
+      <Card>
+        {query.error instanceof ApiError && query.error.problem.status === 403 ? (
+          <ForbiddenState problem={query.error.problem} embedded headingLevel="h2" />
+        ) : (
+          <ApiErrorState embedded headingLevel="h2" onRetry={() => void query.refetch()} />
+        )}
+      </Card>
+    );
   }
   if (query.data === undefined) return null;
   return <>{children(query.data)}</>;
@@ -72,6 +97,66 @@ function ExportIfAllowed(props: {
   disabled?: boolean;
 }) {
   return useCanExport() ? <ReportExport {...props} /> : null;
+}
+
+/** The card every tab opens with: the report's period (or freshness) on the left, its export on
+ * the right, and any note about the period underneath. */
+export function ReportToolbar({
+  start,
+  notes,
+  report,
+  params,
+  disabled,
+}: {
+  start: ReactNode;
+  notes?: ReactNode;
+  report?: ReportName;
+  params?: Record<string, string>;
+  disabled?: boolean;
+}) {
+  return (
+    <Card>
+      <div className={styles.toolbar}>
+        <div className={styles.toolbarStart}>{start}</div>
+        {report && params ? (
+          <ExportIfAllowed report={report} params={params} disabled={disabled} />
+        ) : null}
+      </div>
+      {notes ? <div className={styles.toolbarNotes}>{notes}</div> : null}
+    </Card>
+  );
+}
+
+/** A figure inside a card: a flat tinted panel, so cards never nest. */
+export function Metric({
+  label,
+  value,
+  hint,
+  alarm = false,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  alarm?: boolean;
+}) {
+  return (
+    <div className={styles.metric}>
+      <span className={styles.metricLabel}>{label}</span>
+      <span className={[styles.metricValue, alarm ? styles.metricValueAlarm : ''].join(' ')}>
+        {value}
+      </span>
+      {hint ? <span className={styles.metricHint}>{hint}</span> : null}
+    </div>
+  );
+}
+
+/** An empty report, in a card like everything else on the canvas. */
+function EmptyReport(props: Parameters<typeof EmptyState>[0]) {
+  return (
+    <Card>
+      <EmptyState {...props} />
+    </Card>
+  );
 }
 
 /** A from/to date pair, with the from-after-to case flagged on the field. */
@@ -99,9 +184,24 @@ function summaryStat(label: string, summary: TimeSummary) {
     <Stat
       label={`${label} (median)`}
       value={formatDuration(summary.medianSeconds)}
-      hint={`90th percentile ${formatDuration(summary.p90Seconds)} · ${summary.sampleCount} measured, ${summary.excludedCount} missing a timestamp`}
+      hint={summaryHint(summary)}
+      icon={Clock}
     />
   );
+}
+
+function summaryMetric(label: string, summary: TimeSummary) {
+  return (
+    <Metric
+      label={`${label} (median)`}
+      value={formatDuration(summary.medianSeconds)}
+      hint={summaryHint(summary)}
+    />
+  );
+}
+
+function summaryHint(summary: TimeSummary): string {
+  return `90th percentile ${formatDuration(summary.p90Seconds)} · ${summary.sampleCount} measured, ${summary.excludedCount} missing a timestamp`;
 }
 
 function DashboardPanel() {
@@ -111,42 +211,64 @@ function DashboardPanel() {
     queryFn: () => getDashboard(auth),
   });
   const canOpenIncidents = canAccessPath('/incidents/x', auth.roles);
+  const lastUpdated = query.data?.lastUpdated;
 
   return (
-    <>
+    <div className={styles.panel}>
+      <ReportToolbar
+        start={
+          <p className={styles.meta}>
+            {lastUpdated
+              ? `Last updated ${formatDate(lastUpdated)}`
+              : 'Department staffing, apparatus, certification and NERIS status right now.'}
+          </p>
+        }
+        report="dashboard"
+        params={{}}
+      />
       <QueryState query={query}>
         {(view) =>
           view.lastUpdated === null ? (
-            <EmptyState
+            <EmptyReport
               icon={LayoutDashboard}
               title="No dashboard data yet"
               description="The dashboard is built from staffing, apparatus, certification and NERIS events as they happen. None has been recorded for your department yet."
             />
           ) : (
             <>
-              <p className={styles.meta}>Last updated {formatDate(view.lastUpdated)}</p>
               <div className={styles.statGrid}>
-                <Stat label="Active members" value={view.staffing.activeMemberCount} />
-                <Stat label="Marked unavailable" value={view.staffing.unavailableCount} />
+                <Stat label="Active members" value={view.staffing.activeMemberCount} icon={Users} />
+                <Stat
+                  label="Marked unavailable"
+                  value={view.staffing.unavailableCount}
+                  icon={CalendarX}
+                />
                 <Stat
                   label="Shift coverage gaps"
                   value={view.staffing.shiftCoverage.gapCount}
                   alarm={view.staffing.shiftCoverage.gapCount > 0}
+                  icon={CalendarClock}
                 />
                 <Stat
                   label="Apparatus out of service"
                   value={view.outOfServiceApparatus.length}
                   alarm={view.outOfServiceApparatus.length > 0}
+                  icon={Wrench}
                 />
-                <Stat label="Expiring certifications" value={view.expiringCertifications.count} />
+                <Stat
+                  label="Expiring certifications"
+                  value={view.expiringCertifications.count}
+                  icon={GraduationCap}
+                />
                 <Stat
                   label="NERIS submissions"
                   value={`${view.nerisCompliance.failedCount} failed`}
                   hint={`${view.nerisCompliance.pendingCount} pending`}
                   alarm={view.nerisCompliance.failedCount > 0}
+                  icon={FileText}
                 />
               </div>
-              <div className={styles.sections}>
+              <div className={styles.sectionGrid}>
                 <Card title="Apparatus out of service">
                   <DataTable
                     caption="Apparatus out of service"
@@ -159,8 +281,21 @@ function DashboardPanel() {
                       {
                         key: 'duration',
                         header: 'Out of service for',
-                        render: (r) => formatDuration(r.durationSeconds),
+                        // Days and hours: a stopwatch format would read two days as "48:00:00".
+                        render: (r) => formatElapsed(r.durationSeconds),
                       },
+                    ]}
+                  />
+                </Card>
+                <Card title="Shift coverage gaps">
+                  <DataTable
+                    caption="Shift coverage gaps"
+                    rowKey={(row) => row.shiftId}
+                    rows={view.staffing.shiftCoverage.gaps}
+                    emptyMessage="No open coverage gaps."
+                    columns={[
+                      { key: 'shift', header: 'Shift', render: (r) => r.shiftId },
+                      { key: 'reason', header: 'Gap', render: (r) => r.gapReason || '—' },
                     ]}
                   />
                 </Card>
@@ -181,7 +316,7 @@ function DashboardPanel() {
                         key: 'expiry',
                         header: 'Expires',
                         sortValue: (r) => r.expiryDate,
-                        render: (r) => r.expiryDate,
+                        render: (r) => formatCalendarDate(r.expiryDate),
                       },
                     ]}
                   />
@@ -196,13 +331,18 @@ function DashboardPanel() {
                       {
                         key: 'incident',
                         header: 'Incident',
+                        // The rollup carries only the incident ID (no dispatch number), so the
+                        // ID is what the officer gets until reporting-service adds one.
                         render: (r) =>
                           canOpenIncidents ? (
-                            <Link to={`/incidents/${encodeURIComponent(r.incidentId)}`}>
+                            <Link
+                              to={`/incidents/${encodeURIComponent(r.incidentId)}`}
+                              style={MONO}
+                            >
                               {r.incidentId}
                             </Link>
                           ) : (
-                            r.incidentId
+                            <span style={MONO}>{r.incidentId}</span>
                           ),
                       },
                       {
@@ -217,27 +357,12 @@ function DashboardPanel() {
                     ]}
                   />
                 </Card>
-                <Card title="Shift coverage gaps">
-                  <DataTable
-                    caption="Shift coverage gaps"
-                    rowKey={(row) => row.shiftId}
-                    rows={view.staffing.shiftCoverage.gaps}
-                    emptyMessage="No open coverage gaps."
-                    columns={[
-                      { key: 'shift', header: 'Shift', render: (r) => r.shiftId },
-                      { key: 'reason', header: 'Gap', render: (r) => r.gapReason || '—' },
-                    ]}
-                  />
-                </Card>
               </div>
             </>
           )
         }
       </QueryState>
-      <div className={styles.sections}>
-        <ExportIfAllowed report="dashboard" params={{}} />
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -253,13 +378,18 @@ function ResponseTimesPanel() {
   });
 
   return (
-    <>
-      {range.fields}
+    <div className={styles.panel}>
+      <ReportToolbar
+        start={range.fields}
+        report="response-times"
+        params={{ from: String(from), to: String(to) }}
+        disabled={!range.valid}
+      />
       {range.valid ? (
         <QueryState query={query}>
           {(report) =>
             report.units.length === 0 ? (
-              <EmptyState
+              <EmptyReport
                 icon={ClipboardList}
                 title="No unit response times in this range"
                 description="Response times come from the dispatched, en-route and on-scene times recorded on each incident's responding units."
@@ -271,13 +401,17 @@ function ResponseTimesPanel() {
                   {summaryStat('Travel', report.travel)}
                   {summaryStat('Total response', report.total)}
                 </div>
-                <div className={styles.sections}>
+                <Card title="By unit">
                   <DataTable
                     caption="Response times by unit"
                     rowKey={(r) => `${r.incidentId}-${r.unitId}`}
                     rows={report.units}
                     columns={[
-                      { key: 'incident', header: 'Incident', render: (r) => r.incidentId },
+                      {
+                        key: 'incident',
+                        header: 'Incident',
+                        render: (r) => <span style={MONO}>{r.incidentId}</span>,
+                      },
                       { key: 'unit', header: 'Unit', render: (r) => r.unitId },
                       {
                         key: 'turnout',
@@ -302,20 +436,13 @@ function ResponseTimesPanel() {
                       },
                     ]}
                   />
-                </div>
+                </Card>
               </>
             )
           }
         </QueryState>
       ) : null}
-      <div className={styles.sections}>
-        <ExportIfAllowed
-          report="response-times"
-          params={{ from: String(from), to: String(to) }}
-          disabled={!range.valid}
-        />
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -331,12 +458,17 @@ function IsoPanel() {
   });
 
   return (
-    <>
-      {range.fields}
+    <div className={styles.panel}>
+      <ReportToolbar
+        start={range.fields}
+        report="iso"
+        params={{ from: String(from), to: String(to) }}
+        disabled={!range.valid}
+      />
       {range.valid ? (
         <QueryState query={query}>
           {(report) => (
-            <div className={styles.sections}>
+            <div className={styles.sectionGrid}>
               <Card title="Training hours">
                 <p className={styles.meta}>Total {report.trainingHours.totalHours} hours</p>
                 <DataTable
@@ -382,7 +514,12 @@ function IsoPanel() {
                   emptyMessage="No hydrant flow tests fall due in this period."
                   columns={[
                     { key: 'hydrant', header: 'Hydrant', render: (r) => r.hydrantId },
-                    { key: 'due', header: 'Next flow test due', render: (r) => r.nextFlowTestDue },
+                    {
+                      key: 'due',
+                      header: 'Next flow test due',
+                      sortValue: (r) => r.nextFlowTestDue,
+                      render: (r) => formatCalendarDate(r.nextFlowTestDue),
+                    },
                     {
                       key: 'current',
                       header: 'Status',
@@ -399,10 +536,10 @@ function IsoPanel() {
                 {report.responseTimes.units.length === 0 ? (
                   <p className={styles.meta}>No unit response times in this period.</p>
                 ) : (
-                  <div className={styles.statGrid}>
-                    {summaryStat('Turnout', report.responseTimes.turnout)}
-                    {summaryStat('Travel', report.responseTimes.travel)}
-                    {summaryStat('Total response', report.responseTimes.total)}
+                  <div className={styles.metrics}>
+                    {summaryMetric('Turnout', report.responseTimes.turnout)}
+                    {summaryMetric('Travel', report.responseTimes.travel)}
+                    {summaryMetric('Total response', report.responseTimes.total)}
                   </div>
                 )}
               </Card>
@@ -410,14 +547,7 @@ function IsoPanel() {
           )}
         </QueryState>
       ) : null}
-      <div className={styles.sections}>
-        <ExportIfAllowed
-          report="iso"
-          params={{ from: String(from), to: String(to) }}
-          disabled={!range.valid}
-        />
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -435,14 +565,21 @@ function MembershipTrendsPanel() {
   });
 
   return (
-    <>
-      {range.fields}
-      {tooLong ? <p role="alert">Pick a range of at most {MAX_TREND_RANGE_DAYS} days.</p> : null}
+    <div className={styles.panel}>
+      <ReportToolbar
+        start={range.fields}
+        notes={
+          tooLong ? <p role="alert">Pick a range of at most {MAX_TREND_RANGE_DAYS} days.</p> : null
+        }
+        report="membership-trends"
+        params={{ startDate: range.from, endDate: range.to }}
+        disabled={!enabled}
+      />
       {enabled ? (
         <QueryState query={query}>
           {(trends) =>
             trends.startCount === 0 && trends.endCount === 0 && trends.joins === 0 ? (
-              <EmptyState
+              <EmptyReport
                 icon={ClipboardList}
                 title="No members on record for this period"
                 description="Membership trends are built from each member's join date and status history."
@@ -459,13 +596,13 @@ function MembershipTrendsPanel() {
                     value={trends.netChange > 0 ? `+${trends.netChange}` : trends.netChange}
                   />
                 </div>
-                <div className={styles.sections}>
+                <Card title="By month">
                   <DataTable
                     caption="Monthly active members and attendance rate by activity"
                     rowKey={(r) => r.bucket}
                     rows={trends.buckets}
                     columns={[
-                      { key: 'month', header: 'Month', render: (r) => r.bucket },
+                      { key: 'month', header: 'Month', render: (r) => formatMonth(r.bucket) },
                       {
                         key: 'active',
                         header: 'Active members',
@@ -481,20 +618,13 @@ function MembershipTrendsPanel() {
                       })),
                     ]}
                   />
-                </div>
+                </Card>
               </>
             )
           }
         </QueryState>
       ) : null}
-      <div className={styles.sections}>
-        <ExportIfAllowed
-          report="membership-trends"
-          params={{ startDate: range.from, endDate: range.to }}
-          disabled={!enabled}
-        />
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -510,8 +640,13 @@ function GrantsPanel() {
   });
 
   return (
-    <>
-      {range.fields}
+    <div className={styles.panel}>
+      <ReportToolbar
+        start={range.fields}
+        report="grants"
+        params={{ periodStart: String(periodStart), periodEnd: String(periodEnd) }}
+        disabled={!range.valid}
+      />
       {range.valid ? (
         <QueryState query={query}>
           {(report) => (
@@ -546,7 +681,7 @@ function GrantsPanel() {
                   />
                 )}
               </div>
-              <div className={styles.sections}>
+              <div className={styles.sectionGrid}>
                 {report.totalIncidentVolume.available ? (
                   <Card title="Incident volume by type">
                     <DataTable
@@ -600,14 +735,7 @@ function GrantsPanel() {
           )}
         </QueryState>
       ) : null}
-      <div className={styles.sections}>
-        <ExportIfAllowed
-          report="grants"
-          params={{ periodStart: String(periodStart), periodEnd: String(periodEnd) }}
-          disabled={!range.valid}
-        />
-      </div>
-    </>
+    </div>
   );
 }
 
@@ -623,29 +751,36 @@ function LosapYearEndPanel() {
   });
 
   return (
-    <>
-      <div className={styles.filters}>
-        <TextInput
-          label="Year"
-          inputMode="numeric"
-          value={yearText}
-          onChange={(e) => setYearText(e.target.value.trim())}
-          error={valid ? undefined : 'Enter a four-digit year.'}
-        />
-      </div>
+    <div className={styles.panel}>
+      <ReportToolbar
+        start={
+          <div className={styles.filters}>
+            <TextInput
+              label="Year"
+              inputMode="numeric"
+              value={yearText}
+              onChange={(e) => setYearText(e.target.value.trim())}
+              error={valid ? undefined : 'Enter a four-digit year.'}
+            />
+          </div>
+        }
+        report="losap"
+        params={{ year: yearText }}
+        disabled={!valid}
+      />
       {valid ? (
         <QueryState query={query}>
           {(report) =>
             !report.hasData ? (
-              <EmptyState
+              <EmptyReport
                 icon={ClipboardList}
                 title={`No LOSAP points recorded for ${report.year}`}
                 description="Points accrue from recorded call, drill and meeting attendance."
               />
             ) : (
-              <div className={styles.sections}>
+              <Card title={`Member totals for ${report.year}`}>
                 {report.totalUnreadableEntryCount > 0 ? (
-                  <p role="status" className={styles.warning}>
+                  <p role="status" className={[styles.warning, styles.cardNote].join(' ')}>
                     {report.totalUnreadableEntryCount} point{' '}
                     {report.totalUnreadableEntryCount === 1 ? 'entry' : 'entries'} could not be read
                     and {report.totalUnreadableEntryCount === 1 ? 'is' : 'are'} not counted in these
@@ -685,16 +820,22 @@ function LosapYearEndPanel() {
                     },
                   ]}
                 />
-              </div>
+              </Card>
             )
           }
         </QueryState>
       ) : null}
-      <div className={styles.sections}>
-        <ExportIfAllowed report="losap" params={{ year: yearText }} disabled={!valid} />
-      </div>
-    </>
+    </div>
   );
+}
+
+/** A "YYYY-MM" bucket as "Aug 2026"; anything else is shown as sent. */
+function formatMonth(bucket: string): string {
+  if (!/^\d{4}-\d{2}$/.test(bucket)) return bucket;
+  return parseCalendarDate(`${bucket}-01`).toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 /**
@@ -704,7 +845,10 @@ function LosapYearEndPanel() {
 export function ReportingPage() {
   return (
     <main id="main-content">
-      <PageHeader title="Reporting" />
+      <PageHeader
+        title="Reporting"
+        description="Staffing, response, ISO, membership, grant, LOSAP and cutover reports for the department."
+      />
       <Tabs
         label="Reports"
         items={[

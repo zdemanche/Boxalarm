@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { meetsAA } from './contrast';
 import {
+  accentPalette,
   breakpoints,
   elevation,
   iconSize,
   palette,
   radius,
   radiusScale,
+  shellPalette,
   spacing,
   spacingScale,
   statusChipPalette,
@@ -161,6 +163,18 @@ describe('surfacePalette', () => {
     const { bg, focus } = surfacePalette[name];
     expect(meetsAA(bg, focus, 'large')).toBe(true);
   });
+
+  // Links sit inside cards and table rows as often as on the page ground, so they must clear
+  // normal-text AA on every surface step, not just bg.
+  test.each(['day', 'cab'] as const)(
+    '%s: link clears normal-text AA on bg, surface and the raised surface',
+    (name) => {
+      const { bg, surface, surfaceRaised, link } = surfacePalette[name];
+      expect(meetsAA(bg, link, 'normal')).toBe(true);
+      expect(meetsAA(surface, link, 'normal')).toBe(true);
+      expect(meetsAA(surfaceRaised, link, 'normal')).toBe(true);
+    },
+  );
 });
 
 describe('statusPalette', () => {
@@ -204,18 +218,9 @@ describe('statusChipPalette', () => {
     },
   );
 
-  // Chip.tsx draws its 1px border with `currentColor` (== onFill), so the label:fill pair above
-  // also governs the border:fill (non-text, 3:1) contrast - restated here explicitly since it's
-  // the property Chip.tsx actually relies on for the visible boundary.
-  test.each(['day', 'cab'] as const)(
-    '%s: onFill (the chip border colour) clears non-text AA (3:1) against its own fill',
-    (name) => {
-      const roles = statusChipPalette[name];
-      for (const { fill, onFill } of Object.values(roles)) {
-        expect(meetsAA(fill, onFill, 'large')).toBe(true);
-      }
-    },
-  );
+  // Since the 2026-10-11 redesign the chip's border is a soft tint of its label, drawn for looks;
+  // a chip is not a control, so it needs no 3:1 boundary. Status is carried by the label, the
+  // glyph and the word, all on the opaque fill tested above.
 });
 
 describe('typeScale', () => {
@@ -268,5 +273,68 @@ describe('breakpoints', () => {
     for (let i = 1; i < values.length; i++) {
       expect(values[i]!).toBeGreaterThan(values[i - 1]!);
     }
+  });
+});
+
+// 2026-10-11 web redesign: the amber brand accent (the mobile app's palette.accent) on buttons
+// and selection, and a dark navigation shell in both palettes.
+describe('accentPalette', () => {
+  test.each(['day', 'cab'] as const)(
+    '%s: text on the accent fill clears normal-text AA',
+    (name) => {
+      const { fill, fillHover, onFill } = accentPalette[name];
+      expect(meetsAA(fill, onFill, 'normal')).toBe(true);
+      expect(meetsAA(fillHover, onFill, 'normal')).toBe(true);
+    },
+  );
+
+  // The web day card is surfacePalette.day.bg (white) and the cab card is cab.surface.
+  test.each([
+    ['day', surfacePalette.day.bg],
+    ['cab', surfacePalette.cab.surface],
+  ] as const)('%s: the text-safe accent clears normal-text AA on a card', (name, card) => {
+    expect(meetsAA(card, accentPalette[name].accent, 'normal')).toBe(true);
+  });
+
+  test.each(['day', 'cab'] as const)('%s: subtle accent pair clears normal-text AA', (name) => {
+    const { accentSubtle, onAccentSubtle } = accentPalette[name];
+    expect(meetsAA(accentSubtle, onAccentSubtle, 'normal')).toBe(true);
+  });
+
+  test.each(['day', 'cab'] as const)(
+    '%s: the accent is the mobile brand accent, so web and phone read as one product',
+    (name) => {
+      expect(accentPalette[name].accent).toBe(palette[name].accent);
+    },
+  );
+
+  // Selected-state marks (active tab underline, current report step, checked box edge, unread
+  // dot) are non-text and must clear 3:1 against the surface they sit on (WCAG 1.4.11). The bright
+  // day fill measures ~2:1 on white, so marks use `indicator`. Web cards: day bg, cab surface;
+  // web canvas: day surface, cab bg.
+  test.each([
+    ['day', [surfacePalette.day.bg, surfacePalette.day.surface]],
+    ['cab', [surfacePalette.cab.surface, surfacePalette.cab.bg]],
+  ] as const)(
+    '%s: the selection indicator clears 3:1 on the card and the canvas',
+    (name, grounds) => {
+      for (const ground of grounds) {
+        expect(meetsAA(ground, accentPalette[name].indicator, 'large')).toBe(true);
+      }
+    },
+  );
+});
+
+describe('shellPalette', () => {
+  test('nav text clears normal-text AA on the shell and on a hovered/selected item', () => {
+    const { bg, bgRaised, fg, fgMuted } = shellPalette;
+    for (const surface of [bg, bgRaised]) {
+      expect(meetsAA(surface, fg, 'normal')).toBe(true);
+      expect(meetsAA(surface, fgMuted, 'normal')).toBe(true);
+    }
+  });
+
+  test('the selected-item marker clears non-text AA (3:1) on the shell', () => {
+    expect(meetsAA(shellPalette.bgRaised, shellPalette.accent, 'large')).toBe(true);
   });
 });

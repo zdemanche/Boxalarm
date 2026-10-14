@@ -2,11 +2,20 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Card, DataTable, DatePicker, PageHeader, type DataTableColumn } from '../../components/ui';
+import {
+  Card,
+  DataTable,
+  DatePicker,
+  PageHeader,
+  Stat,
+  type DataTableColumn,
+} from '../../components/ui';
+import { Clock, Users } from '../../components/ui/icons';
 import { canAccessPath } from '../../routing/routeTable';
 import { listMembers } from '../personnel/api';
 import { getRosterTrainingHours } from './api';
 import type { CategoryHours } from './types';
+import styles from './training.module.css';
 
 interface MemberRow {
   memberId: string;
@@ -111,23 +120,45 @@ export function TrainingHoursPage() {
     },
   ];
 
+  const totalHours = rows.reduce((sum, row) => sum + row.total, 0);
+  const showStats = rangeValid && !hoursQuery.isLoading;
+
   return (
     <main id="main-content">
-      <PageHeader title="Training hours" />
-      <Card>
-        <form
-          aria-label="Date range"
-          onSubmit={(e) => e.preventDefault()}
-          style={{ display: 'flex', gap: 'var(--bx-space-md)', flexWrap: 'wrap' }}
-        >
-          <DatePicker label="From" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-          <DatePicker label="To" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-        </form>
-        {!rangeValid ? <p role="alert">Choose a start date on or before the end date.</p> : null}
-      </Card>
+      <PageHeader
+        title="Training hours"
+        description="Hours each member logged at training events, by category, for the dates you pick."
+      />
+      <div className={styles.column}>
+        <div className={styles.hoursTop}>
+          <Card title="Date range">
+            <form
+              aria-label="Date range"
+              onSubmit={(e) => e.preventDefault()}
+              className={styles.rangeForm}
+            >
+              <DatePicker
+                label="From"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+              />
+              <DatePicker label="To" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            </form>
+            {!rangeValid ? (
+              <p role="alert" className={[styles.error, styles.rangeError].join(' ')}>
+                Choose a start date on or before the end date.
+              </p>
+            ) : null}
+          </Card>
+          <Stat
+            label="Hours logged"
+            value={showStats ? formatHours(totalHours) : '—'}
+            icon={Clock}
+          />
+          <Stat label="Members with hours" value={showStats ? rows.length : '—'} icon={Users} />
+        </div>
 
-      {rangeValid ? (
-        <div style={{ marginTop: 'var(--bx-space-lg)' }}>
+        {rangeValid ? (
           <DataTable
             caption="Training hours by member and category"
             columns={columns}
@@ -136,8 +167,8 @@ export function TrainingHoursPage() {
             loading={hoursQuery.isLoading}
             emptyMessage={`No training hours were recorded for events between ${fromDate} and ${toDate}.`}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </main>
   );
 }

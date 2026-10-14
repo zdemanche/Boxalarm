@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { StatusRole } from '@boxalarm/design-tokens';
 import { Link, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import {
@@ -9,12 +10,20 @@ import {
 } from '../../auth/roles';
 import { MarkOffList } from '../availability/MarkOffList';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Badge } from '../../components/ui/Chip';
-import { PageHeader } from '../../components/ui/PageHeader';
+import {
+  Button,
+  Card,
+  DatePicker,
+  PageHeader,
+  Select,
+  Skeleton,
+  StatusChip,
+  TextInput,
+} from '../../components/ui';
 import { CertificationsPanel } from '../training/CertificationsPanel';
 import { TranscriptPanel } from '../training/TranscriptPanel';
 import { issueMemberPpe, listMemberPpe } from '../inventory/api';
-import type { IssuePpeInput } from '../inventory/types';
+import type { IssuePpeInput, PpeStatus } from '../inventory/types';
 import {
   getMember,
   getMemberLosap,
@@ -23,11 +32,14 @@ import {
   putQual,
   recordAttendance,
 } from './api';
-import type { AttendanceActivityType } from './types';
+import type { AttendanceActivityType, Member } from './types';
 import { RolesSection } from './RolesSection';
 import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
 import { MemberStatusSection } from './MemberStatusSection';
+import { MEMBER_STATUS_ROLE } from './memberStatus';
+import { formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import styles from './MemberDetailPage.module.css';
 
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
   'CALL',
@@ -38,6 +50,39 @@ const ACTIVITY_TYPES: AttendanceActivityType[] = [
 ];
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyPpeForm: IssuePpeInput = { itemType: '', size: '', issueDate: today() };
+
+const PPE_STATUS_ROLE: Record<PpeStatus, StatusRole> = {
+  ISSUED: 'ok',
+  EXPIRED: 'danger',
+  RETIRED: 'neutral',
+};
+
+function ProfileCard({ member }: { member: Member }) {
+  return (
+    <Card title="Profile">
+      <dl className={styles.facts}>
+        <dt>Status</dt>
+        <dd>
+          <StatusChip status={MEMBER_STATUS_ROLE[member.status]}>
+            {humanize(member.status)}
+          </StatusChip>
+        </dd>
+        <dt>Email</dt>
+        <dd>{member.email}</dd>
+        <dt>Phone</dt>
+        <dd className={member.phone ? styles.mono : undefined}>
+          {member.phone ?? 'No phone (no SMS or voice pages)'}
+        </dd>
+        <dt>Rank</dt>
+        <dd>{member.rank}</dd>
+        <dt>Agency ID</dt>
+        <dd className={styles.mono}>{member.agencyId}</dd>
+        <dt>Joined</dt>
+        <dd>{formatCalendarDate(member.joinDate)}</dd>
+      </dl>
+    </Card>
+  );
+}
 
 function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolean }) {
   const auth = useAuth();
@@ -59,23 +104,29 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
     },
   });
 
+  const quals = qualsQuery.data ?? [];
+
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Qualifications</h2>
+    <Card title="Qualifications">
       {qualsQuery.isLoading ? (
-        <p>Loading qualifications…</p>
+        <Skeleton lines={2} />
+      ) : quals.length === 0 ? (
+        <p className={styles.muted}>No qualifications on file.</p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {(qualsQuery.data ?? []).map((qual) => (
-            <li key={qual.qualCode} style={{ padding: 'var(--boxalarm-spacing-xs) 0' }}>
-              <strong>{humanize(qual.qualCode)}</strong> —{' '}
-              {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
-              {qual.grantedByCertId ? (
-                <>
-                  {' '}
-                  (<Link to={`/certifications`}>cert {qual.grantedByCertId}</Link>)
-                </>
-              ) : null}
+        <ul className={styles.list}>
+          {quals.map((qual) => (
+            <li key={qual.qualCode} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{humanize(qual.qualCode)}</span>
+                {qual.grantedByCertId ? (
+                  <span className={styles.rowMeta}>
+                    Granted by <Link to={`/certifications`}>cert {qual.grantedByCertId}</Link>
+                  </span>
+                ) : null}
+              </span>
+              <StatusChip status={qual.currentlyEligible ? 'ok' : 'caution'}>
+                {qual.currentlyEligible ? 'Eligible' : 'Not currently eligible'}
+              </StatusChip>
             </li>
           ))}
         </ul>
@@ -87,23 +138,20 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
             event.preventDefault();
             addQual.mutate();
           }}
-          style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)', alignItems: 'end' }}
+          className={[styles.inlineForm, styles.subsection].join(' ')}
         >
-          <label style={{ display: 'grid', gap: 4 }}>
-            Qual code
-            <input
-              value={qualCode}
-              onChange={(e) => setQualCode(e.target.value)}
-              required
-              style={{ minHeight: 44, padding: '0 12px' }}
-            />
-          </label>
-          <button type="submit" style={{ minHeight: 44 }}>
+          <TextInput
+            label="Qual code"
+            value={qualCode}
+            onChange={(e) => setQualCode(e.target.value)}
+            required
+          />
+          <Button type="submit" variant="secondary" loading={addQual.isPending}>
             Assign
-          </button>
+          </Button>
         </form>
       ) : null}
-    </section>
+    </Card>
   );
 }
 
@@ -115,20 +163,114 @@ function LosapSection({ memberId }: { memberId: string }) {
   });
 
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>LOSAP</h2>
+    <Card title="LOSAP points">
       {losapQuery.isLoading ? (
-        <p>Loading LOSAP total…</p>
+        <Skeleton lines={1} />
       ) : losapQuery.error ? (
         <ApiForbiddenGate error={losapQuery.error} embedded>
-          <p>Unable to load LOSAP total.</p>
+          <p className={styles.muted}>Unable to load LOSAP total.</p>
         </ApiForbiddenGate>
       ) : (
-        <p>
-          {losapQuery.data?.totalPoints} points in {losapQuery.data?.year}
+        <p className={styles.figure}>
+          <span className={styles.bigNumber}>{losapQuery.data?.totalPoints}</span>{' '}
+          <span className={styles.muted}>points in {losapQuery.data?.year}</span>
         </p>
       )}
-    </section>
+    </Card>
+  );
+}
+
+function PpeSection({ memberId }: { memberId: string }) {
+  const auth = useAuth();
+  const queryClient = useQueryClient();
+  // IssuePpeAssignment is an INVENTORY_ADMIN_GROUPS action: OFFICER, CHIEF, ADMIN (review m6).
+  const canIssuePpe = canManageInventory(auth.roles);
+  const [ppeForm, setPpeForm] = useState<IssuePpeInput>(emptyPpeForm);
+  const [ppeFormError, setPpeFormError] = useState<string | null>(null);
+
+  const ppeQuery = useQuery({
+    queryKey: ['inventory', 'ppe', memberId],
+    queryFn: () => listMemberPpe(auth, memberId),
+    enabled: Boolean(memberId),
+  });
+
+  const issuePpeMutation = useMutation({
+    mutationFn: (input: IssuePpeInput) => issueMemberPpe(auth, memberId, input),
+    onSuccess: async () => {
+      setPpeForm(emptyPpeForm);
+      setPpeFormError(null);
+      await queryClient.invalidateQueries({ queryKey: ['inventory', 'ppe', memberId] });
+    },
+    onError: (error: Error) => setPpeFormError(error.message),
+  });
+
+  const items = ppeQuery.data ?? [];
+
+  return (
+    <Card title="PPE">
+      {ppeQuery.isLoading ? (
+        <Skeleton lines={3} />
+      ) : items.length === 0 ? (
+        <p className={styles.muted}>No PPE issued.</p>
+      ) : (
+        <ul className={styles.list}>
+          {items.map((item) => (
+            <li key={item.ppeItemId} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{humanize(item.itemType)}</span>
+                <span className={styles.rowMeta}>
+                  Size {item.size} · NFPA expiry {formatCalendarDate(item.nfpaExpiryDate)}
+                </span>
+              </span>
+              <StatusChip status={PPE_STATUS_ROLE[item.status]}>{humanize(item.status)}</StatusChip>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {canIssuePpe ? (
+        <form
+          aria-label="Issue PPE"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            issuePpeMutation.mutate(ppeForm);
+          }}
+          className={styles.subsection}
+        >
+          <h3 className={styles.subhead}>Issue PPE</h3>
+          <div className={styles.formGrid}>
+            <TextInput
+              label="Item type"
+              value={ppeForm.itemType}
+              required
+              onChange={(e) => setPpeForm((prev) => ({ ...prev, itemType: e.target.value }))}
+            />
+            <TextInput
+              label="Size"
+              value={ppeForm.size}
+              required
+              onChange={(e) => setPpeForm((prev) => ({ ...prev, size: e.target.value }))}
+            />
+            <DatePicker
+              label="Issue date"
+              value={ppeForm.issueDate}
+              required
+              onChange={(e) => setPpeForm((prev) => ({ ...prev, issueDate: e.target.value }))}
+            />
+          </div>
+          <div className={styles.formActions}>
+            {ppeFormError ? (
+              <p role="alert" aria-live="assertive" className={styles.error}>
+                {ppeFormError}
+              </p>
+            ) : null}
+            <Button type="submit" variant="secondary" loading={issuePpeMutation.isPending}>
+              Issue PPE
+            </Button>
+          </div>
+        </form>
+      ) : null}
+    </Card>
   );
 }
 
@@ -164,22 +306,32 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
     return null;
   }
 
+  const records = (attendanceQuery.data ?? []).slice().sort((a, b) => a.occurredAt - b.occurredAt);
+
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Attendance</h2>
+    <Card title="Attendance">
       {attendanceQuery.isLoading ? (
-        <p>Loading attendance…</p>
+        <Skeleton lines={3} />
+      ) : records.length === 0 ? (
+        <p className={styles.muted}>No attendance recorded yet.</p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {(attendanceQuery.data ?? [])
-            .slice()
-            .sort((a, b) => a.occurredAt - b.occurredAt)
-            .map((record) => (
-              <li key={`${record.activityType}-${record.occurredAt}`}>
-                {record.activityType} — {new Date(record.occurredAt * 1000).toLocaleDateString()}
-                {record.refId ? ` — dispatch ${record.refId}` : ''} — {record.hours}h
-              </li>
-            ))}
+        <ul className={styles.list}>
+          {records.map((record) => (
+            <li key={`${record.activityType}-${record.occurredAt}`} className={styles.row}>
+              <span className={styles.rowMain}>
+                <span className={styles.rowTitle}>{humanize(record.activityType)}</span>
+                <span className={styles.rowMeta}>
+                  {new Date(record.occurredAt * 1000).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+                  {record.refId ? ` · dispatch ${record.refId}` : ''}
+                </span>
+              </span>
+              <span className={styles.rowTitle}>{record.hours}h</span>
+            </li>
+          ))}
         </ul>
       )}
       <form
@@ -188,81 +340,54 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
           event.preventDefault();
           addEntry.mutate();
         }}
-        style={{ display: 'flex', gap: 'var(--boxalarm-spacing-sm)', alignItems: 'end' }}
+        className={[styles.inlineForm, styles.subsection].join(' ')}
       >
-        <label style={{ display: 'grid', gap: 4 }}>
-          Activity
-          <select
-            value={form.activityType}
-            onChange={(e) =>
-              setForm((prev) => ({
-                ...prev,
-                activityType: e.target.value as AttendanceActivityType,
-              }))
-            }
-            style={{ minHeight: 44 }}
-          >
-            {ACTIVITY_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          Hours
-          <input
-            type="number"
-            min="0"
-            step="0.25"
-            value={form.hours}
-            onChange={(e) => setForm((prev) => ({ ...prev, hours: e.target.value }))}
-            required
-            style={{ minHeight: 44, padding: '0 12px', width: 100 }}
-          />
-        </label>
-        <button type="submit" style={{ minHeight: 44 }}>
+        <Select
+          label="Activity"
+          value={form.activityType}
+          onChange={(e) =>
+            setForm((prev) => ({
+              ...prev,
+              activityType: e.target.value as AttendanceActivityType,
+            }))
+          }
+        >
+          {ACTIVITY_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {humanize(type)}
+            </option>
+          ))}
+        </Select>
+        <TextInput
+          label="Hours"
+          type="number"
+          min="0"
+          step="0.25"
+          value={form.hours}
+          onChange={(e) => setForm((prev) => ({ ...prev, hours: e.target.value }))}
+          required
+          style={{ width: 100 }}
+        />
+        <Button type="submit" variant="secondary" loading={addEntry.isPending}>
           Record
-        </button>
+        </Button>
       </form>
-    </section>
+    </Card>
   );
 }
 
 export function MemberDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
-  const queryClient = useQueryClient();
   const isAdmin = auth.roles.includes('ADMIN');
   // Role assignment is CHIEF/ADMIN only - not OFFICER, who could otherwise promote themselves.
   const canManageRoles = canUseAccountKillSwitches(auth.roles);
-
   const isTraining = canManageTraining(auth.roles);
-  // IssuePpeAssignment is an INVENTORY_ADMIN_GROUPS action: OFFICER, CHIEF, ADMIN (review m6).
-  const canIssuePpe = canManageInventory(auth.roles);
-  const [ppeForm, setPpeForm] = useState<IssuePpeInput>(emptyPpeForm);
-  const [ppeFormError, setPpeFormError] = useState<string | null>(null);
 
   const memberQuery = useQuery({
     queryKey: ['personnel', 'members', id],
     queryFn: () => getMember(auth, id),
     enabled: Boolean(id),
-  });
-
-  const ppeQuery = useQuery({
-    queryKey: ['inventory', 'ppe', id],
-    queryFn: () => listMemberPpe(auth, id),
-    enabled: Boolean(id),
-  });
-
-  const issuePpeMutation = useMutation({
-    mutationFn: (input: IssuePpeInput) => issueMemberPpe(auth, id, input),
-    onSuccess: async () => {
-      setPpeForm(emptyPpeForm);
-      setPpeFormError(null);
-      await queryClient.invalidateQueries({ queryKey: ['inventory', 'ppe', id] });
-    },
-    onError: (error: Error) => setPpeFormError(error.message),
   });
 
   if (memberQuery.error) {
@@ -274,143 +399,43 @@ export function MemberDetailPage() {
   }
 
   const member = memberQuery.data;
+  const name = member ? `${member.firstName} ${member.lastName}` : '…';
 
   return (
     <main id="main-content">
       <PageHeader
-        title={member ? `${member.firstName} ${member.lastName}` : '…'}
-        breadcrumbs={[
-          { label: 'Members', to: '/personnel' },
-          { label: member ? `${member.firstName} ${member.lastName}` : '…' },
-        ]}
-        actions={member ? <Badge>{humanize(member.status)}</Badge> : undefined}
+        title={name}
+        description={member ? member.rank : undefined}
+        breadcrumbs={[{ label: 'Members', to: '/personnel' }, { label: name }]}
       />
       {memberQuery.isLoading || !member ? (
-        <p>Loading member…</p>
+        <Card>
+          <p className={styles.muted}>Loading member…</p>
+          <Skeleton lines={4} />
+        </Card>
       ) : (
-        <>
-          <dl
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'max-content 1fr',
-              columnGap: 'var(--bx-space-lg)',
-              rowGap: 'var(--bx-space-sm)',
-              fontSize: 14,
-            }}
-          >
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Email</dt>
-            <dd style={{ margin: 0 }}>{member.email}</dd>
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Phone</dt>
-            <dd style={{ margin: 0, fontFamily: 'var(--bx-font-mono)' }}>
-              {member.phone ?? 'No phone (no SMS or voice pages)'}
-            </dd>
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Rank</dt>
-            <dd style={{ margin: 0 }}>{member.rank}</dd>
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Agency ID</dt>
-            <dd style={{ margin: 0 }}>{member.agencyId}</dd>
-            <dt style={{ color: 'var(--bx-fg-muted)' }}>Join date</dt>
-            <dd style={{ margin: 0 }}>{member.joinDate}</dd>
-          </dl>
-
-          <MemberStatusSection member={member} />
-
-          {canManageMemberAvailability(auth.roles) ? (
-            <MarkOffList
-              memberId={member.memberId}
-              ownRecord={member.memberId === auth.user?.profile.sub}
-            />
-          ) : null}
-
-          <RolesSection member={member} canEdit={canManageRoles} />
-
-          <AccountSecuritySection member={member} />
-          <CertificationsPanel memberId={member.memberId} />
-          {isTraining ? <TranscriptPanel memberId={member.memberId} /> : null}
-          <h2
-            style={{
-              fontSize: 'var(--boxalarm-font-size-lg)',
-              marginTop: 'var(--boxalarm-spacing-xl)',
-            }}
-          >
-            PPE
-          </h2>
-          {ppeQuery.isLoading ? (
-            <p>Loading PPE…</p>
-          ) : (ppeQuery.data ?? []).length === 0 ? (
-            <p>No PPE issued.</p>
-          ) : (
-            <ul>
-              {(ppeQuery.data ?? []).map((item) => (
-                <li key={item.ppeItemId}>
-                  {humanize(item.itemType)} · size {item.size} · expires {item.nfpaExpiryDate} ·{' '}
-                  <strong
-                    style={
-                      item.status === 'EXPIRED' ? { color: 'var(--boxalarm-error)' } : undefined
-                    }
-                  >
-                    {humanize(item.status)}
-                  </strong>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {canIssuePpe ? (
-            <form
-              aria-label="Issue PPE"
-              onSubmit={(event: FormEvent) => {
-                event.preventDefault();
-                issuePpeMutation.mutate(ppeForm);
-              }}
-              style={{
-                marginTop: 'var(--boxalarm-spacing-lg)',
-                display: 'grid',
-                gap: 'var(--boxalarm-spacing-md)',
-                maxWidth: 480,
-              }}
-            >
-              <label style={{ display: 'grid', gap: 4 }}>
-                Item type
-                <input
-                  value={ppeForm.itemType}
-                  required
-                  onChange={(e) => setPpeForm((prev) => ({ ...prev, itemType: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: 4 }}>
-                Size
-                <input
-                  value={ppeForm.size}
-                  required
-                  onChange={(e) => setPpeForm((prev) => ({ ...prev, size: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
-              <label style={{ display: 'grid', gap: 4 }}>
-                Issue date
-                <input
-                  type="date"
-                  value={ppeForm.issueDate}
-                  required
-                  onChange={(e) => setPpeForm((prev) => ({ ...prev, issueDate: e.target.value }))}
-                  style={{ minHeight: 44, padding: '0 12px' }}
-                />
-              </label>
-              {ppeFormError ? (
-                <p role="alert" aria-live="assertive">
-                  {ppeFormError}
-                </p>
-              ) : null}
-              <button type="submit" style={{ minHeight: 44 }}>
-                Issue PPE
-              </button>
-            </form>
-          ) : null}
-          <QualsSection memberId={id} canEdit={isAdmin} />
-          <LosapSection memberId={id} />
-          <AttendanceSection memberId={id} isOwnRecord={id === auth.user?.profile.sub} />
-        </>
+        <div className={styles.layout}>
+          <div className={styles.column}>
+            <ProfileCard member={member} />
+            <MemberStatusSection member={member} />
+            <LosapSection memberId={id} />
+            {canManageMemberAvailability(auth.roles) ? (
+              <MarkOffList
+                memberId={member.memberId}
+                ownRecord={member.memberId === auth.user?.profile.sub}
+              />
+            ) : null}
+            <RolesSection member={member} canEdit={canManageRoles} />
+            <AccountSecuritySection member={member} />
+          </div>
+          <div className={styles.column}>
+            <CertificationsPanel memberId={member.memberId} />
+            <QualsSection memberId={id} canEdit={isAdmin} />
+            <PpeSection memberId={id} />
+            {isTraining ? <TranscriptPanel memberId={member.memberId} /> : null}
+            <AttendanceSection memberId={id} isOwnRecord={id === auth.user?.profile.sub} />
+          </div>
+        </div>
       )}
     </main>
   );

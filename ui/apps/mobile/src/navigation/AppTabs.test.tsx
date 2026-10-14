@@ -38,13 +38,13 @@ test('renders all four tabs from architecture.md §7.2: Alerts, Apparatus (Check
 test('opens on the Alerts tab by default, showing its real content', async () => {
   const { findByRole } = await renderTabs();
 
-  expect(await findByRole('header', { name: 'Alerts' })).toBeTruthy();
+  expect(await findByRole('header', { name: 'Active calls' })).toBeTruthy();
 });
 
 test("switching tabs shows that tab's real content - Apparatus (5), Schedule (6), Alerts (7)", async () => {
   const { findByText, findAllByText, findByRole } = await renderTabs();
 
-  expect(await findByRole('header', { name: 'Alerts' })).toBeTruthy();
+  expect(await findByRole('header', { name: 'Active calls' })).toBeTruthy();
 
   await act(async () => {
     fireEvent.press((await findAllByText('Apparatus'))[0]!);

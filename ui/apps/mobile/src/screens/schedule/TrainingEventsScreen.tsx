@@ -1,19 +1,21 @@
-import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
 import Config from 'react-native-config';
-import { FlatList, Text, TouchableOpacity, useColorScheme } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text, TouchableOpacity, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { getTrainingEvents, signUpForEvent } from '../../features/training/api';
 import type { TrainingEvent } from '../../features/training/types';
+
+/** Field rows: primary text 17/600 (docs/design.md §1 field body). */
+const ROW_TITLE_SIZE = 17;
 
 function formatEventTime(startAt: number): string {
   return new Date(startAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 export function TrainingEventsScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [events, setEvents] = useState<TrainingEvent[]>([]);
@@ -44,67 +46,66 @@ export function TrainingEventsScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+    <Screen>
       {loadError ? (
-        <Text
-          accessibilityRole="alert"
-          style={{
-            color: tokens.error,
-            fontSize: typography.size.sm,
-            paddingHorizontal: spacing.lg,
-            paddingTop: spacing.md,
-          }}
-        >
-          {loadError}
-        </Text>
+        <Card>
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {loadError}
+          </Text>
+        </Card>
       ) : null}
-      <FlatList
-        data={events}
-        keyExtractor={(item) => item.eventId}
-        contentContainerStyle={{ padding: spacing.lg }}
-        ListEmptyComponent={
-          <Text style={{ color: tokens.foreground, opacity: 0.7 }}>
+      <Card>
+        {events.length === 0 ? (
+          <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
             No training events scheduled.
           </Text>
-        }
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            accessibilityRole="button"
-            disabled={item.signedUp}
-            onPress={() => void onSignUp(item.eventId)}
-            style={{
-              minHeight: touchTarget.baseline.ios,
-              justifyContent: 'center',
-              paddingVertical: spacing.md,
-              borderBottomWidth: 1,
-              borderBottomColor: tokens.foreground + '22',
-            }}
-          >
-            <Text
-              style={{
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                fontWeight: '600',
-              }}
-            >
-              {item.title}
-            </Text>
-            <Text style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.sm }}>
-              {formatEventTime(item.startAt)} · {item.category}
-            </Text>
-            <Text
-              style={{
-                color: item.signedUp ? tokens.success : tokens.accent,
-                fontSize: typography.size.sm,
-                fontWeight: '600',
-                marginTop: 2,
-              }}
-            >
-              {item.signedUp ? 'Signed up' : 'Sign up'}
-            </Text>
-          </TouchableOpacity>
+        ) : (
+          <View>
+            {events.map((item, index) => (
+              <TouchableOpacity
+                key={item.eventId}
+                accessibilityRole="button"
+                disabled={item.signedUp}
+                onPress={() => void onSignUp(item.eventId)}
+                style={{
+                  minHeight: targetSize.field,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: spacing.md,
+                  paddingVertical: spacing.sm + spacing.xs,
+                  borderTopWidth: index === 0 ? 0 : 1,
+                  borderTopColor: theme.borderDecorative,
+                }}
+              >
+                <View style={{ flex: 1, gap: spacing.xs }}>
+                  <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
+                    {item.title}
+                  </Text>
+                  <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                    {formatEventTime(item.startAt)} · {item.category}
+                  </Text>
+                </View>
+                {item.signedUp ? (
+                  <StatusChip status="ok" label="Signed up" />
+                ) : (
+                  <Text
+                    style={{
+                      color: theme.accent,
+                      fontSize: typeScale.body.size,
+                      fontWeight: '700',
+                    }}
+                  >
+                    Sign up
+                  </Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
         )}
-      />
-    </SafeAreaView>
+      </Card>
+    </Screen>
   );
 }

@@ -10,11 +10,13 @@ export interface Breadcrumb {
 
 interface PageHeaderProps {
   title: string;
+  /** One muted line under the title: what this page is for, or its scope. */
+  description?: ReactNode;
   breadcrumbs?: Breadcrumb[];
   actions?: ReactNode;
 }
 
-export function PageHeader({ title, breadcrumbs, actions }: PageHeaderProps) {
+export function PageHeader({ title, description, breadcrumbs, actions }: PageHeaderProps) {
   // Every routed page renders exactly one PageHeader, so it owns the browser tab title too:
   // "Live roster · Boxalarm" in the tab strip and history, never a bare "Boxalarm".
   useEffect(() => {
@@ -39,6 +41,7 @@ export function PageHeader({ title, breadcrumbs, actions }: PageHeaderProps) {
           </nav>
         ) : null}
         <h1 className={styles.title}>{title}</h1>
+        {description ? <p className={styles.description}>{description}</p> : null}
       </div>
       {actions ? <div className={styles.actions}>{actions}</div> : null}
     </header>

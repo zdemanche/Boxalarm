@@ -9,7 +9,10 @@ import { listMembers } from '../personnel/api';
 import { Button } from '../../components/ui/Button';
 import { Badge, StatusChip } from '../../components/ui/Chip';
 import { Checkbox, Textarea, TextInput } from '../../components/ui/Field';
+import { Card } from '../../components/ui/Card';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { SkeletonBlock } from '../../components/ui/Skeleton';
+import { CircleDashed } from '../../components/ui/icons';
 import {
   fieldErrorsFromUnknown,
   getIncident,
@@ -170,6 +173,16 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const lockedBannerRef = useRef<HTMLDivElement>(null);
+  const stepListRef = useRef<HTMLOListElement>(null);
+
+  // Below lg the step list is one sideways-scrolling row; keep the current step in view without
+  // scrolling the page vertically (scrollIntoView would).
+  useEffect(() => {
+    const list = stepListRef.current;
+    const current = list?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (!list || !current || list.scrollWidth <= list.clientWidth) return;
+    list.scrollLeft = current.offsetLeft - list.offsetLeft - 16;
+  }, [step]);
   const pendingFieldFocus = useRef<string | null>(null);
   const locked = typeof incident.lockedAt === 'number';
   const nerisSchema = useNerisSchema(incident.nerisSchemaVersion);
@@ -577,6 +590,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     <main id="main-content">
       <PageHeader
         title={title}
+        description="NERIS incident report: complete each step, lock it after review, then submit it."
         breadcrumbs={[{ label: 'Incidents', to: '/incidents' }, { label: incident.dispatchNumber }]}
       />
       <p className="visually-hidden" aria-live="polite">
@@ -589,8 +603,8 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
         </div>
       ) : null}
       <div className={styles.layout}>
-        <nav aria-label="Report steps">
-          <ol className={styles.steps} onKeyDown={onStepKeyDown}>
+        <nav aria-label="Report steps" className={styles.stepsCard}>
+          <ol ref={stepListRef} className={styles.steps} onKeyDown={onStepKeyDown}>
             {steps.map((item, index) => (
               <li key={item.id}>
                 <button
@@ -606,16 +620,16 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           </ol>
         </nav>
 
-        <section className={styles.panel} aria-labelledby="incident-step-heading">
+        <section className={styles.formCard} aria-labelledby="incident-step-heading">
           <h2 id="incident-step-heading" ref={headingRef} tabIndex={-1}>
             {active?.title}
           </h2>
-          <p className={styles.count}>
+          <p className={styles.stepMeta}>
             Step {(step + 1).toString()} of {steps.length.toString()}. {missing.length.toString()}{' '}
             {missing.length === 1 ? 'issue' : 'issues'} before you can submit.
           </p>
           {formError ? (
-            <div role="alert" tabIndex={-1}>
+            <div role="alert" tabIndex={-1} className={styles.formError}>
               {formError}
             </div>
           ) : null}
@@ -634,13 +648,23 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
                 : `${missing.length} issues before you can submit.`}
           </p>
           {missing.length > 0 ? (
-            <ul>
+            <ul className={styles.missingList}>
               {missing.map((field) => (
-                <li key={field}>{fieldLabel(field)} is still needed.</li>
+                <li key={field}>
+                  <CircleDashed size={14} aria-hidden="true" />
+                  {fieldLabel(field)} is still needed.
+                </li>
               ))}
             </ul>
           ) : null}
-          <NerisReviewPanel incident={incident} onPatched={applyReviewPatch} onGoTo={goToIssue} />
+          <NerisReviewPanel
+            incident={incident}
+            onPatched={applyReviewPatch}
+            onGoTo={goToIssue}
+            stepTitleFor={(issue) =>
+              steps.find((item) => item.id === focusTargetFor(issue).stepId)?.title
+            }
+          />
         </aside>
       </div>
     </main>
@@ -664,12 +688,14 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             readOnly
             help={FROM_DISPATCH}
           />
-          <TextInput
-            label="Narrative"
-            value={incident.narrative ?? ''}
-            readOnly
-            help={FROM_DISPATCH}
-          />
+          <div className={styles.wide}>
+            <TextInput
+              label="Narrative"
+              value={incident.narrative ?? ''}
+              readOnly
+              help={FROM_DISPATCH}
+            />
+          </div>
           <TextInput
             label="Alarm time"
             value={formatTimestamp(incident.alarmAt)}
@@ -694,7 +720,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             readOnly
             help="Filled automatically from the response roster."
           />
-          <div className={styles.actions}>
+          <div className={styles.stepActions}>
             <Button type="button" onClick={() => selectStep(step + 1)}>
               Continue
             </Button>
@@ -716,7 +742,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               setFields((current) => ({ ...current, cross_streets: event.target.value }))
             }
           />
-          <div className={styles.actions}>
+          <div className={styles.stepActions}>
             <Button
               type="button"
               loading={saving}
@@ -745,7 +771,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             onChange={(value) => setFields((current) => ({ ...current, action_taken: value }))}
             error={errorFor('action_taken')}
           />
-          <div className={`${styles.actions} ${styles.span}`}>
+          <div className={styles.stepActions}>
             <Button
               type="button"
               loading={saving}
@@ -775,7 +801,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             onRetry={() => void nerisSchema.refetch()}
             onSave={saveModule}
           />
-          <div className={styles.actions}>
+          <div className={styles.stepActions}>
             <Button type="button" onClick={() => selectStep(step + 1)}>
               Continue
             </Button>
@@ -828,7 +854,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               </article>
             ))
           )}
-          <div className={styles.actions}>
+          <div className={styles.stepActions}>
             <Button type="button" onClick={() => selectStep(step + 1)}>
               Continue
             </Button>
@@ -853,7 +879,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             {narrative.length.toLocaleString()} of {MAX_NARRATIVE_LENGTH.toLocaleString()}{' '}
             characters
           </p>
-          <div className={styles.actions}>
+          <div className={styles.stepActions}>
             <Button
               type="button"
               loading={saving}
@@ -918,7 +944,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
             error={errorFor(fieldName)}
             onChange={setValue}
           />
-          <fieldset className={styles.panel}>
+          <fieldset className={styles.fieldset}>
             <legend>Affected members</legend>
             {(incident.respondingMembers ?? []).map((member) => (
               <Checkbox
@@ -941,7 +967,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               onChange={(event) => setExtraMember(event.target.value)}
             />
           </fieldset>
-          <div className={styles.actions}>
+          <div className={styles.stepActions}>
             <Button
               type="button"
               loading={saving}
@@ -957,7 +983,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
 
     return (
       <div className={styles.panel}>
-        <p>
+        <p className={styles.statusLine}>
           Report status:{' '}
           <StatusChip status={STATUS_ROLE[incident.status]}>
             {STATUS_LABEL[incident.status]}
@@ -980,15 +1006,17 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
                   ? 'The report is locked and validated. Submit is available.'
                   : 'Submit stays unavailable until the report status is Validated.'}
             </p>
-            <Button
-              type="button"
-              disabled={!locked || incident.status !== 'VALIDATED'}
-              loading={submitting}
-              aria-describedby="submit-status"
-              onClick={() => void submitToNeris()}
-            >
-              Submit
-            </Button>
+            <div className={styles.stepActions}>
+              <Button
+                type="button"
+                disabled={!locked || incident.status !== 'VALIDATED'}
+                loading={submitting}
+                aria-describedby="submit-status"
+                onClick={() => void submitToNeris()}
+              >
+                Submit
+              </Button>
+            </div>
           </>
         )}
         {everSent ? renderSubmissionPanel() : null}
@@ -1015,8 +1043,8 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     const status = state?.submissionStatus ?? null;
     return (
       <>
-        <div aria-live="polite">
-          <p>
+        <div aria-live="polite" className={styles.submission}>
+          <p className={styles.statusLine}>
             NERIS submission:{' '}
             {status ? (
               <StatusChip status={SUBMISSION_ROLE[status]}>{SUBMISSION_LABEL[status]}</StatusChip>
@@ -1102,8 +1130,14 @@ export function IncidentDetailPage() {
   if (incidentQuery.isLoading) {
     return (
       <main id="main-content" aria-busy="true">
-        <h1>Incident report</h1>
-        <p>Loading the report.</p>
+        <PageHeader
+          title="Incident report"
+          breadcrumbs={[{ label: 'Incidents', to: '/incidents' }]}
+        />
+        <Card className={styles.loading}>
+          <p className={styles.count}>Loading the report.</p>
+          <SkeletonBlock height={240} />
+        </Card>
       </main>
     );
   }

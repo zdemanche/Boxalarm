@@ -1,4 +1,4 @@
-import { palette, radius, spacing, typography } from '@boxalarm/design-tokens';
+import { palette, radius, spacing, surfacePalette, typography } from '@boxalarm/design-tokens';
 import { expect, test } from 'vitest';
 import { GLOBAL_TOKENS_CSS } from './tokens';
 
@@ -23,4 +23,24 @@ test('declares spacing, radius, and typography scale as custom properties', () =
   expect(GLOBAL_TOKENS_CSS).toContain(`--boxalarm-spacing-lg: ${spacing.lg}px;`);
   expect(GLOBAL_TOKENS_CSS).toContain(`--boxalarm-radius-default: ${radius.default}px;`);
   expect(GLOBAL_TOKENS_CSS).toContain(`--boxalarm-font-size-base: ${typography.size.base}px;`);
+});
+
+// Links used to fall through to the browser's default blue/visited-purple, which ignored both
+// palettes (unreadable purple-on-near-black in cab). design.md §2.2 defines `color.text.link`.
+test('styles links with the palette link colour in both day and cab', () => {
+  expect(GLOBAL_TOKENS_CSS).toContain(`--bx-link: ${surfacePalette.day.link};`);
+  const darkBlock = GLOBAL_TOKENS_CSS.split('@media (prefers-color-scheme: dark)')[1];
+  expect(darkBlock).toContain(`--bx-link: ${surfacePalette.cab.link};`);
+  expect(GLOBAL_TOKENS_CSS).toMatch(/\ba\s*\{[^}]*color: var\(--bx-link\);/);
+});
+
+// Raw <h2>s fell back to the browser's 1.5em, rendering section headings larger than the 22px
+// page <h1> on every page that doesn't style its own.
+test('sizes bare headings from the type scale so h2 never outranks the page title', () => {
+  expect(GLOBAL_TOKENS_CSS).toMatch(
+    /\bh2\s*\{[^}]*font-size: var\(--boxalarm-type-heading-size\);/,
+  );
+  expect(GLOBAL_TOKENS_CSS).toMatch(
+    /\bh3,\s*h4\s*\{[^}]*font-size: var\(--boxalarm-type-subheading-size\);/,
+  );
 });

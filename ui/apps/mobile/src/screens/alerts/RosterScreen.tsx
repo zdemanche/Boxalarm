@@ -1,12 +1,13 @@
-import { palette, spacing, typography } from '@boxalarm/design-tokens';
+import { spacing, typeScale, type StatusRole } from '@boxalarm/design-tokens';
 import { useIsFocused, useRoute } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
-import { FlatList, Text, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text, View } from 'react-native';
+import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAlertsRepository } from '../../features/alerts/apiAlertsRepository';
-import { ackStatusColor, ackStatusLabel } from '../../features/alerts/ackStatus';
-import type { RosterEntry } from '../../features/alerts/types';
+import { ackStatusLabel } from '../../features/alerts/ackStatus';
+import type { AckStatus, RosterEntry } from '../../features/alerts/types';
 import { useConnectivity } from '../../sync/ConnectivityContext';
+import { Notice, noticeText, ROW_PRIMARY, ROW_SECONDARY, rowDivider } from './alertsUi';
 
 const REFETCH_INTERVAL_MS = 10_000;
 // Backoff cap for repeated poll failures - retries slow down rather than hammering a struggling
@@ -18,6 +19,15 @@ function formatEta(etaSeconds: number | null): string | null {
   return new Date(etaSeconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Chip status for an answer: coming (ok), coming direct (info), not coming (neutral - red is the
+ * alarm's alone), not answered yet (warning). The word always rides with it. */
+const ACK_CHIP: Record<AckStatus, StatusRole> = {
+  RESPONDING: 'ok',
+  DIRECT_TO_SCENE: 'info',
+  NOT_RESPONDING: 'neutral',
+  UNANSWERED: 'warning',
+};
+
 function formatClockTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -28,13 +38,13 @@ function formatClockTime(epochMs: number): string {
 export function RosterScreen() {
   const route = useRoute();
   const { dispatchId } = route.params as { dispatchId: string };
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const isFocused = useIsFocused();
   const { isOnline } = useConnectivity();
   const repository = useAlertsRepository();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [staleSince, setStaleSince] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const failureCountRef = useRef(0);
 
   useEffect(() => {
@@ -61,6 +71,7 @@ export function RosterScreen() {
         .then((result) => {
           if (cancelled) return;
           setRoster(result);
+          setLoaded(true);
           setStaleSince(null);
           failureCountRef.current = 0;
           scheduleNext(REFETCH_INTERVAL_MS);
@@ -86,86 +97,77 @@ export function RosterScreen() {
 
   if (!isOnline) {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          backgroundColor: tokens.background,
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: spacing.lg,
-        }}
-      >
-        <Text style={{ color: tokens.foreground, fontSize: typography.size.base }}>
-          Offline — roster will resume when connected.
-        </Text>
-      </SafeAreaView>
+      <Screen>
+        <Notice tone="warning">
+          <Text style={noticeText(theme, 'warning')}>
+            Offline — roster will resume when connected.
+          </Text>
+        </Notice>
+      </Screen>
     );
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
+    <Screen>
       {staleSince ? (
-        <Text
-          accessibilityRole="alert"
-          style={{ color: tokens.warning, padding: spacing.sm, fontSize: typography.size.sm }}
-        >
-          {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}
-        </Text>
+        <Notice tone="warning">
+          <Text accessibilityRole="alert" style={noticeText(theme, 'warning')}>
+            {`Data stopped updating at ${formatClockTime(staleSince)} — retrying…`}
+          </Text>
+        </Notice>
       ) : null}
-      <FlatList
-        data={roster}
-        keyExtractor={(item) => item.memberId}
-        contentContainerStyle={{ padding: spacing.lg }}
-        renderItem={({ item }) => {
+      <Card>
+        {roster.length === 0 ? (
+          <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>
+            {loaded
+              ? 'Nobody is on the roster for this call yet.'
+              : staleSince
+                ? 'The roster has not loaded yet.'
+                : 'Loading the roster…'}
+          </Text>
+        ) : null}
+        {roster.map((item, index) => {
           const eta = formatEta(item.eta);
           return (
             <View
-              style={{
-                paddingVertical: spacing.md,
-                borderBottomWidth: 1,
-                borderBottomColor: tokens.foreground + '22',
-              }}
+              key={item.memberId}
+              style={{ minHeight: 56, gap: spacing.xs, ...rowDivider(theme, index) }}
             >
-              <Text
+              <View
                 style={{
-                  color: tokens.foreground,
-                  fontSize: typography.size.base,
-                  fontWeight: '600',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: spacing.sm,
                 }}
               >
-                {item.name}
-              </Text>
-              <Text
-                style={{
-                  color: ackStatusColor(item.ackStatus, tokens),
-                  fontSize: typography.size.sm,
-                  marginTop: 2,
-                }}
-              >
-                {ackStatusLabel(item.ackStatus)}
-                {eta ? ` · ETA ${eta}` : ''}
-              </Text>
+                <Text style={{ flex: 1, minWidth: 120, color: theme.fg, ...ROW_PRIMARY }}>
+                  {item.name}
+                </Text>
+                <StatusChip
+                  status={ACK_CHIP[item.ackStatus]}
+                  label={ackStatusLabel(item.ackStatus)}
+                />
+              </View>
+              {eta ? (
+                <Text style={{ color: theme.fg, ...ROW_SECONDARY, fontWeight: '600' }}>
+                  ETA {eta}
+                </Text>
+              ) : null}
               {item.assignedApparatusId ? (
-                <Text
-                  style={{ color: tokens.foreground, opacity: 0.7, fontSize: typography.size.sm }}
-                >
+                <Text style={{ color: theme.fgMuted, ...ROW_SECONDARY }}>
                   Assigned: {item.assignedApparatusId}
                 </Text>
               ) : null}
-              <Text
-                style={{
-                  color: tokens.foreground,
-                  opacity: 0.7,
-                  fontSize: typography.size.sm,
-                  marginTop: 2,
-                }}
-              >
-                {item.quals.join(', ')}
-              </Text>
+              {item.quals.length > 0 ? (
+                <Text style={{ color: theme.fgMuted, fontSize: typeScale.label.size }}>
+                  {item.quals.join(', ')}
+                </Text>
+              ) : null}
             </View>
           );
-        }}
-      />
-    </SafeAreaView>
+        })}
+      </Card>
+    </Screen>
   );
 }

@@ -151,7 +151,7 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
   };
 }
 
-test('date range lists only in-range incidents, ordered by alarm time', async () => {
+test('date range lists only in-range incidents, newest first', async () => {
   const now = Math.floor(Date.now() / 1000);
   const recent = detail({
     incidentId: 'recent',
@@ -191,8 +191,8 @@ test('date range lists only in-range incidents, ordered by alarm time', async ()
 
   await waitFor(() => {
     expect(screen.getAllByRole('rowheader').map((header) => header.textContent)).toEqual([
-      '26-000100',
       '26-009000',
+      '26-000100',
     ]);
   });
 });
@@ -875,7 +875,7 @@ test('the review checklist lists blocking before warnings, goes to the field, an
   expect(panel.getByText('Fire: not checked')).toBeTruthy();
   expect(modes).toEqual(['local']);
 
-  await user.click(panel.getByRole('button', { name: 'Go to Units' }));
+  await user.click(panel.getByRole('button', { name: 'Go to Apparatus and personnel' }));
   await waitFor(() =>
     expect(document.activeElement).toBe(screen.getByLabelText('Arrived for Truck 304')),
   );
@@ -994,7 +994,7 @@ test('a lock refused with 409 VALIDATION_BLOCKED shows the returned blocking lis
   expect(panel.getByText('Core: incomplete')).toBeTruthy();
   expect(screen.queryByText(/edits are closed/)).toBeNull();
 
-  await user.click(panel.getByRole('button', { name: 'Go to Core' }));
+  await user.click(panel.getByRole('button', { name: 'Go to Incident type and actions' }));
   await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Action taken')));
 });
 

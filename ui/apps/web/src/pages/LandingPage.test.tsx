@@ -1,4 +1,3 @@
-import { typography } from '@boxalarm/design-tokens';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -133,10 +132,13 @@ test('a member home is a real summary: availability, shifts, certs, points, out 
   expect(screen.getByText(/No shifts scheduled this week/)).toBeTruthy();
 });
 
-test('the heading uses the design-token type scale, matching the sign-in page', async () => {
+// The dashboard used to hand-roll its own h1 and padding, so it matched no other page and left
+// the browser tab reading a bare "Boxalarm".
+test('the dashboard uses the shared page header, which also names the browser tab', async () => {
   renderLanding({ sub: 'm1' });
-  const heading = await screen.findByRole('heading', { name: 'My summary' });
-  expect(heading.style.fontSize).toBe(`${typography.size.xl}px`);
+  const heading = await screen.findByRole('heading', { level: 1, name: 'My summary' });
+  expect(heading.closest('header')).toBeTruthy();
+  expect(document.title).toBe('My summary · Boxalarm');
 });
 
 // Regression for MAJOR-2: the dashboard used to hardcode "No active call." as fact regardless

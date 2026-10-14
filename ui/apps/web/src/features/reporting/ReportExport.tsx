@@ -3,7 +3,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ForbiddenState } from '../../components/ForbiddenState';
 import { ApiError } from '../../lib/apiClient';
-import { Button, Card, Select } from '../../components/ui';
+import { Button, Select } from '../../components/ui';
+import { Download } from '../../components/ui/icons';
 import { getReportExportStatus, startReportExport } from './api';
 import type { ExportFormat, ReportName } from './types';
 import styles from './ReportingPage.module.css';
@@ -57,7 +58,8 @@ export function ReportExport({
   const startForbidden = start.error instanceof ApiError && start.error.problem.status === 403;
 
   return (
-    <Card title="Export">
+    // Sits at the end of the report's toolbar, so it is a labelled group rather than a card.
+    <div role="group" aria-label="Export" className={styles.exportBlock}>
       <div className={styles.exportRow}>
         <Select
           label="Format"
@@ -74,29 +76,42 @@ export function ReportExport({
           disabled={disabled}
           variant="secondary"
         >
+          <Download size={16} aria-hidden="true" />
           Export {format.toUpperCase()}
         </Button>
       </div>
       {startForbidden ? (
         <ForbiddenState embedded headingLevel="h2" />
       ) : start.isError ? (
-        <p role="alert">Could not start the export. Try again.</p>
+        <p role="alert" className={styles.exportNote}>
+          Could not start the export. Try again.
+        </p>
       ) : null}
-      {queuedFailed ? <p role="alert">The export could not be queued. Try again.</p> : null}
+      {queuedFailed ? (
+        <p role="alert" className={styles.exportNote}>
+          The export could not be queued. Try again.
+        </p>
+      ) : null}
       {jobId && status.isError ? (
-        <p role="alert">Could not check the export&apos;s status. Try again.</p>
+        <p role="alert" className={styles.exportNote}>
+          Could not check the export&apos;s status. Try again.
+        </p>
       ) : jobId && job?.status === 'FAILED' ? (
-        <p role="alert">The export failed. Try again.</p>
+        <p role="alert" className={styles.exportNote}>
+          The export failed. Try again.
+        </p>
       ) : jobId && job?.status === 'COMPLETED' && job.downloadUrl ? (
-        <p role="status">
-          <a href={job.downloadUrl} download>
+        <p role="status" className={styles.exportNote}>
+          <a href={job.downloadUrl} download className={styles.download}>
             Download {job.format.toUpperCase()}
           </a>{' '}
-          <span className={styles.meta}>(link expires 15 minutes after it was issued)</span>
+          <span className={styles.exportMeta}>(link expires 15 minutes after it was issued)</span>
         </p>
       ) : jobId ? (
-        <p role="status">Export in progress…</p>
+        <p role="status" className={styles.exportNote}>
+          Export in progress…
+        </p>
       ) : null}
-    </Card>
+    </div>
   );
 }

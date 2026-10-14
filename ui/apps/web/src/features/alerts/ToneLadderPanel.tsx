@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
@@ -12,6 +12,7 @@ import {
   triggerMutualAid,
 } from './api';
 import type { MutualAid, ToneLadder, TriggerMutualAidResult } from './types';
+import styles from './Alerts.module.css';
 
 const REFETCH_INTERVAL_MS = 10_000;
 const FINAL_TONE = 3;
@@ -114,6 +115,8 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
   const [notes, setNotes] = useState('');
   const [ackPending, setAckPending] = useState(false);
   const [ackError, setAckError] = useState<string | null>(null);
+  const ladderHeadingId = useId();
+  const mutualAidHeadingId = useId();
 
   const query = useQuery({
     queryKey: ['alerts', 'dispatch', dispatchId],
@@ -145,7 +148,13 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
       </ApiForbiddenGate>
     );
   }
-  if (!query.data) return <Skeleton lines={2} />;
+  if (!query.data) {
+    return (
+      <Card title="Tone ladder and mutual aid">
+        <Skeleton lines={2} />
+      </Card>
+    );
+  }
 
   const ladder = query.data.toneLadder;
   const mutualAid = query.data.mutualAid;
@@ -156,20 +165,21 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
     mutualAid !== undefined && mutualAid !== null && mutualAid.acknowledgedAt === null;
 
   return (
-    <Card title="Tone ladder and mutual aid" style={{ marginTop: 'var(--bx-space-lg)' }}>
-      <section aria-label="Tone ladder">
+    <Card title="Tone ladder and mutual aid">
+      <section aria-labelledby={ladderHeadingId} className={styles.subsection}>
+        <h3 id={ladderHeadingId}>Tone ladder</h3>
         {ladder ? (
           <>
             <p>{ladderSummary(ladder)}</p>
             {ladder.nextToneAt !== null && ladderActive ? (
-              <p>Next tone check at {formatTime(ladder.nextToneAt)}.</p>
+              <p className={styles.subtle}>Next tone check at {formatTime(ladder.nextToneAt)}.</p>
             ) : null}
           </>
         ) : (
           <p role="status">Tone ladder status could not be loaded for this dispatch.</p>
         )}
         {canControl && ladderActive && nextTone !== null ? (
-          <div style={{ display: 'flex', gap: 'var(--bx-space-sm)', flexWrap: 'wrap' }}>
+          <div className={styles.controls}>
             <Button onClick={() => setOpen('advance')}>Advance to tone {nextTone}</Button>
             <Button variant="danger" onClick={() => setOpen('halt')}>
               Halt tone ladder
@@ -178,10 +188,11 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
         ) : null}
       </section>
 
-      <section aria-label="Mutual aid" style={{ marginTop: 'var(--bx-space-md)' }}>
+      <section aria-labelledby={mutualAidHeadingId} className={styles.subsection}>
+        <h3 id={mutualAidHeadingId}>Mutual aid</h3>
         <MutualAidSummary mutualAid={mutualAid} />
         {canControl ? (
-          <div style={{ display: 'flex', gap: 'var(--bx-space-sm)', flexWrap: 'wrap' }}>
+          <div className={styles.controls}>
             {mutualAid === null || mutualAid === undefined ? (
               <Button variant="secondary" onClick={() => setOpen('trigger')}>
                 Trigger mutual aid
@@ -211,7 +222,7 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
       </section>
 
       {result ? (
-        <p role="status" aria-live="polite" style={{ marginTop: 'var(--bx-space-md)' }}>
+        <p role="status" aria-live="polite" className={styles.result}>
           {result}
         </p>
       ) : null}

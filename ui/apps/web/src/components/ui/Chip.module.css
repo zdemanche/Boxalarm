@@ -5,9 +5,11 @@
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
-  padding: 5px 9px;
-  border-radius: var(--bx-radius-sm);
-  border: 1px solid currentColor;
+  padding: 4px 9px;
+  border-radius: var(--bx-radius-pill);
+  /* The opaque fill/label pair carries the status (with the glyph and word); the edge is a soft
+     tint of the label so the chip reads as a tag, not a bordered box. */
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
   white-space: nowrap;
 }
 

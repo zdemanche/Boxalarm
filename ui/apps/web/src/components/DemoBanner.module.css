@@ -1,21 +1,39 @@
+/* A slim strip in the shell's colours: present on every page of the demo, but not shouting over
+   it the way the old full-width info-blue bar did. */
 .banner {
+  --bx-focus: var(--bx-shell-accent);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--bx-space-md);
-  padding: var(--bx-space-xs) var(--bx-space-md);
-  background: var(--bx-status-info);
-  color: var(--bx-bg);
+  gap: var(--bx-space-sm) var(--bx-space-md);
+  padding: 6px var(--bx-space-md);
+  background: var(--bx-shell-bg);
+  border-bottom: 1px solid var(--bx-shell-border);
+  color: var(--bx-shell-fg-muted);
   font-size: 13px;
-  font-weight: 600;
+}
+
+.tag {
+  padding: 2px 8px;
+  border-radius: var(--bx-radius-pill);
+  background: var(--bx-shell-accent);
+  color: var(--bx-shell-bg);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bx-space-xs);
 }
 
 .select {
   font: inherit;
   font-weight: 600;
-  background: var(--bx-bg);
-  color: var(--bx-fg);
-  border: 1px solid transparent;
+  background: var(--bx-shell-bg-raised);
+  color: var(--bx-shell-fg);
+  border: 1px solid var(--bx-shell-border);
   border-radius: var(--bx-radius-sm);
   padding: 2px 6px;
 }

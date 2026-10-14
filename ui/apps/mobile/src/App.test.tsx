@@ -1,4 +1,4 @@
-import { palette, radius, touchTarget } from '@boxalarm/design-tokens';
+import { accentPalette, radiusScale, targetSize } from '@boxalarm/design-tokens';
 import { render } from '@testing-library/react-native';
 import { getInternetCredentials } from 'react-native-keychain';
 import { App } from './App';
@@ -43,16 +43,21 @@ test('a cold start with no stored credentials renders the sign-in screen', async
   expect(await findByText('Sign in')).toBeTruthy();
 });
 
-test('the sign-in button uses the accent color and meets the N3.5 touch-target minimum', async () => {
+// The 2026-10-11 brand layer: the amber fill under dark text (AA-tested in design-tokens), full
+// width at the 56dp field floor - above N3.5's 44pt minimum in both directions.
+test('the sign-in button is the amber primary at the glove-sized field floor', async () => {
   const { findByRole } = await render(<App />);
 
   const button = await findByRole('button', { name: 'Sign in' });
-  expect(button).toHaveStyle({ backgroundColor: palette.day.accent, borderRadius: radius.default });
+  expect(button).toHaveStyle({
+    backgroundColor: accentPalette.day.fill,
+    borderRadius: radiusScale.lg,
+  });
   const style = Array.isArray(button.props.style)
     ? Object.assign({}, ...button.props.style)
     : button.props.style;
-  expect(style.minHeight).toBeGreaterThanOrEqual(touchTarget.baseline.ios);
-  expect(style.minWidth).toBeGreaterThanOrEqual(touchTarget.baseline.ios);
+  expect(style.minHeight).toBeGreaterThanOrEqual(targetSize.field);
+  expect(style.width).toBe('100%');
 });
 
 test('a valid stored session lands on the AppTabs shell (Alerts · Checks · Schedule · Me)', async () => {

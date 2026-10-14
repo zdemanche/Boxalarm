@@ -3,17 +3,34 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { KNOWN_ROLES, type Role } from '../../auth/roles';
 import { ApiError } from '../../lib/apiClient';
+import { Button } from '../../components/ui/Button';
+import { Card } from '../../components/ui/Card';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { updateMemberRoles } from './api';
 import type { Member } from './types';
+import styles from './MemberDetailPage.module.css';
 
-/** "Grant OFFICER, remove TRAINING" - what the confirm step names before anything is sent. */
+/** What a person reads for each role - never the Cognito group name (CHIEF, TRAINING). */
+const ROLE_LABEL: Record<Role, string> = {
+  MEMBER: 'Member',
+  OFFICER: 'Officer',
+  TRAINING: 'Training officer',
+  APPARATUS: 'Apparatus officer',
+  ADMIN: 'Admin',
+  CHIEF: 'Chief',
+};
+
+function roleList(roles: readonly Role[]): string {
+  return roles.map((role) => ROLE_LABEL[role]).join(', ');
+}
+
+/** "Grant Officer, remove Training officer" - what the confirm step names before sending. */
 export function describeRoleChange(before: readonly Role[], after: readonly Role[]): string {
   const granted = after.filter((role) => !before.includes(role));
   const removed = before.filter((role) => !after.includes(role));
   const parts = [
-    granted.length > 0 ? `Grant ${granted.join(', ')}` : null,
-    removed.length > 0 ? `${granted.length > 0 ? 'remove' : 'Remove'} ${removed.join(', ')}` : null,
+    granted.length > 0 ? `Grant ${roleList(granted)}` : null,
+    removed.length > 0 ? `${granted.length > 0 ? 'remove' : 'Remove'} ${roleList(removed)}` : null,
   ].filter((part): part is string => part !== null);
   return parts.join(', ');
 }
@@ -76,21 +93,21 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
     }
   }
 
-  const heading = <h2 style={{ fontSize: 'var(--boxalarm-font-size-lg)', margin: 0 }}>Roles</h2>;
-
   if (!canEdit || isSelf) {
     return (
-      <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-        {heading}
-        <p>{saved.join(', ')}</p>
-        {canEdit ? <p>You cannot change your own roles. Another chief or admin must.</p> : null}
-      </section>
+      <Card title="Roles">
+        <p className={styles.rolesLine}>{roleList(saved)}</p>
+        {canEdit ? (
+          <p className={styles.note}>
+            You cannot change your own roles. Another chief or admin must.
+          </p>
+        ) : null}
+      </Card>
     );
   }
 
   return (
-    <section style={{ marginTop: 'var(--boxalarm-spacing-lg)' }}>
-      {heading}
+    <Card title="Roles">
       <form
         aria-label="Member roles"
         onSubmit={(event: FormEvent) => {
@@ -103,21 +120,11 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
           setConfirmOpen(true);
         }}
       >
-        <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-          <legend style={{ padding: 0 }}>Roles held by {name}</legend>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--boxalarm-spacing-sm)' }}>
+        <fieldset className={styles.fieldset}>
+          <legend className={styles.legend}>Roles held by {name}</legend>
+          <div className={styles.choices}>
             {KNOWN_ROLES.map((role) => (
-              <label
-                key={role}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  minHeight: 44,
-                  minWidth: 44,
-                  padding: '0 12px',
-                }}
-              >
+              <label key={role} className={styles.choice}>
                 <input
                   type="checkbox"
                   checked={draft.includes(role)}
@@ -130,23 +137,26 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
                       KNOWN_ROLES.filter((r) => (r === role ? checked : prev.includes(r))),
                     );
                   }}
-                  style={{ width: 20, height: 20 }}
                 />
-                {role}
+                {ROLE_LABEL[role]}
               </label>
             ))}
           </div>
-          <p id="member-role-note" style={{ margin: 0, fontSize: 13 }}>
-            Every member keeps MEMBER.
+          <p id="member-role-note" className={styles.note}>
+            Every member keeps the Member role.
           </p>
         </fieldset>
-        <button type="submit" style={{ minHeight: 44, marginTop: 'var(--boxalarm-spacing-sm)' }}>
-          Review role changes
-        </button>
+        <div className={styles.formActions}>
+          <Button type="submit" variant="secondary">
+            Review role changes
+          </Button>
+        </div>
       </form>
       {/* Always mounted: several screen readers skip a live region that appears already
           filled, so the message is swapped into an existing one. */}
-      <p role="status">{message ?? ''}</p>
+      <p role="status" className={styles.status}>
+        {message ?? ''}
+      </p>
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
@@ -160,6 +170,6 @@ export function RolesSection({ member, canEdit }: { member: Member; canEdit: boo
         confirmLabel="Save roles"
         onConfirm={confirmSave}
       />
-    </section>
+    </Card>
   );
 }

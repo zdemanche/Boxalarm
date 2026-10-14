@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react-native';
-import { palette } from '@boxalarm/design-tokens';
+import { statusChipPalette } from '@boxalarm/design-tokens';
 import { CertificationsScreen } from './CertificationsScreen';
 
 test('lists each certification with its type and status', async () => {
@@ -11,18 +11,19 @@ test('lists each certification with its type and status', async () => {
   expect(await findByText('Expired')).toBeTruthy();
 });
 
-test('an expired certification renders its status in the error color', async () => {
+// Status is a chip - glyph, word and the chip's colour pair (docs/design.md §2.3).
+test('an expired certification renders its status as a danger chip', async () => {
   const { findByText } = await render(<CertificationsScreen />);
 
   const expiredLabel = await findByText('Expired');
-  expect(expiredLabel).toHaveStyle({ color: palette.day.error });
+  expect(expiredLabel).toHaveStyle({ color: statusChipPalette.day.danger.onFill });
 });
 
-test('a current certification renders its status in the success color', async () => {
+test('a current certification renders its status as an ok chip', async () => {
   const { findAllByText } = await render(<CertificationsScreen />);
 
   const [currentLabel] = await findAllByText('Current');
-  expect(currentLabel).toHaveStyle({ color: palette.day.success });
+  expect(currentLabel).toHaveStyle({ color: statusChipPalette.day.ok.onFill });
 });
 
 test('signed-out fallback data is labelled as sample data (M6)', async () => {

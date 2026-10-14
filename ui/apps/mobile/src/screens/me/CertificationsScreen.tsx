@@ -1,21 +1,17 @@
-import { palette, spacing, typography } from '@boxalarm/design-tokens';
+import { typeScale } from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
 import Config from 'react-native-config';
-import { FlatList, Text, useColorScheme, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { Card, Screen, useTheme } from '../../components/ui';
 import { getCertifications } from '../../features/training/api';
 import { ApiError } from '../../lib/apiClient';
-import {
-  certificationStatusColor,
-  certificationStatusLabel,
-} from '../../features/me/certificationStatus';
 import { mockMeRepository } from '../../features/me/mockMeRepository';
 import type { Certification } from '../../features/me/types';
+import { CertificationChip, InfoRow, Rows } from './MeRows';
 
 export function CertificationsScreen() {
-  const scheme = useColorScheme();
-  const tokens = scheme === 'dark' ? palette.cab : palette.day;
+  const theme = useTheme();
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [certifications, setCertifications] = useState<Certification[]>([]);
@@ -64,72 +60,36 @@ export function CertificationsScreen() {
   }, [auth, apiBaseUrl]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: tokens.background }}>
-      {loadError ? (
-        <Text
-          accessibilityRole="alert"
-          style={{ color: tokens.error, fontSize: typography.size.sm, padding: spacing.lg }}
-        >
-          {loadError}
-        </Text>
-      ) : null}
+    <Screen>
       {isSampleData ? (
-        <Text
-          style={{
-            color: tokens.foreground,
-            opacity: 0.7,
-            fontSize: typography.size.sm,
-            paddingHorizontal: spacing.lg,
-            paddingTop: spacing.lg,
-          }}
-        >
+        <Text style={{ color: theme.fgMuted, fontSize: typeScale.bodyDense.size }}>
           Sample data. Sign in to see your certifications.
         </Text>
       ) : null}
-      <FlatList
-        data={certifications}
-        keyExtractor={(item) => item.certId}
-        contentContainerStyle={{ padding: spacing.lg }}
-        renderItem={({ item }) => (
-          <View
-            style={{
-              paddingVertical: spacing.md,
-              borderBottomWidth: 1,
-              borderBottomColor: tokens.foreground + '22',
-            }}
+      {loadError ? (
+        <Card>
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
           >
-            <Text
-              style={{
-                color: tokens.foreground,
-                fontSize: typography.size.base,
-                fontWeight: '600',
-              }}
-            >
-              {item.certType}
-            </Text>
-            <Text
-              style={{
-                color: tokens.foreground,
-                opacity: 0.7,
-                fontSize: typography.size.sm,
-                marginTop: 2,
-              }}
-            >
-              {item.issuingAuthority} · expires {item.expiryDate}
-            </Text>
-            <Text
-              style={{
-                color: certificationStatusColor(item.status, tokens),
-                fontSize: typography.size.sm,
-                fontWeight: '600',
-                marginTop: spacing.xs,
-              }}
-            >
-              {certificationStatusLabel(item.status)}
-            </Text>
-          </View>
-        )}
-      />
-    </SafeAreaView>
+            {loadError}
+          </Text>
+        </Card>
+      ) : null}
+      {certifications.length > 0 ? (
+        <Card>
+          <Rows>
+            {certifications.map((item) => (
+              <InfoRow
+                key={item.certId}
+                title={item.certType}
+                detail={`${item.issuingAuthority} · expires ${item.expiryDate}`}
+                trailing={<CertificationChip status={item.status} />}
+              />
+            ))}
+          </Rows>
+        </Card>
+      ) : null}
+    </Screen>
   );
 }

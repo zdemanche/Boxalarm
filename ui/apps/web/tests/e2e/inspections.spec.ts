@@ -109,7 +109,14 @@ test('pre-plan upload form saves and re-renders the attachment (E5-S2 smoke)', a
     }),
   );
   await page.route('**/api/v1/inspections/occupancies/occ-1/pre-plan', (route) => {
-    if (route.request().method() === 'GET') return route.fulfill({ status: 404, json: {} });
+    // The handler's RFC 7807 not-found (prePlanProblems.notFoundProblem). A bare {} carries no
+    // status, which the page rightly treats as a failed read rather than "no pre-plan yet".
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        status: 404,
+        json: { type: 'https://boxalarm.dev/problems/not-found', title: 'Not Found', status: 404 },
+      });
+    }
     return route.fulfill({
       json: {
         prePlanId: 'pp-1',
@@ -216,7 +223,8 @@ test('map screen supports keyboard pan/zoom, a list alternative, and passes axe 
 
   await page.goto('/inspections/map');
   await expect(page.getByText('HYD-1')).toBeVisible();
-  await expect(page.getByText('⊘ Out of service')).toBeVisible();
+  // The list's status is a StatusChip: its glyph is an icon, the word is the text.
+  await expect(page.getByText('Out of service', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Zoom in' }).focus();
   await page.keyboard.press('Enter');

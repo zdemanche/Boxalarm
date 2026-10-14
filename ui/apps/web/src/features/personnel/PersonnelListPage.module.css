@@ -1,0 +1,51 @@
+.stats {
+  display: grid;
+  /* Two-up on a phone rather than one tall tile per row (the dashboard's stat row). */
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(180px, calc(50% - var(--bx-space-md) / 2)), 1fr)
+  );
+  gap: var(--bx-space-md);
+  margin-bottom: var(--bx-space-lg);
+}
+
+.name {
+  font-weight: 600;
+}
+
+.contact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.phone {
+  font-size: 13px;
+  color: var(--bx-fg-muted);
+}
+
+.mono {
+  font-family: var(--bx-font-mono);
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: var(--bx-space-md);
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--bx-space-sm);
+  margin-top: var(--bx-space-md);
+}
+
+.error {
+  margin: 0;
+  margin-right: auto;
+  color: var(--bx-status-danger);
+  font-weight: 600;
+}
