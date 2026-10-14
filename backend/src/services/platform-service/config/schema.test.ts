@@ -250,6 +250,26 @@ describe('validateConfigValue', () => {
     );
   });
 
+  describe('SHIFT_RULES', () => {
+    it('accepts a boolean requiresOfficerApproval', () => {
+      expect(validateConfigValue('SHIFT_RULES', { requiresOfficerApproval: false })).toEqual([]);
+    });
+
+    it('rejects a non-boolean requiresOfficerApproval, a missing flag and unknown keys', () => {
+      expect(validateConfigValue('SHIFT_RULES', { requiresOfficerApproval: 'no' })).toContainEqual({
+        field: 'requiresOfficerApproval',
+        message: 'is required and must be a boolean',
+      });
+      expect(validateConfigValue('SHIFT_RULES', {})).toContainEqual({
+        field: 'requiresOfficerApproval',
+        message: 'is required and must be a boolean',
+      });
+      expect(
+        validateConfigValue('SHIFT_RULES', { requiresOfficerApproval: true, extra: 1 }),
+      ).toContainEqual({ field: 'extra', message: 'is not a recognized field' });
+    });
+  });
+
   describe('NERIS', () => {
     it('accepts a department id with optional switches and rules', () => {
       expect(

@@ -351,6 +351,14 @@ const NERIS_RULE_FIELDS = ['requireNarrative', 'minNarrativeLength', 'requireUni
  * officer's lock submits straight away, a submission kill switch, and the department's own
  * pre-lock rules on top of NERIS's.
  */
+function validateShiftRules(value: Record<string, unknown>): FieldError[] {
+  const errors = unknownFieldErrors(value, ['requiresOfficerApproval']);
+  if (typeof value.requiresOfficerApproval !== 'boolean') {
+    errors.push({ field: 'requiresOfficerApproval', message: 'is required and must be a boolean' });
+  }
+  return errors;
+}
+
 function validateNeris(value: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [...unknownFieldErrors(value, NERIS_KNOWN_FIELDS)];
   if (typeof value.departmentNerisId !== 'string' || !/^FD\d{8}$/.test(value.departmentNerisId)) {
@@ -441,5 +449,7 @@ export function validateConfigValue(
       return validateRidingPositions(value);
     case 'NERIS':
       return validateNeris(value);
+    case 'SHIFT_RULES':
+      return validateShiftRules(value);
   }
 }

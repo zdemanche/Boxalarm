@@ -20,6 +20,7 @@ export const DEPARTMENT_CONFIG_TYPES = [
   'RETENTION',
   'RIDING_POSITIONS',
   'NERIS',
+  'SHIFT_RULES',
 ] as const;
 
 export type DepartmentConfigType = (typeof DEPARTMENT_CONFIG_TYPES)[number];

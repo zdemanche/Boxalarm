@@ -161,6 +161,27 @@ describe('department config handler', () => {
     });
   });
 
+  it('PUT stores SHIFT_RULES at CONFIG#SHIFT_RULES so officer approval of swaps can be turned off', async () => {
+    const { createHandler } = await import('./handler.js');
+    const send = vi.fn().mockResolvedValue({});
+    const handler = createHandler({
+      docClient: fakeDocClient(send),
+    });
+    const result = (await handler(
+      buildEvent('PUT', 'SHIFT_RULES', adminContext(), {
+        value: { requiresOfficerApproval: false },
+      }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toMatchObject({
+      configType: 'SHIFT_RULES',
+      value: { requiresOfficerApproval: false },
+    });
+    expect(JSON.stringify(send.mock.calls)).toContain('CONFIG#SHIFT_RULES');
+  });
+
   it('PUT returns 400 with field-level errors when body.value does not match the configType schema', async () => {
     const { createHandler } = await import('./handler.js');
     const send = vi.fn();
