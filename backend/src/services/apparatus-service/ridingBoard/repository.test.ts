@@ -321,6 +321,27 @@ describe('assignSeat cancellation branches', () => {
       assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, { ...baseInput, clientAssignmentId: 'C-1' }),
     ).rejects.toBeInstanceOf(RidingBoardWriteError);
   });
+
+  it('B2-269: a failed transaction does not emit RidingAssignmentFailed itself (the handler owns it)', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem()]);
+    const realSend = client.send.bind(client) as (command: unknown) => Promise<unknown>;
+    vi.spyOn(client, 'send').mockImplementation(((command: unknown) => {
+      if (
+        (command as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand'
+      ) {
+        return Promise.reject(new Error('boom'));
+      }
+      return realSend(command);
+    }) as never);
+    const written = [vi.spyOn(console, 'log'), vi.spyOn(process.stdout, 'write')];
+
+    await expect(
+      assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, { ...baseInput, clientAssignmentId: 'C-1' }),
+    ).rejects.toBeInstanceOf(RidingBoardWriteError);
+
+    const output = written.flatMap((spy) => spy.mock.calls.map((call) => String(call[0])));
+    expect(output.some((line) => line.includes('RidingAssignmentFailed'))).toBe(false);
+  });
 });
 
 describe('getRidingBoard', () => {

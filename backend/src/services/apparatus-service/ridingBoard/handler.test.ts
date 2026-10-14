@@ -325,6 +325,78 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it.each([
+    ['a type absent from the config', { ENGINE: [{ code: 'DRIVER', label: 'Driver' }] }],
+    ['an empty config', {}],
+  ])('B2-267: returns 400 and never writes the seat for %s', async (_name, config) => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    await mockApparatusRepository({
+      findApparatusItem: vi.fn().mockResolvedValue({
+        apparatusId: 'APP-TANKER-1',
+        unitId: 'TANKER-1',
+        type: 'TANKER',
+        status: 'IN_SERVICE',
+      }),
+    });
+    const assignSeat = vi.fn();
+    await mockRidingBoardRepository({
+      getRidingPositionsConfig: vi.fn().mockResolvedValue(config),
+      assignSeat,
+    });
+    mockDynamoClient();
+
+    const { assignRidingPositionHandler } = await import('./handler.js');
+    const result = await assignRidingPositionHandler(
+      buildPostEvent(OFFICER, {
+        body: JSON.stringify({
+          unitId: 'TANKER-1',
+          positionCode: 'DRIVER',
+          memberId: 'MBR-1',
+          expectedVersion: 0,
+          clientAssignmentId: 'CLIENT-1',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(assignSeat).not.toHaveBeenCalled();
+  });
+
+  it('B2-269: a lookup failure returns 503 and emits RidingAssignmentFailed once with LookupError', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    const emitOutcomeMetric = vi.fn();
+    vi.doMock('@boxalarm/metrics', () => ({ emitOutcomeMetric }));
+    await mockApparatusRepository({
+      findApparatusItem: vi.fn().mockRejectedValue(new Error('ddb down')),
+    });
+    await mockRidingBoardRepository({
+      getRidingPositionsConfig: vi.fn().mockResolvedValue({}),
+    });
+    mockDynamoClient();
+
+    const { assignRidingPositionHandler } = await import('./handler.js');
+    const result = await assignRidingPositionHandler(
+      buildPostEvent(OFFICER, {
+        body: JSON.stringify({
+          unitId: 'ENGINE-2',
+          positionCode: 'DRIVER',
+          memberId: 'MBR-1',
+          expectedVersion: 0,
+          clientAssignmentId: 'CLIENT-1',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 503 });
+    expect(emitOutcomeMetric).toHaveBeenCalledTimes(1);
+    expect(emitOutcomeMetric).toHaveBeenCalledWith(
+      expect.any(String),
+      'RidingAssignmentFailed',
+      'LookupError',
+    );
+    vi.doUnmock('@boxalarm/metrics');
+  });
+
   it('AC8: maps a CONFLICT outcome to 409 with the winning assignment in the body', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({

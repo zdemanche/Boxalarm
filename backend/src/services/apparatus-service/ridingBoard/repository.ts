@@ -464,11 +464,6 @@ export async function assignSeat(
       emitOutcomeMetric(METRICS_NAMESPACE, 'RidingAssignmentConflict');
       return { kind: 'CONFLICT', current };
     }
-    emitOutcomeMetric(
-      METRICS_NAMESPACE,
-      'RidingAssignmentFailed',
-      error instanceof Error ? error.constructor.name : 'UnknownError',
-    );
     throw new RidingBoardWriteError(error);
   }
 
