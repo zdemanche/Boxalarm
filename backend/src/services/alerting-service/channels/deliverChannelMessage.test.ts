@@ -809,6 +809,47 @@ describe('deliverChannelMessage — multi-device push', () => {
       .map((command) => command.input);
   }
 
+  it('a device held valid by the live mass-invalidation latch does not fail a page another device already delivered', async () => {
+    const sendPush = vi
+      .fn()
+      .mockImplementation((notification: { token: string }) =>
+        Promise.resolve(
+          notification.token === PHONE.token
+            ? { outcome: 'sent' }
+            : { outcome: 'invalid_token', reason: 'FCM_UNREGISTERED' },
+        ),
+      );
+    mockPush(sendPush);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi
+      .fn()
+      .mockImplementation(
+        (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+          const sk = (command.input.Key as { sk?: string } | undefined)?.sk;
+          if (command.constructor.name === 'GetCommand' && sk === 'MEMBER#mbr-1') {
+            return Promise.resolve({
+              Item: { snapshotUpdatedAt: 1, contactChannels: [PHONE, TABLET] },
+            });
+          }
+          if (command.constructor.name === 'GetCommand' && sk === 'TRIPPED') {
+            return Promise.resolve({ Item: { ttl: Math.floor(Date.now() / 1000) + 600 } });
+          }
+          return Promise.resolve({});
+        },
+      );
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', params),
+    ).resolves.toBeUndefined();
+
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'SENT' },
+    });
+    errorSpy.mockRestore();
+  });
+
   it('pages every registered device under the one per-channel guard and idempotency key', async () => {
     const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });
     mockPush(sendPush);

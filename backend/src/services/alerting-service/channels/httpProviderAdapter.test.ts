@@ -275,4 +275,34 @@ describe('sendViaHttpProvider — isTest selects the sandbox credentials (archit
     expect(authHeader(fetchMock, 1)).toBe('Bearer key-for-sms-sandbox-secret');
     expect(authHeader(fetchMock, 2)).toBe('Bearer key-for-sms-secret');
   });
+
+  it('retries once on a fresh connection when a keep-alive socket was closed while the Lambda was frozen', async () => {
+    const { client } = fakeSecretsClient('api-key-1');
+    const socketClosed = Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'UND_ERR_SOCKET' },
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(socketClosed)
+      .mockResolvedValue({ ok: true, status: 200 } as Response);
+    globalThis.fetch = fetchMock;
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await sendViaHttpProvider('sms', '+12035550101', 'msg', process.env, { secretsClient: client });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a timeout', async () => {
+    const { client } = fakeSecretsClient('api-key-1');
+    const timeout = new DOMException('timed out', 'TimeoutError');
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(timeout);
+    globalThis.fetch = fetchMock;
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await expect(
+      sendViaHttpProvider('sms', '+12035550101', 'msg', process.env, { secretsClient: client }),
+    ).rejects.toBe(timeout);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

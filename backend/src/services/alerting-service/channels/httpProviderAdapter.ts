@@ -1,4 +1,9 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import {
+  PUSH_SEND_BUDGET_REQUESTS,
+  fetchRetryingConnectionLoss,
+  nextRequestTimeout,
+} from '@boxalarm/push-transport';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { ALERTING_SDK_CLIENT_CONFIG } from '../awsClientConfig.js';
 import type { ChannelName } from './channelEnvelope.js';
@@ -98,13 +103,17 @@ function postToProvider(
   target: string,
   message: string,
   apiKey: string,
+  deadlineMs: number,
 ): Promise<Response> {
-  return fetch(endpointUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ target, message }),
-    signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
-  });
+  return fetchRetryingConnectionLoss(
+    endpointUrl,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ target, message }),
+    },
+    () => nextRequestTimeout(PROVIDER_REQUEST_TIMEOUT_MS, deadlineMs),
+  );
 }
 
 function claimRefusalReread(secretId: string): boolean {
@@ -131,7 +140,8 @@ export async function sendViaHttpProvider(
   const config = readChannelProviderConfig(channel, env, { isTest: options.isTest === true });
   const client = createChannelSecretsClient(options.secretsClient);
   const apiKey = await resolveApiKey(config.secretId, client);
-  let response = await postToProvider(config.endpointUrl, target, message, apiKey);
+  const deadlineMs = Date.now() + PROVIDER_REQUEST_TIMEOUT_MS * PUSH_SEND_BUDGET_REQUESTS;
+  let response = await postToProvider(config.endpointUrl, target, message, apiKey, deadlineMs);
   if (isAuthRefusal(response) && claimRefusalReread(config.secretId)) {
     // A rotated vendor key stays cached for the TTL on every warm worker; drop the refused key
     // (only if nobody already replaced it) and retry once with whatever the secret holds now.
@@ -140,7 +150,13 @@ export async function sendViaHttpProvider(
     }
     const refreshedKey = await resolveApiKey(config.secretId, client);
     if (refreshedKey !== apiKey) {
-      response = await postToProvider(config.endpointUrl, target, message, refreshedKey);
+      response = await postToProvider(
+        config.endpointUrl,
+        target,
+        message,
+        refreshedKey,
+        deadlineMs,
+      );
     }
   }
   if (!response.ok) {
