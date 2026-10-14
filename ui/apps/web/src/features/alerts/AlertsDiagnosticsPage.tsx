@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
@@ -15,6 +15,8 @@ import styles from './Alerts.module.css';
 // every 1-2 min); this is a stated default (2x a 120s assumed interval), not an architecture
 // fact - see the plan's Risks section.
 const CANARY_STALE_AFTER_MS = 240_000;
+const CANARY_REFETCH_INTERVAL_MS = 60_000;
+const CANARY_RECHECK_INTERVAL_MS = 30_000;
 
 function timelineLabel(entry: DiagnosticsTimelineEntry): string {
   if (entry.entityType === 'DELIVERY_RECEIPT') {
@@ -182,9 +184,15 @@ function CanaryPanel() {
   const query = useQuery({
     queryKey: ['alerts', 'canary', 'status'],
     queryFn: () => getCanaryStatus(auth),
+    refetchInterval: CANARY_REFETCH_INTERVAL_MS,
   });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), CANARY_RECHECK_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Canary status is unavailable.</p>
@@ -200,7 +208,7 @@ function CanaryPanel() {
   }
 
   const { healthy, latestResult, latestLatencyMs, latestRanAt } = query.data;
-  const stale = latestRanAt === null || Date.now() - latestRanAt * 1000 > CANARY_STALE_AFTER_MS;
+  const stale = latestRanAt === null || now - latestRanAt * 1000 > CANARY_STALE_AFTER_MS;
   const isHealthy = healthy && !stale;
   const overBudget = latestLatencyMs !== null && latestLatencyMs > 5000;
 

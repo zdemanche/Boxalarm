@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -42,24 +42,27 @@ function makeManager(groups: string[]): UserManager {
 
 function renderPage(groups: string[] = ['OFFICER']) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <AuthProvider userManager={makeManager(groups)}>
-        <MemoryRouter initialEntries={['/alerts/roster?dispatchId=D-1']}>
-          <Routes>
-            <Route
-              path="/alerts/roster"
-              element={
-                <RequireRole>
-                  <AlertsRosterPage />
-                </RequireRole>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      </AuthProvider>
-    </QueryClientProvider>,
-  );
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        <AuthProvider userManager={makeManager(groups)}>
+          <MemoryRouter initialEntries={['/alerts/roster?dispatchId=D-1']}>
+            <Routes>
+              <Route
+                path="/alerts/roster"
+                element={
+                  <RequireRole>
+                    <AlertsRosterPage />
+                  </RequireRole>
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function dispatch(overrides: Partial<DispatchAlert> = {}): DispatchAlert {
@@ -481,4 +484,99 @@ test('a 403 on a control is explained, not swallowed', async () => {
   expect((await within(dialog).findByRole('alert')).textContent).toMatch(
     'You are not authorized to use the tone-ladder or mutual-aid controls.',
   );
+});
+
+test('an open advance dialog stays on the tone it was opened for when the ladder moves underneath it', async () => {
+  let state = dispatch();
+  usePage(() => state);
+  let sentBody: unknown;
+  server.use(
+    http.post('/api/v1/alerting/dispatches/D-1/tone-ladder/advance', async ({ request }) => {
+      sentBody = await request.json();
+      return problem(409, 'Tone 2 has already fired. No additional tone was sent.');
+    }),
+  );
+  const user = userEvent.setup();
+  const view = renderPage();
+
+  await user.click(await screen.findByRole('button', { name: 'Advance to tone 2' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Fire tone 2 now?' });
+
+  state = dispatch({ toneLadder: { status: 'ACTIVE', currentToneSequence: 2, nextToneAt: null } });
+  await act(async () => {
+    await view.client.invalidateQueries();
+  });
+  await screen.findByText(/Tone 2 of 3 has fired/);
+
+  expect(screen.getByRole('dialog', { name: 'Fire tone 2 now?' })).toBe(dialog);
+  expect(dialog.textContent).toMatch(/ladder has moved on/);
+  await user.click(within(dialog).getByRole('button', { name: 'Fire tone 2' }));
+  await waitFor(() => expect(sentBody).toEqual({ expectedCurrentToneSequence: 1 }));
+});
+
+test('a failed background refresh keeps the loaded call and ladder on screen', async () => {
+  let failing = false;
+  usePage(() => dispatch());
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-1', () =>
+      failing ? problem(503, 'Alert store throttled') : HttpResponse.json(dispatch()),
+    ),
+  );
+  const view = renderPage();
+
+  await screen.findByText('18 Nichols Ave');
+  failing = true;
+  await act(async () => {
+    await view.client.invalidateQueries();
+  });
+
+  expect((await screen.findAllByText(/Couldn.t refresh/)).length).toBeGreaterThan(0);
+  expect(screen.getByText('18 Nichols Ave')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Advance to tone 2' })).toBeTruthy();
+});
+
+test('an advance whose outcome is unknown still says so when the ladder cannot be re-read', async () => {
+  let failing = false;
+  usePage(() => dispatch());
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-1', () =>
+      failing ? problem(503, 'Alert store throttled') : HttpResponse.json(dispatch()),
+    ),
+    http.post('/api/v1/alerting/dispatches/D-1/tone-ladder/advance', () => {
+      failing = true;
+      return problem(502, 'Tone 2 may not have reached every member. Check the ladder.');
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+
+  await user.click(await screen.findByRole('button', { name: 'Advance to tone 2' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Fire tone 2 now?' });
+  await user.click(within(dialog).getByRole('button', { name: 'Fire tone 2' }));
+
+  expect((await within(dialog).findByRole('alert')).textContent).toMatch(
+    'Tone 2 may not have reached every member.',
+  );
+  expect((await screen.findAllByText(/Couldn.t refresh/)).length).toBeGreaterThan(0);
+  expect(screen.getByRole('dialog', { name: 'Fire tone 2 now?' })).toBe(dialog);
+});
+
+test('the advance dialog warns when the ladder was halted while it was open', async () => {
+  let state = dispatch();
+  usePage(() => state);
+  const user = userEvent.setup();
+  const view = renderPage();
+
+  await user.click(await screen.findByRole('button', { name: 'Advance to tone 2' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Fire tone 2 now?' });
+  expect(dialog.textContent).not.toMatch(/ladder has moved on/);
+
+  state = dispatch({
+    toneLadder: { status: 'HALTED_MANUAL', currentToneSequence: 1, nextToneAt: null },
+  });
+  await act(async () => {
+    await view.client.invalidateQueries();
+  });
+
+  await waitFor(() => expect(dialog.textContent).toMatch(/ladder has moved on/));
 });

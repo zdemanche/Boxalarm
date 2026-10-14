@@ -28,6 +28,7 @@ import {
   submitManualDispatch,
 } from './api';
 import { PrePlanPanel } from './PrePlanPanel';
+import { StaleNotice } from './StaleNotice';
 import { ToneLadderPanel } from './ToneLadderPanel';
 import type {
   ActiveDispatch,
@@ -56,6 +57,13 @@ function ackLabel(status: RosterEntry['ackStatus']): string {
   if (status === 'DIRECT_TO_SCENE') return 'Direct to scene';
   if (status === 'NOT_RESPONDING') return 'Not responding';
   return 'Awaiting response';
+}
+
+function occupantNote(entry: RosterEntry | undefined): string {
+  if (!entry) return '';
+  if (entry.ackStatus === 'NOT_RESPONDING') return ' (not responding)';
+  if (entry.ackStatus === 'UNANSWERED') return ' (no answer)';
+  return '';
 }
 
 /** design.md §2.3: both kinds of responding are ok; not responding and no answer are neutral. */
@@ -313,7 +321,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   });
   const nameOf = useMemberNameOf();
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return <ReceiptsUnavailable error={query.error} />;
   }
 
@@ -327,6 +335,7 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card title="Delivery receipts">
+      <StaleNotice query={query} />
       <div role="region" aria-label="Delivery receipts" tabIndex={0} className={styles.tableWrap}>
         <table className={styles.table}>
           <caption className="visually-hidden">Delivery receipts</caption>
@@ -382,7 +391,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
     refetchInterval: REFETCH_INTERVAL_MS,
   });
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Roster is unavailable.</p>
@@ -392,6 +401,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card title="Live roster">
+      <StaleNotice query={query} />
       <div role="region" aria-label="Live roster" tabIndex={0} className={styles.tableWrap}>
         <table className={styles.table}>
           <caption className="visually-hidden">Live roster</caption>
@@ -484,7 +494,7 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
     },
   });
 
-  if (boardQuery.error) {
+  if (boardQuery.error && !boardQuery.data) {
     return (
       <ApiForbiddenGate error={boardQuery.error} embedded>
         <p>Riding board is unavailable.</p>
@@ -498,6 +508,7 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card title="Riding board">
+      <StaleNotice query={boardQuery.error ? boardQuery : rosterQuery} />
       {assignError ? (
         <p role="alert" aria-live="assertive" className={styles.alert}>
           <AlertTriangle size={16} aria-hidden="true" />
@@ -519,31 +530,40 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
             ) : null}
           </div>
           <ul className={styles.seats}>
-            {unit.positions.map((position) => (
-              <li key={position.code}>
-                <Select
-                  label={`${position.label}${position.assignment?.qualStatus === 'UNMET' ? ' (missing qualification)' : ''}`}
-                  disabled={!unit.assignable}
-                  value={position.assignment?.memberId ?? ''}
-                  onChange={(e) =>
-                    assignMutation.mutate({
-                      unitId: unit.unitId,
-                      positionCode: position.code,
-                      memberId: e.target.value || null,
-                      expectedVersion: position.version,
-                    })
-                  }
-                >
-                  <option value="">Unassigned</option>
-                  {assignable.map((member) => (
-                    <option key={member.memberId} value={member.memberId}>
-                      {nameOf(member.memberId)}
-                      {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
-                    </option>
-                  ))}
-                </Select>
-              </li>
-            ))}
+            {unit.positions.map((position) => {
+              const occupant = position.assignment?.memberId;
+              return (
+                <li key={position.code}>
+                  <Select
+                    label={`${position.label}${position.assignment?.qualStatus === 'UNMET' ? ' (missing qualification)' : ''}`}
+                    disabled={!unit.assignable}
+                    value={position.assignment?.memberId ?? ''}
+                    onChange={(e) =>
+                      assignMutation.mutate({
+                        unitId: unit.unitId,
+                        positionCode: position.code,
+                        memberId: e.target.value || null,
+                        expectedVersion: position.version,
+                      })
+                    }
+                  >
+                    <option value="">Unassigned</option>
+                    {occupant && !assignable.some((m) => m.memberId === occupant) ? (
+                      <option value={occupant}>
+                        {nameOf(occupant)}
+                        {occupantNote(rosterQuery.data?.find((m) => m.memberId === occupant))}
+                      </option>
+                    ) : null}
+                    {assignable.map((member) => (
+                      <option key={member.memberId} value={member.memberId}>
+                        {nameOf(member.memberId)}
+                        {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
+                      </option>
+                    ))}
+                  </Select>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ))}
@@ -562,7 +582,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getDispatch(auth, dispatchId),
   });
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Dispatch details are unavailable.</p>
@@ -580,6 +600,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
   return (
     <>
       <Card>
+        <StaleNotice query={query} />
         {query.data.verifyRequired ? <VerifyBanner /> : null}
         <h2 className={styles.dispatchTitle}>{query.data.incidentType}</h2>
         <p className={styles.address}>{query.data.address}</p>

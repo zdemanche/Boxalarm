@@ -11,6 +11,7 @@ import {
   haltToneLadder,
   triggerMutualAid,
 } from './api';
+import { StaleNotice } from './StaleNotice';
 import type { MutualAid, ToneLadder, TriggerMutualAidResult } from './types';
 import styles from './Alerts.module.css';
 
@@ -111,6 +112,7 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
   const queryClient = useQueryClient();
   const canControl = auth.roles.some((r) => r === 'OFFICER' || r === 'CHIEF' || r === 'ADMIN');
   const [open, setOpen] = useState<Control | null>(null);
+  const [advanceFrom, setAdvanceFrom] = useState<number | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [ackPending, setAckPending] = useState(false);
@@ -141,7 +143,7 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
     }
   };
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Tone ladder status is unavailable.</p>
@@ -180,7 +182,14 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
         )}
         {canControl && ladderActive && nextTone !== null ? (
           <div className={styles.controls}>
-            <Button onClick={() => setOpen('advance')}>Advance to tone {nextTone}</Button>
+            <Button
+              onClick={() => {
+                setAdvanceFrom(ladder.currentToneSequence);
+                setOpen('advance');
+              }}
+            >
+              Advance to tone {nextTone}
+            </Button>
             <Button variant="danger" onClick={() => setOpen('halt')}>
               Halt tone ladder
             </Button>
@@ -221,22 +230,24 @@ export function ToneLadderPanel({ dispatchId }: { dispatchId: string }) {
         ) : null}
       </section>
 
+      <StaleNotice query={query} />
+
       {result ? (
         <p role="status" aria-live="polite" className={styles.result}>
           {result}
         </p>
       ) : null}
 
-      {nextTone !== null ? (
+      {advanceFrom !== null ? (
         <ConfirmDialog
           open={open === 'advance'}
           onOpenChange={(next) => setOpen(next ? 'advance' : null)}
-          title={`Fire tone ${nextTone} now?`}
-          consequence={`Every eligible member is paged again now as tone ${nextTone} - push and SMS, then voice if they don't answer - however many have already responded. The scheduled tone ${nextTone} will not fire a second time.`}
-          confirmLabel={`Fire tone ${nextTone}`}
+          title={`Fire tone ${advanceFrom + 1} now?`}
+          consequence={`Every eligible member is paged again now as tone ${advanceFrom + 1} - push and SMS, then voice if they don't answer - however many have already responded. The scheduled tone ${advanceFrom + 1} will not fire a second time.${ladder?.status !== 'ACTIVE' || ladder.currentToneSequence !== advanceFrom ? ' The ladder has moved on since you opened this - confirming will be refused. Close this and check the ladder.' : ''}`}
+          confirmLabel={`Fire tone ${advanceFrom + 1}`}
           onConfirm={() =>
             run(async () => {
-              const fired = await advanceToneLadder(auth, dispatchId, nextTone - 1);
+              const fired = await advanceToneLadder(auth, dispatchId, advanceFrom);
               return `Tone ${fired.toneSequence} sent to every eligible member.`;
             })
           }
