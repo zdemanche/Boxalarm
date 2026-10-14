@@ -58,6 +58,11 @@ function contactWrite(send: ReturnType<typeof vi.fn>): SentUpdate['input'] | und
     .find((input) => input.ExpressionAttributeValues[':contactChannels'] !== undefined);
 }
 
+function recordFailedMetricCount(logSpy: { mock: { calls: unknown[][] } }): number {
+  return logSpy.mock.calls.filter(([line]) => String(line).includes('"MemberUpdatedRecordFailed"'))
+    .length;
+}
+
 describe('memberUpdatedHandler', () => {
   const originalEnv = { ...process.env };
 
@@ -78,6 +83,7 @@ describe('memberUpdatedHandler', () => {
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const { handler } = await import('./memberUpdatedHandler.js');
     await expect(
       handler(
@@ -89,7 +95,9 @@ describe('memberUpdatedHandler', () => {
     ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(send).not.toHaveBeenCalled();
     expect(errorSpy.mock.calls.some(([line]) => String(line).includes('memberId'))).toBe(true);
+    expect(recordFailedMetricCount(logSpy)).toBe(1);
     errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   it('rejects a bare envelope with no EventBridge `detail` wrapper (never what the rule delivers)', async () => {
@@ -642,6 +650,7 @@ describe('memberUpdatedHandler', () => {
 
   it('reports a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs that record', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
@@ -656,7 +665,9 @@ describe('memberUpdatedHandler', () => {
         String(line).includes('ProvisionedThroughputExceededException'),
       ),
     ).toBe(true);
+    expect(recordFailedMetricCount(logSpy)).toBe(1);
     errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   // Post-merge MINOR-7: one bad record no longer fails (and eventually dead-letters) its siblings.

@@ -215,4 +215,15 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
     expect(alarm.inputs.alarmActions).toEqual([CHIEF_TOPIC]);
     expect((alarm.inputs.alarmActions as string[]).some((a) => a.includes("alerting"))).toBe(false);
   });
+
+  it("an apparatus status change with nobody to tell alarms to the chief topic, never the alerting plane", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-notification-apparatus-status-no-recipients");
+    expect(alarm.inputs.namespace).toBe("Boxalarm/NotificationDigest");
+    expect(alarm.inputs.metricName).toBe("ApparatusStatusImmediateNoRecipients");
+    expect(alarm.inputs.threshold).toBe(0);
+    expect(alarm.inputs.comparisonOperator).toBe("GreaterThanThreshold");
+    expect(alarm.inputs.alarmActions).toEqual([CHIEF_TOPIC]);
+    expect((alarm.inputs.alarmActions as string[]).some((a) => a.includes("alerting"))).toBe(false);
+  });
 });

@@ -351,6 +351,7 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
           message: error instanceof Error ? error.message : String(error),
         }),
       );
+      emitOutcomeMetric(LATENCY_METRIC_NAMESPACE, 'MemberUpdatedRecordFailed');
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }
   }
