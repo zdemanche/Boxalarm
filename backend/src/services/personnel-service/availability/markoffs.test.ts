@@ -126,6 +126,19 @@ describe('availability mark-off routes', () => {
       });
     });
 
+    it('keeps listing an activated mark-off whose revert never ran, so it can still be ended', async () => {
+      ddbSend.mockResolvedValue({
+        Items: [markoff(NOW - 9000, NOW - 60, { activatedAt: NOW - 9000 })],
+      });
+      const { list } = await routes();
+
+      const result = await list(event('MEMBER', 'mbr-1', 'mbr-1'));
+
+      expect(bodyOf(result)).toEqual({
+        markOffs: [{ markoffId: String(NOW - 9000), startAt: NOW - 9000, endAt: NOW - 60 }],
+      });
+    });
+
     it('an officer may list another member; a member may not', async () => {
       ddbSend.mockResolvedValue({ Items: [] });
       const { list } = await routes();

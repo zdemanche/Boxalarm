@@ -17,24 +17,31 @@ export interface EligibilityStalenessArgs {
   pageTopicArn: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   permissionsBoundaryArn?: pulumi.Input<string>;
+  /** The queues feeding the eligibility snapshot; each pages when its oldest message ages. */
+  eligibilityFeedQueueNames: Record<EligibilityFeedQueue, pulumi.Input<string>>;
 }
 
+export type EligibilityFeedQueue =
+  "member-updated" | "availability-snapshot" | "eligibility-changed";
+
+export const FEED_QUEUE_AGE_THRESHOLD_SECONDS = 180;
+
 /**
- * Eligibility-snapshot staleness check (E1-S13-INFRA): a recurring 5-minute schedule per
- * department invoking `eligibility/staleness/checkHandler.handler`, and an alarm on the
- * `SnapshotStale` metric it emits under `Boxalarm/AlertingEligibility`.
+ * Eligibility-snapshot staleness (E1-S13-INFRA): a recurring 5-minute schedule per department
+ * invoking `eligibility/staleness/checkHandler.handler`, which emits `SnapshotStale` under
+ * `Boxalarm/AlertingEligibility`.
  *
- * #232 (fixed): the handler used to measure each member's own absolute snapshot-write age,
- * so one idle-but-correct member could pin this alarm in ALARM permanently — which is why
- * it shipped dashboard-only (no `alarmActions`). It now measures department-wide
- * propagation lag (`now - max(snapshotUpdatedAt)` across the partition), so `SnapshotStale`
- * is 0 unless the whole department has gone 15+ minutes without an applied eligibility
- * write. `alarmActions` is restored now that the metric can safely page.
+ * `SnapshotStale` is dashboard-only: a quiet department legitimately has no eligibility write
+ * for 15+ minutes, so alarming on it paged on-call for nothing. Paging is on the age of the
+ * oldest message in each queue that feeds the snapshot (member-updated, availability-snapshot,
+ * eligibility-changed): a stuck or throttled consumer shows as a message that stays unread,
+ * and an empty queue reads as 0.
  */
 export class EligibilityStaleness extends pulumi.ComponentResource {
   public readonly lambda: ServiceLambda;
   public readonly schedule: aws.scheduler.Schedule;
   public readonly alarm: aws.cloudwatch.MetricAlarm;
+  public readonly feedQueueAgeAlarms: aws.cloudwatch.MetricAlarm[];
   public readonly errorsAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(
@@ -148,12 +155,38 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
         period: 300,
         evaluationPeriods: 1,
         treatMissingData: "notBreaching",
-        // #232: the metric is now a department-wide propagation-lag flag (0 unless every
-        // member's snapshot write is 15+ minutes stale), so it no longer sits in ALARM
-        // permanently — safe to page on.
-        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
+    );
+
+    this.feedQueueAgeAlarms = (
+      Object.entries(args.eligibilityFeedQueueNames) as [
+        EligibilityFeedQueue,
+        pulumi.Input<string>,
+      ][]
+    ).map(
+      ([feed, queueName]) =>
+        new aws.cloudwatch.MetricAlarm(
+          `${name}-${feed}-queue-age-alarm`,
+          {
+            name: `boxalarm-${env}-alerting-eligibility-${feed}-queue-age`,
+            alarmDescription:
+              `The oldest message in the ${feed} queue has waited over ${FEED_QUEUE_AGE_THRESHOLD_SECONDS}s: ` +
+              "its consumer is stuck, throttled or failing, and the eligibility snapshot is going stale for " +
+              "the members it covers. Check the consumer's errors and the queue's DLQ.",
+            namespace: "AWS/SQS",
+            metricName: "ApproximateAgeOfOldestMessage",
+            dimensions: { QueueName: queueName },
+            statistic: "Maximum",
+            comparisonOperator: "GreaterThanThreshold",
+            threshold: FEED_QUEUE_AGE_THRESHOLD_SECONDS,
+            period: 60,
+            evaluationPeriods: 2,
+            treatMissingData: "notBreaching",
+            alarmActions: [args.pageTopicArn],
+          },
+          { parent: this },
+        ),
     );
 
     // The SnapshotStale alarm treats missing data as notBreaching, so a check that throws
@@ -184,6 +217,7 @@ export class EligibilityStaleness extends pulumi.ComponentResource {
       lambda: this.lambda,
       schedule: this.schedule,
       alarm: this.alarm,
+      feedQueueAgeAlarms: this.feedQueueAgeAlarms,
       errorsAlarm: this.errorsAlarm,
     });
   }

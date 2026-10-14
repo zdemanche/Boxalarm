@@ -52,6 +52,24 @@ test('shows current and upcoming mark-offs; "I\'m available again" ends the curr
   expect(screen.queryByText(/^Marked unavailable until/)).toBeNull();
 });
 
+test('an activated mark-off past its end time reads as overdue and can still be ended', async () => {
+  repository.listMarkOffs.mockResolvedValue([
+    { markoffId: 'stuck-1', startAt: now() - 7200, endAt: now() - 3600 },
+  ]);
+  await render(<MarkOffList />);
+
+  expect(await screen.findByText(/^Should have ended /)).toBeTruthy();
+  expect(screen.queryByText(/^Marked unavailable until/)).toBeNull();
+  expect(screen.getByText('Still unavailable')).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(screen.getByRole('button', { name: /^I'm available again/ }));
+  });
+  expect(repository.endMarkOff).toHaveBeenCalledWith(
+    expect.objectContaining({ markoffId: 'stuck-1' }),
+  );
+});
+
 test('cancelling an upcoming mark-off says it stays cancelled, not "available again"', async () => {
   await render(<MarkOffList />);
   await screen.findByText(/^Unavailable from/);

@@ -86,6 +86,28 @@ describe('personnel availability handler', () => {
     expect(scheduleCall.input.Target.RoleArn).toBe('arn:aws:iam::1:role/scheduler');
   });
 
+  it('gives every schedule the dead-letter queue so a revert Scheduler gives up on is recorded', async () => {
+    process.env.AVAILABILITY_SCHEDULE_DLQ_ARN =
+      'arn:aws:sqs:us-east-1:123456789012:availability-dlq';
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    });
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const { createAvailability } = await import('./handler.js');
+    await createAvailability(buildEvent(), PRINCIPAL, {
+      schedulerClient: { send: schedulerSend } as unknown as SchedulerClient,
+    });
+
+    const scheduleCall = schedulerSend.mock.calls[0]?.[0] as {
+      input: { Target: { DeadLetterConfig?: { Arn: string } } };
+    };
+    expect(scheduleCall.input.Target.DeadLetterConfig).toEqual({
+      Arn: 'arn:aws:sqs:us-east-1:123456789012:availability-dlq',
+    });
+  });
+
   it('does not emit a MARKED_OFF outbox entry at creation for a future-dated window, and schedules both ACTIVATE and REVERT (AC3 future-window)', async () => {
     const send = vi.fn().mockResolvedValue({});
     vi.doMock('./dynamoClient.js', async (importOriginal) => {

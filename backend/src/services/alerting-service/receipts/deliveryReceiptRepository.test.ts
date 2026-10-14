@@ -159,6 +159,80 @@ describe('queryReceiptsForDispatch (AC2)', () => {
     });
   });
 
+  it('merges the fan-out receipt and the worker send guard into one lowercase-channel record carrying the guard failure', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        { memberId: 'MBR-0012', channel: 'sms', toneSequence: 1, sentAt: 1798000003 },
+        {
+          memberId: 'MBR-0012',
+          channel: 'SMS',
+          toneSequence: 1,
+          sentAt: 1798000004,
+          deliveredAt: null,
+          openedAt: null,
+          failureReason: 'provider 4xx',
+          sendState: 'FAILED',
+        },
+      ],
+    });
+
+    const receipts = await queryReceiptsForDispatch(
+      ddbMock as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      deptId,
+      'NICHOLS-4471-1798000000',
+    );
+
+    expect(receipts).toEqual([
+      {
+        memberId: 'MBR-0012',
+        channel: 'sms',
+        toneSequence: 1,
+        sentAt: 1798000003,
+        failureReason: 'provider 4xx',
+      },
+    ]);
+  });
+
+  it('takes the webhook deliveredAt from the fan-out receipt and ignores the guard nulls', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [
+        {
+          memberId: 'MBR-0012',
+          channel: 'push',
+          toneSequence: 1,
+          sentAt: 1798000003,
+          deliveredAt: 1798000009,
+        },
+        {
+          memberId: 'MBR-0012',
+          channel: 'PUSH',
+          toneSequence: 1,
+          sentAt: 1798000004,
+          deliveredAt: null,
+          failureReason: null,
+        },
+      ],
+    });
+
+    const receipts = await queryReceiptsForDispatch(
+      ddbMock as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      deptId,
+      'NICHOLS-4471-1798000000',
+    );
+
+    expect(receipts).toEqual([
+      {
+        memberId: 'MBR-0012',
+        channel: 'push',
+        toneSequence: 1,
+        sentAt: 1798000003,
+        deliveredAt: 1798000009,
+      },
+    ]);
+  });
+
   it('returns an empty array for a dispatch with no receipts yet', async () => {
     ddbMock.on(QueryCommand).resolves({});
     const receipts = await queryReceiptsForDispatch(

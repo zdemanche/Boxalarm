@@ -24,6 +24,7 @@ import { availabilityScheduleBaseName, getSchedulerClient } from './handler.js';
  *
  *   GET  /api/v1/personnel/members/{memberId}/availability
  *        -> { markOffs: [{ markoffId, startAt, endAt, reason? }] }   current and upcoming,
+ *           plus an activated mark-off past its endAt whose revert never ran (still endable),
  *           epoch seconds; markoffId is the stored startAt (rows are MARKOFF#{startAt}).
  *   POST /api/v1/personnel/members/{memberId}/availability/{markoffId}/end
  *        -> { markoffId, endedAt }   ends a current window now; cancels an upcoming one.
@@ -125,7 +126,9 @@ export async function listMarkoffs(
       );
       for (const item of page.Items ?? []) {
         const markoff = parseMarkoffItem(item);
-        if (!markoff || markoff.revertedAt !== undefined || markoff.endAt <= nowSeconds) {
+        const expiredUnactivated =
+          markoff !== undefined && markoff.endAt <= nowSeconds && markoff.activatedAt === undefined;
+        if (!markoff || markoff.revertedAt !== undefined || expiredUnactivated) {
           continue;
         }
         markOffs.push({

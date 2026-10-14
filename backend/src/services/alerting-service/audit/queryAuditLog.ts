@@ -1,5 +1,6 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { mergeReceiptAttempts } from '../receipts/deliveryReceiptRepository.js';
 
 const PAGE_SIZE = 25;
 // TODO: E1-S3 — ESCALATION_EVENT and DISPATCH_RESPONSE_RECORD have no writer yet; once E1-S3
@@ -101,7 +102,21 @@ async function queryDispatchTimeline(
     items.push(...(result.Items ?? []));
     exclusiveStartKey = result.LastEvaluatedKey;
   } while (exclusiveStartKey);
-  return items;
+  return mergeTimelineReceipts(items, dispatchId);
+}
+
+function mergeTimelineReceipts(
+  items: readonly Record<string, unknown>[],
+  dispatchId: string,
+): readonly Record<string, unknown>[] {
+  const receipts = items.filter((item) => item.entityType === 'DELIVERY_RECEIPT');
+  const others = items.filter((item) => item.entityType !== 'DELIVERY_RECEIPT');
+  const merged = mergeReceiptAttempts(receipts).map((record) => ({
+    entityType: 'DELIVERY_RECEIPT',
+    dispatchId,
+    ...record,
+  }));
+  return [...merged, ...others];
 }
 
 export async function queryMemberDispatchTimeline(

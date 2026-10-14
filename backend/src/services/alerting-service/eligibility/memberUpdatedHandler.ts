@@ -13,7 +13,6 @@ interface MemberUpdatedPayload {
   readonly deptId: string;
   readonly memberId: string;
   readonly active?: boolean;
-  readonly quals?: readonly string[];
   readonly roles?: readonly string[];
   readonly contactChannels?: readonly unknown[];
   /** The member's phone (createMember, updateMember); projected into SMS and VOICE entries. */
@@ -117,13 +116,12 @@ function seedDefaults(
  * retired member kept getting SMS pages and voice calls.
  *  - active -> activeUpdatedAt;
  *  - availabilityState -> availabilityUpdatedAt (the availability consumer's clock too);
- *  - quals -> qualsUpdatedAt (eligibilityChangedConsumer's clock too).
+ *  - quals are NOT written here: eligibilityChangedConsumer owns them, with per-qual clocks.
  * snapshotUpdatedAt is only "last applied write" for the staleness report; it guards nothing.
  */
 const FIELD_CLOCKS = [
   ['active', 'activeUpdatedAt'],
   ['availabilityState', 'availabilityUpdatedAt'],
-  ['quals', 'qualsUpdatedAt'],
 ] as const;
 
 function buildFieldExpressions(payload: MemberUpdatedPayload, eventTime: number) {

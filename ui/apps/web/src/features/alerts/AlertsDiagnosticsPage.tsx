@@ -22,11 +22,11 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
     // the provider callbacks set failureReason / deliveredAt / openedAt
     // (receipts/deliveryReceiptRepository.ts). Keying on `status` alone labelled every
     // delivered page "Sent, not confirmed delivered".
+    if (entry.openedAt || entry.status === 'OPENED') return 'Opened';
+    if (entry.deliveredAt || entry.status === 'DELIVERED') return 'Delivered';
     if (entry.failureReason || entry.status === 'FAILED') {
       return `Failed${entry.failureReason ? ` — ${entry.failureReason}` : ''}`;
     }
-    if (entry.openedAt || entry.status === 'OPENED') return 'Opened';
-    if (entry.deliveredAt || entry.status === 'DELIVERED') return 'Delivered';
     return 'Sent, not confirmed delivered';
   }
   if (entry.entityType === 'ESCALATION_EVENT')
@@ -39,9 +39,9 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
 /** A delivery event carries its status as colour + glyph + word; other events are plain text. */
 function timelineRole(entry: DiagnosticsTimelineEntry): StatusRole | null {
   if (entry.entityType !== 'DELIVERY_RECEIPT') return null;
-  if (entry.failureReason || entry.status === 'FAILED') return 'danger';
   if (entry.openedAt || entry.status === 'OPENED') return 'ok';
   if (entry.deliveredAt || entry.status === 'DELIVERED') return 'ok';
+  if (entry.failureReason || entry.status === 'FAILED') return 'danger';
   return 'warning';
 }
 
@@ -150,7 +150,7 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
                   const role = timelineRole(entry);
                   return (
                     <tr key={`${entry.entityType}-${index}`}>
-                      <th scope="row">{entry.channel ?? '—'}</th>
+                      <th scope="row">{entry.channel?.toUpperCase() ?? '—'}</th>
                       <td>{entry.toneSequence ?? '—'}</td>
                       <td>
                         {role ? (

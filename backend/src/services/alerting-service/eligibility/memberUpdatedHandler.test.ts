@@ -187,6 +187,27 @@ describe('memberUpdatedHandler', () => {
     );
   });
 
+  it('never writes quals from a member.updated event: eligibilityChangedConsumer owns them', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    await handler(
+      buildSqsEvent({
+        ...VALID_ENVELOPE,
+        payload: { deptId: 'NICHOLS', memberId: 'mbr-102', quals: ['INTERIOR'] },
+      }),
+    );
+
+    const writes = send.mock.calls.map((call: unknown[]) => (call[0] as SentUpdate).input);
+    for (const write of writes) {
+      expect(write.UpdateExpression ?? '').not.toContain('qualsUpdatedAt');
+      expect(JSON.stringify(write.ExpressionAttributeValues ?? {})).not.toContain('INTERIOR');
+    }
+  });
+
   // Review MAJOR-2: a role change was guarded on the snapshot-wide snapshotUpdatedAt, so any
   // newer availability/push-token/status event applied first made it "stale" - the promoted
   // officer never reached mutual aid.

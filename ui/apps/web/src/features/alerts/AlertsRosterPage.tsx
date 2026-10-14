@@ -308,10 +308,11 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
     return <ReceiptsUnavailable error={query.error} />;
   }
 
-  const byMember = new Map<string, Map<string, DeliveryReceipt>>();
+  const byMember = new Map<string, Map<string, DeliveryReceipt[]>>();
   for (const receipt of query.data ?? []) {
-    const row = byMember.get(receipt.memberId) ?? new Map();
-    row.set(receipt.channel.toLowerCase(), receipt);
+    const row = byMember.get(receipt.memberId) ?? new Map<string, DeliveryReceipt[]>();
+    const channel = receipt.channel.toLowerCase();
+    row.set(channel, [...(row.get(channel) ?? []), receipt]);
     byMember.set(receipt.memberId, row);
   }
 
@@ -335,16 +336,22 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
               <tr key={memberId}>
                 <th scope="row">{nameOf(memberId)}</th>
                 {RECEIPT_CHANNELS.map((channel) => {
-                  const receipt = channels.get(channel);
+                  const attempts = [...(channels.get(channel) ?? [])].sort(
+                    (a, b) => a.toneSequence - b.toneSequence,
+                  );
                   return (
                     <td key={channel}>
-                      {receipt ? (
-                        <StatusChip status={receiptRole(receipt.status)}>
-                          {receiptLabel(receipt.status)}
-                        </StatusChip>
-                      ) : (
-                        '—'
-                      )}
+                      {attempts.length === 0
+                        ? '—'
+                        : attempts.map((receipt) => (
+                            <StatusChip
+                              key={receipt.toneSequence}
+                              status={receiptRole(receipt.status)}
+                            >
+                              {attempts.length > 1 ? `Tone ${receipt.toneSequence}: ` : ''}
+                              {receiptLabel(receipt.status)}
+                            </StatusChip>
+                          ))}
                     </td>
                   );
                 })}

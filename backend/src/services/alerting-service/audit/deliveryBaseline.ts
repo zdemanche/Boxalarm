@@ -48,12 +48,20 @@ export function computeDeliveryBaseline(
     );
     const deliveredToMemberIds = new Set(receipts.map((receipt) => receipt.memberId as string));
 
+    const attempts = new Map<string, { memberId: string; delivered: boolean }>();
     for (const receipt of receipts) {
       const memberId = receipt.memberId as string;
+      const key = `${memberId}#${String(receipt.channel).toLowerCase()}`;
+      const attempt = attempts.get(key) ?? { memberId, delivered: false };
+      attempt.delivered ||= typeof receipt.deliveredAt === 'number';
+      attempts.set(key, attempt);
+    }
+
+    for (const { memberId, delivered } of attempts.values()) {
       const stat = memberStats.get(memberId) ?? { sent: 0, delivered: 0, missed: 0 };
       stat.sent += 1;
       sentCount += 1;
-      if (receipt.deliveredAt !== undefined) {
+      if (delivered) {
         stat.delivered += 1;
         deliveredCount += 1;
       }

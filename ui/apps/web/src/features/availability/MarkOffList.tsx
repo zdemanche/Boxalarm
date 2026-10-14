@@ -85,17 +85,20 @@ export function MarkOffList({ memberId, ownRecord }: { memberId: string; ownReco
         <ul className={styles.list}>
           {markOffs.map((markOff) => {
             const current = markOff.startAt <= nowSeconds;
+            const overdue = current && markOff.endAt <= nowSeconds;
             return (
               <li key={markOff.markoffId} className={styles.row}>
                 <span className={styles.rowMain}>
                   <span className={styles.rowTitle}>
-                    {current
-                      ? `Until ${when(markOff.endAt)}`
-                      : `${when(markOff.startAt)} until ${when(markOff.endAt)}`}
+                    {overdue
+                      ? `Should have ended ${when(markOff.endAt)}`
+                      : current
+                        ? `Until ${when(markOff.endAt)}`
+                        : `${when(markOff.startAt)} until ${when(markOff.endAt)}`}
                   </span>
                   <span className={styles.rowMeta}>
                     <StatusChip status={current ? 'warning' : 'info'}>
-                      {current ? 'Marked off now' : 'Upcoming'}
+                      {overdue ? 'Still marked off' : current ? 'Marked off now' : 'Upcoming'}
                     </StatusChip>
                     {markOff.reason ? <span>{markOff.reason}</span> : null}
                   </span>
@@ -106,9 +109,11 @@ export function MarkOffList({ memberId, ownRecord }: { memberId: string; ownReco
                   loading={end.isPending && end.variables?.markoffId === markOff.markoffId}
                   onClick={() => end.mutate(markOff)}
                   aria-label={
-                    current
-                      ? `End the mark-off until ${when(markOff.endAt)} now`
-                      : `Cancel the mark-off from ${when(markOff.startAt)}`
+                    overdue
+                      ? `End the mark-off that should have ended ${when(markOff.endAt)} now`
+                      : current
+                        ? `End the mark-off until ${when(markOff.endAt)} now`
+                        : `Cancel the mark-off from ${when(markOff.startAt)}`
                   }
                 >
                   {current ? 'End now' : 'Cancel'}

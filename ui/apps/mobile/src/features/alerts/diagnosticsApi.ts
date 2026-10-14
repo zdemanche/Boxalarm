@@ -1,8 +1,9 @@
 import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
 
 /**
- * One raw alerting-table timeline item (diagnostics/queryDiagnostics.ts returns DynamoDB items
- * unchanged). Receipts carry no status field: delivery state is which timestamps are present.
+ * One alerting timeline item (diagnostics/queryDiagnostics.ts). A receipt is one merged row per
+ * member, lowercase channel and tone; it carries no status field: delivery state is which
+ * timestamps are present.
  * Times are epoch seconds.
  */
 export interface OwnTimelineEntry {

@@ -53,6 +53,7 @@ export function readChannelProviderConfig(
 
 const SECRET_CACHE_TTL_MS = 15 * 60 * 1000;
 const PROVIDER_REQUEST_TIMEOUT_MS = 4_000;
+const REFUSAL_REREAD_MIN_INTERVAL_MS = 30_000;
 
 interface CachedSecret {
   readonly apiKey: string;
@@ -60,9 +61,11 @@ interface CachedSecret {
 }
 
 const secretCache = new Map<string, CachedSecret>();
+const lastRefusalRereadAt = new Map<string, number>();
 
 export function resetChannelSecretsCache(): void {
   secretCache.clear();
+  lastRefusalRereadAt.clear();
 }
 
 // Keyed by secret ID, not channel: the prod and sandbox credentials for one channel must never
@@ -90,6 +93,34 @@ export interface SendViaHttpProviderOptions {
   readonly secretsClient?: SecretsManagerClient;
 }
 
+function postToProvider(
+  endpointUrl: string,
+  target: string,
+  message: string,
+  apiKey: string,
+): Promise<Response> {
+  return fetch(endpointUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ target, message }),
+    signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
+  });
+}
+
+function claimRefusalReread(secretId: string): boolean {
+  const now = Date.now();
+  const last = lastRefusalRereadAt.get(secretId);
+  if (last !== undefined && now - last < REFUSAL_REREAD_MIN_INTERVAL_MS) {
+    return false;
+  }
+  lastRefusalRereadAt.set(secretId, now);
+  return true;
+}
+
+function isAuthRefusal(response: Response): boolean {
+  return response.status === 401 || response.status === 403;
+}
+
 export async function sendViaHttpProvider(
   channel: HttpProviderChannel,
   target: string,
@@ -100,12 +131,18 @@ export async function sendViaHttpProvider(
   const config = readChannelProviderConfig(channel, env, { isTest: options.isTest === true });
   const client = createChannelSecretsClient(options.secretsClient);
   const apiKey = await resolveApiKey(config.secretId, client);
-  const response = await fetch(config.endpointUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ target, message }),
-    signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
-  });
+  let response = await postToProvider(config.endpointUrl, target, message, apiKey);
+  if (isAuthRefusal(response) && claimRefusalReread(config.secretId)) {
+    // A rotated vendor key stays cached for the TTL on every warm worker; drop the refused key
+    // (only if nobody already replaced it) and retry once with whatever the secret holds now.
+    if (secretCache.get(config.secretId)?.apiKey === apiKey) {
+      secretCache.delete(config.secretId);
+    }
+    const refreshedKey = await resolveApiKey(config.secretId, client);
+    if (refreshedKey !== apiKey) {
+      response = await postToProvider(config.endpointUrl, target, message, refreshedKey);
+    }
+  }
   if (!response.ok) {
     throw new Error(`${channel} provider responded ${response.status}`);
   }

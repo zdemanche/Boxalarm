@@ -73,15 +73,22 @@ function createStatefulSend(
       const holds =
         condition === 'attribute_not_exists(pk)'
           ? current === undefined
-          : condition === 'attribute_not_exists(quals)'
-            ? current !== undefined && current.quals === undefined
-            : current !== undefined &&
-              JSON.stringify(current.quals) === JSON.stringify(values[':priorQuals']);
+          : current !== undefined &&
+            (condition.includes('attribute_not_exists(quals)')
+              ? current.quals === undefined
+              : JSON.stringify(current.quals) === JSON.stringify(values[':priorQuals'])) &&
+            (condition.includes('attribute_not_exists(qualClocks)')
+              ? current.qualClocks === undefined
+              : JSON.stringify(current.qualClocks) === JSON.stringify(values[':priorQualClocks']));
       if (!holds) {
         throw new ConditionalCheckFailedException({ message: 'stale read', $metadata: {} });
       }
       store.set(key, {
+        ...current,
         quals: values[':quals'],
+        qualsUpdatedAt: values[':qualsUpdatedAt'],
+        qualClocks: values[':qualClocks'],
+        ...(':qualClocksFloor' in values ? { qualClocksFloor: values[':qualClocksFloor'] } : {}),
         snapshotUpdatedAt: values[':new'],
         memberId: values[':memberId'],
         entityType: values[':entityType'],
@@ -187,7 +194,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
     expect(updateCall).toBeUndefined();
   });
 
-  it('skips a stale event without ever writing when a newer qualsUpdatedAt is already stored', async () => {
+  it('skips a stale event without ever writing when a newer clock for the same qual is already stored', async () => {
     const send = vi.fn().mockImplementation((command: { constructor: { name: string } }) => {
       if (command.constructor.name === 'GetCommand') {
         const input = (command as unknown as { input: { Key: { sk: string } } }).input;
@@ -195,7 +202,7 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
           return Promise.resolve({
             Item: {
               quals: ['INTERIOR'],
-              qualsUpdatedAt: Date.parse('2026-09-14T12:00:00.000Z') + 1000,
+              qualClocks: { INTERIOR: Date.parse('2026-09-14T12:00:00.000Z') + 1000 },
             },
           });
         }
@@ -218,6 +225,101 @@ describe('eligibilityChangedConsumer handler (entrypoint)', () => {
       (call) => (call[0] as { constructor: { name: string } }).constructor.name === 'UpdateCommand',
     );
     expect(updateCall).toBeUndefined();
+  });
+
+  it('applies an older event for one qual after a newer event for a different qual was applied', async () => {
+    const { send, store } = createStatefulSend({
+      quals: ['INTERIOR'],
+      memberId: 'mbr-1',
+      qualClocks: { INTERIOR: Date.parse('2026-09-14T11:00:00.000Z') },
+    });
+    const { createHandler } = await import('./eligibilityChangedConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      {
+        Records: [
+          {
+            messageId: 'm2',
+            body: detailBody(
+              { eventId: 'evt-2', eventTime: '2026-09-14T12:00:02.000Z' },
+              { qualCode: 'FF2', currentlyEligible: true },
+            ),
+          },
+          {
+            messageId: 'm1',
+            body: detailBody(
+              { eventId: 'evt-1', eventTime: '2026-09-14T12:00:01.000Z' },
+              { qualCode: 'INTERIOR', currentlyEligible: false },
+            ),
+          },
+        ],
+      } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(store.get('MEMBER#mbr-1')?.quals).toEqual(['FF2']);
+  });
+
+  it('judges staleness on the member-wide qualsUpdatedAt for a legacy snapshot without qualClocks', async () => {
+    const { send, store } = createStatefulSend({
+      quals: [],
+      memberId: 'mbr-1',
+      qualsUpdatedAt: Date.parse('2026-09-14T12:00:05.000Z'),
+    });
+    const { createHandler } = await import('./eligibilityChangedConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      {
+        Records: [
+          {
+            messageId: 'm1',
+            body: detailBody({}, { qualCode: 'INTERIOR', currentlyEligible: true }),
+          },
+        ],
+      } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(store.get('MEMBER#mbr-1')?.quals).toEqual([]);
+  });
+
+  it('keeps rejecting an older event for a revoked qual after a newer write to a different qual on a legacy snapshot', async () => {
+    const revokedAt = Date.parse('2026-09-14T12:00:05.000Z');
+    const { send, store } = createStatefulSend({
+      quals: [],
+      memberId: 'mbr-1',
+      qualsUpdatedAt: revokedAt,
+    });
+    const { createHandler } = await import('./eligibilityChangedConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+    const deliver = (messageId: string, body: string) =>
+      handler(
+        { Records: [{ messageId, body }] } as unknown as SQSEvent,
+        {} as never,
+        () => undefined,
+      );
+
+    await deliver(
+      'm1',
+      detailBody(
+        { eventId: 'evt-ff2', eventTime: new Date(revokedAt + 1000).toISOString() },
+        { qualCode: 'FF2', currentlyEligible: true },
+      ),
+    );
+    await deliver(
+      'm2',
+      detailBody(
+        { eventId: 'evt-interior-old', eventTime: new Date(revokedAt - 2000).toISOString() },
+        { qualCode: 'INTERIOR', currentlyEligible: true },
+      ),
+    );
+
+    expect(store.get('MEMBER#mbr-1')?.quals).toEqual(['FF2']);
+    expect(store.get('MEMBER#mbr-1')?.qualClocksFloor).toBe(revokedAt);
   });
 
   it('applies a qual update even when snapshotUpdatedAt is newer from an unrelated availability event (cross-domain staleness, core-harm)', async () => {

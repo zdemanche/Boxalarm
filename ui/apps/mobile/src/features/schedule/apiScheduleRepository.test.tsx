@@ -255,7 +255,7 @@ test('claimPosition refuses while offline instead of returning a made-up result'
 });
 
 describe('mark-offs: list and end early (server contract pending on fix/post-merge-server)', () => {
-  test('lists current and upcoming mark-offs from GET .../availability, soonest first', async () => {
+  test('lists current, upcoming and activated-but-overdue mark-offs from GET .../availability, soonest first', async () => {
     const now = Math.floor(Date.now() / 1000);
     mockApiRequest.mockResolvedValue({
       json: async () => ({
@@ -276,6 +276,7 @@ describe('mark-offs: list and end early (server contract pending on fix/post-mer
       { apiBaseUrl: 'https://api.example.com' },
     );
     expect(markOffs).toEqual([
+      { markoffId: 'old', startAt: now - 7200, endAt: now - 3600 },
       { markoffId: 'm-1', startAt: now - 60, endAt: now + 3600, reason: 'Work' },
       { markoffId: String(now + 86400), startAt: now + 86400, endAt: now + 90000 },
     ]);

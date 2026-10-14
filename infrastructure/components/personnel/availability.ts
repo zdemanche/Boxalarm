@@ -7,6 +7,7 @@ import { verifiedPermissionsPolicyStatement } from "../authz/policy-store";
 import { auditMutationDenyStatement } from "../data/platform-table";
 import { lambdaCode, LAMBDA_HANDLER } from "../shared/lambda-code";
 import { requireEnv } from "../shared/env";
+import { ScheduleDeadLetter } from "../shared/schedule-dead-letter";
 import { PlatformBus } from "../messaging/platform-bus";
 import { QueueConsumer } from "../messaging/queue-consumer";
 import { grantAlertingCmk } from "../alerting/alerting-cmk";
@@ -45,6 +46,15 @@ export class Availability extends pulumi.ComponentResource {
   /** POST .../availability/{markoffId}/end: end a mark-off early (markoffs.ts). */
   public readonly endLambda: ServiceLambda;
   public readonly schedulerRole: aws.iam.Role;
+  /**
+   * Async-invocation failure destination for expiryLambda. A message is a mark-off activation or
+   * revert that failed after Lambda's retries: the member stays MARKED_OFF (never paged) until it
+   * is redriven by re-invoking expiryLambda with the message's requestPayload.
+   */
+  public readonly expiryOnFailureQueue: aws.sqs.Queue;
+  public readonly expiryOnFailureAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly expiryAsyncConfig: aws.lambda.FunctionEventInvokeConfig;
+  public readonly scheduleDeadLetter: ScheduleDeadLetter;
   public readonly availabilityChangedConsumer: ServiceLambda;
   public readonly availabilityChangedQueueConsumer: QueueConsumer;
 
@@ -118,6 +128,83 @@ export class Availability extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    this.scheduleDeadLetter = new ScheduleDeadLetter(
+      `${name}-schedule-dead-letter`,
+      {
+        queueName: `boxalarm-${env}-personnel-availability-scheduler-dlq`,
+        schedulerRole: this.schedulerRole,
+        alarmActions: [args.pageTopicArn],
+        alarmDescription:
+          "EventBridge Scheduler gave up invoking the mark-off expiry Lambda: a mark-off was not " +
+          "activated or not reverted, so a member may stay MARKED_OFF and unpaged. Re-invoke the " +
+          "expiry Lambda with the message's target input, or end the mark-off from the roster.",
+      },
+      { parent: this },
+    );
+
+    this.expiryOnFailureQueue = new aws.sqs.Queue(
+      `${name}-expiry-onfailure-queue`,
+      {
+        name: `boxalarm-${env}-personnel-availability-expiry-onfailure`,
+        messageRetentionSeconds: 1209600,
+        sqsManagedSseEnabled: true,
+      },
+      { parent: this },
+    );
+
+    const expiryOnFailureSend = new aws.iam.RolePolicy(
+      `${name}-expiry-onfailure-send`,
+      {
+        role: this.expiryLambda.role.id,
+        policy: this.expiryOnFailureQueue.arn.apply((queueArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "SendToExpiryOnFailureQueue",
+                Effect: "Allow",
+                Action: ["sqs:SendMessage"],
+                Resource: queueArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
+    this.expiryAsyncConfig = new aws.lambda.FunctionEventInvokeConfig(
+      `${name}-expiry-async-config`,
+      {
+        functionName: this.expiryLambda.function.name,
+        maximumRetryAttempts: 2,
+        maximumEventAgeInSeconds: 3600,
+        destinationConfig: { onFailure: { destination: this.expiryOnFailureQueue.arn } },
+      },
+      { parent: this, dependsOn: [expiryOnFailureSend] },
+    );
+
+    this.expiryOnFailureAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-expiry-onfailure-alarm`,
+      {
+        name: `boxalarm-${env}-personnel-availability-expiry-onfailure-depth`,
+        alarmDescription:
+          "A mark-off activation or revert failed after its retries: the member may stay MARKED_OFF " +
+          "and not be paged. Re-invoke the expiry Lambda with the message's requestPayload.",
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.expiryOnFailureQueue.name },
+        statistic: "Maximum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
+      },
+      { parent: this },
+    );
+
     // availability/handler.ts creates/deletes schedules named avail-* in the default
     // group of this account and region only.
     const region = aws.getRegionOutput({}, { parent: this });
@@ -138,6 +225,7 @@ export class Availability extends pulumi.ComponentResource {
           VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
           AVAILABILITY_EXPIRY_HANDLER_ARN: this.expiryLambda.function.arn,
           AVAILABILITY_SCHEDULER_ROLE_ARN: this.schedulerRole.arn,
+          AVAILABILITY_SCHEDULE_DLQ_ARN: this.scheduleDeadLetter.dlq.arn,
         },
         additionalPolicyStatements: pulumi
           .all([

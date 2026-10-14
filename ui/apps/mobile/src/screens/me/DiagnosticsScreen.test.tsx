@@ -74,19 +74,19 @@ test('renders the per-tone, per-channel timeline for the most recent dispatch', 
         timeline: [
           {
             entityType: 'DELIVERY_RECEIPT',
-            channel: 'PUSH',
+            channel: 'push',
             toneSequence: 1,
             sentAt: T + 5,
             deliveredAt: T + 6,
           },
           {
             entityType: 'DELIVERY_RECEIPT',
-            channel: 'SMS',
+            channel: 'sms',
             toneSequence: 1,
             sentAt: T + 5,
             failureReason: 'CARRIER_REJECTED',
           },
-          { entityType: 'DELIVERY_RECEIPT', channel: 'PUSH', toneSequence: 2, sentAt: T + 185 },
+          { entityType: 'DELIVERY_RECEIPT', channel: 'push', toneSequence: 2, sentAt: T + 185 },
         ],
         deviceState: {
           notificationPermission: true,

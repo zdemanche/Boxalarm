@@ -201,7 +201,9 @@ export function useScheduleRepository(): ScheduleRepository {
       },
 
       // Contract for the end-early API being added on the server branch (fix/post-merge-server,
-      // not landed when this was written): GET .../availability lists current and upcoming
+      // not landed when this was written): the server already drops expired never-activated and
+      // reverted rows, so a row past its endAt here is an activated mark-off whose revert never
+      // ran and must stay listed so the member can end it. GET .../availability lists current and upcoming
       // mark-offs as { markOffs: [{ markoffId?, startAt, endAt, reason? }] } in epoch seconds,
       // and POST .../availability/{markoffId}/end ends one now. The server keys a mark-off by its
       // start (MARKOFF#{startAt}), so a row without markoffId is addressed by its startAt.
@@ -219,9 +221,7 @@ export function useScheduleRepository(): ScheduleRepository {
         const body = (await response.json()) as {
           markOffs?: { markoffId?: string; startAt: number; endAt: number; reason?: string }[];
         };
-        const now = Date.now() / 1000;
         return (body.markOffs ?? [])
-          .filter((m) => m.endAt > now)
           .map((m) => ({
             markoffId: m.markoffId ?? String(m.startAt),
             startAt: m.startAt,

@@ -180,6 +180,31 @@ test('lists the member’s mark-offs and End now ends the current one', async ()
   );
 });
 
+test('an activated mark-off past its end time reads as overdue, not as a future time', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/personnel/members/member-7/availability', () =>
+      HttpResponse.json({
+        markOffs: [
+          {
+            markoffId: String(nowSeconds - 7200),
+            startAt: nowSeconds - 7200,
+            endAt: nowSeconds - 3600,
+          },
+        ],
+      }),
+    ),
+  );
+  renderPage();
+
+  expect(await screen.findByText(/^Should have ended /)).toBeTruthy();
+  expect(screen.queryByText(/^Until /)).toBeNull();
+  expect(screen.getByText('Still marked off')).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: /^End the mark-off that should have ended/ }),
+  ).toBeTruthy();
+});
+
 test('a failed mark-off list gets a real Try again button', async () => {
   let calls = 0;
   server.use(

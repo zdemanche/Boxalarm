@@ -187,7 +187,7 @@ function receiptsFor(
       const push: DeliveryReceipt = fault.pushFailure
         ? {
             memberId,
-            channel: 'PUSH',
+            channel: 'push',
             toneSequence: tone,
             status: 'FAILED',
             sentAt,
@@ -198,7 +198,7 @@ function receiptsFor(
         : fault.pushUnconfirmed
           ? {
               memberId,
-              channel: 'PUSH',
+              channel: 'push',
               toneSequence: tone,
               status: 'SENT_UNCONFIRMED',
               sentAt,
@@ -208,7 +208,7 @@ function receiptsFor(
             }
           : {
               memberId,
-              channel: 'PUSH',
+              channel: 'push',
               toneSequence: tone,
               status: openedAt ? 'OPENED' : 'DELIVERED',
               sentAt,
@@ -222,7 +222,7 @@ function receiptsFor(
         fault.smsFailure
           ? {
               memberId,
-              channel: 'SMS',
+              channel: 'sms',
               toneSequence: tone,
               status: 'FAILED',
               sentAt: sentAt + 1,
@@ -232,7 +232,7 @@ function receiptsFor(
             }
           : {
               memberId,
-              channel: 'SMS',
+              channel: 'sms',
               toneSequence: tone,
               status: 'DELIVERED',
               sentAt: sentAt + 1,
@@ -247,7 +247,7 @@ function receiptsFor(
         // through to voicemail, which the provider reports as sent but unconfirmed.
         receipts.push({
           memberId,
-          channel: 'VOICE',
+          channel: 'voice',
           toneSequence: tone,
           status: answeredThisTone ? 'DELIVERED' : 'SENT_UNCONFIRMED',
           sentAt: sentAt + 3,
@@ -817,7 +817,7 @@ function demoLadderControl(
       ...(RECEIPTS.get(dispatchId) ?? []),
       ...roster.map((entry) => ({
         memberId: entry.memberId,
-        channel: 'PUSH',
+        channel: 'push',
         toneSequence,
         status: 'SENT' as const,
         sentAt: now,

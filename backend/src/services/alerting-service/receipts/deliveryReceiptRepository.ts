@@ -119,13 +119,37 @@ export async function queryReceiptsForDispatch(
     exclusiveStartKey = result.LastEvaluatedKey;
   } while (exclusiveStartKey !== undefined);
 
-  return items.map((item) => ({
-    memberId: item.memberId as string,
-    channel: item.channel as string,
-    toneSequence: item.toneSequence as number,
-    sentAt: item.sentAt as number,
-    ...(item.deliveredAt !== undefined ? { deliveredAt: item.deliveredAt as number } : {}),
-    ...(item.openedAt !== undefined ? { openedAt: item.openedAt as number } : {}),
-    ...(item.failureReason !== undefined ? { failureReason: item.failureReason as string } : {}),
-  }));
+  return mergeReceiptAttempts(items);
+}
+
+export function mergeReceiptAttempts(
+  items: readonly Record<string, unknown>[],
+): DeliveryReceiptRecord[] {
+  const attempts = new Map<string, DeliveryReceiptRecord>();
+  for (const item of items) {
+    const channel = String(item.channel).toLowerCase();
+    const key = `${item.memberId as string}#${channel}#${item.toneSequence as number}`;
+    const prior = attempts.get(key);
+    const sentAts = [prior?.sentAt, item.sentAt].filter(
+      (value): value is number => typeof value === 'number',
+    );
+    attempts.set(key, {
+      memberId: item.memberId as string,
+      channel,
+      toneSequence: item.toneSequence as number,
+      sentAt: Math.min(...sentAts),
+      ...optionalNumber('deliveredAt', prior?.deliveredAt ?? item.deliveredAt),
+      ...optionalNumber('openedAt', prior?.openedAt ?? item.openedAt),
+      ...optionalString('failureReason', prior?.failureReason ?? item.failureReason),
+    });
+  }
+  return [...attempts.values()];
+}
+
+function optionalNumber<K extends string>(key: K, value: unknown): { [P in K]?: number } {
+  return typeof value === 'number' ? ({ [key]: value } as { [P in K]?: number }) : {};
+}
+
+function optionalString<K extends string>(key: K, value: unknown): { [P in K]?: string } {
+  return typeof value === 'string' ? ({ [key]: value } as { [P in K]?: string }) : {};
 }

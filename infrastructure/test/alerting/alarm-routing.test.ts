@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { STACK_CONFIG, installMocks, resourcesOfType, settleStack } from "./mock-harness";
 
 const PAGE_TOPIC = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page";
+const DASHBOARD_ONLY_ALARMS = ["boxalarm-dev-alerting-eligibility-snapshot-stale"];
 const OPS_TOPIC = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications";
 
 describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout: 120_000 }, () => {
@@ -17,6 +18,7 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
     ).toBeGreaterThan(10);
     const silent = alarms
       .filter((a) => !Array.isArray(a.inputs.alarmActions) || a.inputs.alarmActions.length === 0)
+      .filter((a) => !DASHBOARD_ONLY_ALARMS.includes(String(a.inputs.name)))
       .map((a) => a.inputs.name);
     expect(silent).toEqual([]);
 
@@ -35,10 +37,18 @@ describe("full stack: no alarm notifies nobody (deploy-readiness M1)", { timeout
       "boxalarm-dev-training-eligibility-flip-failed",
       "boxalarm-dev-alerting-bridge-malformed-row",
       "boxalarm-dev-alerting-schedule-dlq-not-empty",
-      // #232: now a department-wide propagation-lag flag, safe to page on (staleness.ts).
-      "boxalarm-dev-alerting-eligibility-snapshot-stale",
+      "boxalarm-dev-alerting-eligibility-member-updated-queue-age",
+      "boxalarm-dev-alerting-eligibility-availability-snapshot-queue-age",
+      "boxalarm-dev-alerting-eligibility-eligibility-changed-queue-age",
+      "boxalarm-dev-personnel-availability-expiry-onfailure-depth",
+      "boxalarm-dev-personnel-availability-scheduler-dlq-depth",
     ]) {
       expect(actionsOf(name), name).toEqual([PAGE_TOPIC]);
+    }
+    for (const name of DASHBOARD_ONLY_ALARMS) {
+      expect(alarms.find((a) => a.inputs.name === name)?.inputs.alarmActions ?? [], name).toEqual(
+        [],
+      );
     }
     // Everything else notifies the ops topic.
     for (const name of [

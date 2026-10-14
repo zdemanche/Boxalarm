@@ -149,6 +149,86 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
   expect(await screen.findByText('Sent, not confirmed delivered')).toBeTruthy();
 });
 
+test('a FAILED receipt shows as Failed with its glyph and word, and a later tone does not hide it', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-8', () =>
+      HttpResponse.json({
+        dispatchId: 'D-8',
+        incidentType: 'Structure fire',
+        address: '18 Nichols Ave',
+        crossStreets: 'Main & Nichols',
+        mapLink: null,
+        narrative: 'Smoke showing',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-8/roster', () =>
+      HttpResponse.json({
+        members: [
+          {
+            memberId: 'm-1',
+            name: 'Jordan Osei',
+            ackStatus: 'UNANSWERED',
+            eta: null,
+            assignedApparatusId: null,
+            quals: [],
+            lastAnsweredTone: null,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-8/receipts', () =>
+      HttpResponse.json({
+        receipts: [
+          {
+            memberId: 'm-1',
+            channel: 'sms',
+            toneSequence: 1,
+            status: 'FAILED',
+            sentAt: 100,
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: 'provider 4xx',
+          },
+          {
+            memberId: 'm-1',
+            channel: 'sms',
+            toneSequence: 2,
+            status: 'SENT',
+            sentAt: 400,
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: null,
+          },
+          {
+            memberId: 'm-1',
+            channel: 'push',
+            toneSequence: 1,
+            status: 'FAILED',
+            sentAt: 100,
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: 'DeviceTokenNotForTopic',
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/riding-board/D-8', () =>
+      HttpResponse.json({ dispatchId: 'D-8', apparatus: [] }),
+    ),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-8');
+
+  const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
+  const smsFailure = await within(receipts).findByText('Tone 1: Failed');
+  expect(smsFailure.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+  expect(smsFailure.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+  expect(within(receipts).getByText('Tone 2: Sent')).toBeTruthy();
+  const pushFailure = within(receipts).getByText('Failed');
+  expect(pushFailure.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+});
+
 // Server-fix security MINOR 2: receipts are on the fail-closed authorizer; an authorizer
 // refusal or a 5xx during an outage reads as "temporarily unavailable", not "no access".
 test.each([

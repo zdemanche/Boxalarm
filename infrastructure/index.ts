@@ -971,6 +971,11 @@ export const eligibilityStaleness = new EligibilityStaleness("eligibility-stalen
   pageTopicArn: alertingAlarms.pageTopic.arn,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
+  eligibilityFeedQueueNames: {
+    "member-updated": pushTokens.memberUpdatedQueue.name,
+    "availability-snapshot": personnelAvailability.availabilityChangedQueueConsumer.queue.name,
+    "eligibility-changed": personnelQuals.eligibilityChangedQueueConsumer.queue.name,
+  },
 });
 
 // E1-S10-INFRA #230/#35: continuous production canary + on-call escalation alarms.

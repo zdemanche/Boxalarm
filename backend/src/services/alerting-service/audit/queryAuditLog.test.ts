@@ -120,7 +120,16 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
       if (timelineCalls === 1) {
         expect(input.ExclusiveStartKey).toBeUndefined();
         return Promise.resolve({
-          Items: [{ entityType: 'DELIVERY_RECEIPT', sk: 'RECEIPT#mbr-1#push#1' }],
+          Items: [
+            {
+              entityType: 'DELIVERY_RECEIPT',
+              sk: 'RECEIPT#mbr-1#push#1',
+              memberId: 'mbr-1',
+              channel: 'push',
+              toneSequence: 1,
+              sentAt: 10,
+            },
+          ],
           LastEvaluatedKey: { pk: 'DEPT#NICHOLS#DISPATCH#D-1', sk: 'RECEIPT#mbr-1#push#1' },
         });
       }
@@ -129,7 +138,16 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
         sk: 'RECEIPT#mbr-1#push#1',
       });
       return Promise.resolve({
-        Items: [{ entityType: 'DELIVERY_RECEIPT', sk: 'RECEIPT#mbr-2#sms#1' }],
+        Items: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            sk: 'RECEIPT#mbr-2#sms#1',
+            memberId: 'mbr-2',
+            channel: 'sms',
+            toneSequence: 1,
+            sentAt: 11,
+          },
+        ],
       });
     });
 
@@ -137,6 +155,49 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
 
     expect(timelineCalls).toBe(2);
     expect(page.entries[0]?.timeline).toHaveLength(2);
+  });
+
+  it('merges the fan-out receipt and the worker send guard into one lowercase row per attempt, keeping the failure', async () => {
+    const client = mockClient((command) => {
+      const input = (command as { input: Record<string, unknown> }).input;
+      if (input.IndexName === 'GSI2') {
+        return Promise.resolve({ Items: [{ dispatchId: 'D-1', entityType: 'DISPATCH_ALERT' }] });
+      }
+      return Promise.resolve({
+        Items: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            memberId: 'mbr-1',
+            channel: 'sms',
+            toneSequence: 1,
+            sentAt: 10,
+          },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            memberId: 'mbr-1',
+            channel: 'SMS',
+            toneSequence: 1,
+            sentAt: 11,
+            deliveredAt: null,
+            failureReason: 'provider 4xx',
+          },
+        ],
+      });
+    });
+
+    const page = await queryDepartmentAuditLog(client, 'alerting-table', DEPT_ID, 100, 200);
+
+    expect(page.entries[0]?.timeline).toEqual([
+      {
+        entityType: 'DELIVERY_RECEIPT',
+        dispatchId: 'D-1',
+        memberId: 'mbr-1',
+        channel: 'sms',
+        toneSequence: 1,
+        sentAt: 10,
+        failureReason: 'provider 4xx',
+      },
+    ]);
   });
 
   it('returns nextCursor when DynamoDB reports LastEvaluatedKey', async () => {

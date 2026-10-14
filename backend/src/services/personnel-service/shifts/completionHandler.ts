@@ -1,8 +1,10 @@
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
+import { getLosapPointRules } from '../losap/configRepository.js';
 import { getDocClient, readPersonnelTableConfig } from './dynamoClient.js';
 import {
   completeShiftAttendance,
+  createRulesLosapCalculator,
   findEndedShiftsWithClaims,
   zeroLosapCalculator,
   type CompleteShiftOutcome,
@@ -17,10 +19,6 @@ export interface ShiftCompletionPayload {
   readonly shiftId?: string;
   /** Epoch milliseconds (matches DUTY_SHIFT.startAt/endAt). Defaults to Date.now() when omitted. */
   readonly asOf?: number;
-}
-
-export interface CompletionHandlerDeps {
-  readonly losapCalculator?: LosapPointsCalculator;
 }
 
 function isShiftCompletionPayload(value: unknown): value is ShiftCompletionPayload {
@@ -60,10 +58,7 @@ export interface ShiftCompletionResult {
   }>;
 }
 
-export const handler = async (
-  payload: unknown,
-  deps: CompletionHandlerDeps = {},
-): Promise<ShiftCompletionResult> => {
+export const handler = async (payload: unknown): Promise<ShiftCompletionResult> => {
   if (!isShiftCompletionPayload(payload)) {
     const error = new Error('shift completion payload failed shape validation');
     logError('shifts.completion.malformed_payload', error, 'unknown');
@@ -81,7 +76,6 @@ export const handler = async (
   const now = payload.asOf ?? Date.now();
   const { tableName } = readPersonnelTableConfig(process.env);
   const doc = getDocClient(process.env);
-  const losapCalculator = deps.losapCalculator ?? zeroLosapCalculator;
   const correlationId = `${deptId}#${payload.shiftId ?? 'sweep'}#${now}`;
 
   let shiftIds: readonly string[];
@@ -94,6 +88,33 @@ export const handler = async (
     logError('shifts.completion.find_failed', error, correlationId);
     emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'DynamoDbUnavailable');
     throw error;
+  }
+
+  let losapCalculator: LosapPointsCalculator = zeroLosapCalculator;
+  if (shiftIds.length > 0) {
+    try {
+      const rules = await getLosapPointRules(doc, tableName, deptId);
+      if (rules) {
+        losapCalculator = createRulesLosapCalculator(
+          rules.pointsByActivityType,
+          rules.ruleVersionId,
+        );
+      } else {
+        console.warn(
+          JSON.stringify({
+            event: 'shifts.completion.losap_rules_missing',
+            service: 'personnel-service',
+            correlationId,
+          }),
+        );
+        emitOutcomeMetric(METRIC_NAMESPACE, 'LosapAccrualSkipped', 'NoRuleConfig');
+      }
+    } catch (error) {
+      // Never complete a shift on a guessed 0: attendanceCompletedAt makes the zero permanent.
+      logError('shifts.completion.losap_rules_failed', error, correlationId);
+      emitOutcomeMetric(METRIC_NAMESPACE, 'CompletionFailed', 'LosapRulesUnavailable');
+      throw error;
+    }
   }
 
   const outcomes: ShiftCompletionResult['outcomes'][number][] = [];

@@ -19,8 +19,10 @@ import { queryEligiblePartition } from '../selector.js';
  * `Boxalarm/AlertingEligibility`, matching memberUpdatedHandler.ts's
  * SnapshotPropagationLatencyMs — the two handlers wrote the same eligibility-snapshot data
  * path to two different CloudWatch namespaces before this fix. infra's staleness.ts alarm
- * is updated to the new namespace in the same changeset, and its `alarmActions` is restored
- * now that the metric can no longer alarm permanently.
+ * is updated to the new namespace in the same changeset. A quiet department legitimately has
+ * no writes for 15+ minutes, so `SnapshotStale` is a dashboard signal only and does not page: its
+ * infra alarm (staleness.ts) has no alarmActions. Paging is on ApproximateAgeOfOldestMessage of
+ * the member-updated, availability-snapshot and eligibility-changed queues, alarmed in the same file.
  */
 const METRIC_NAMESPACE = 'Boxalarm/AlertingEligibility';
 const STALENESS_THRESHOLD_SECONDS = 15 * 60;

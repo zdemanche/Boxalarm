@@ -58,6 +58,7 @@ function extractTraceId(event: GuardEvent): string {
 interface SchedulerConfig {
   readonly expiryHandlerFunctionArn: string;
   readonly schedulerRoleArn: string;
+  readonly deadLetterArn?: string;
 }
 
 function readSchedulerConfig(env: NodeJS.ProcessEnv): SchedulerConfig {
@@ -69,7 +70,12 @@ function readSchedulerConfig(env: NodeJS.ProcessEnv): SchedulerConfig {
   if (!schedulerRoleArn) {
     throw new Error('AVAILABILITY_SCHEDULER_ROLE_ARN is required and was not set');
   }
-  return { expiryHandlerFunctionArn, schedulerRoleArn };
+  const deadLetterArn = env.AVAILABILITY_SCHEDULE_DLQ_ARN;
+  return {
+    expiryHandlerFunctionArn,
+    schedulerRoleArn,
+    ...(deadLetterArn ? { deadLetterArn } : {}),
+  };
 }
 
 let cachedSchedulerClient: SchedulerClient | undefined;
@@ -284,6 +290,9 @@ export async function createAvailability(
           Target: {
             Arn: schedulerConfig.expiryHandlerFunctionArn,
             RoleArn: schedulerConfig.schedulerRoleArn,
+            ...(schedulerConfig.deadLetterArn
+              ? { DeadLetterConfig: { Arn: schedulerConfig.deadLetterArn } }
+              : {}),
             Input: JSON.stringify({
               deptId,
               memberId,

@@ -37,13 +37,13 @@ function formatTime(epochSeconds: number): string {
 
 /** Receipts have no status field — the delivery state is which timestamps the provider set. */
 function describeEntry(entry: OwnTimelineEntry): { label: string; at: number | undefined } {
-  const channel = CHANNEL_LABEL[entry.channel ?? ''] ?? entry.channel ?? 'Channel';
+  const channel = CHANNEL_LABEL[(entry.channel ?? '').toUpperCase()] ?? entry.channel ?? 'Channel';
   if (entry.entityType === 'DELIVERY_RECEIPT') {
+    if (entry.openedAt) return { label: `${channel}: opened`, at: entry.openedAt };
+    if (entry.deliveredAt) return { label: `${channel}: delivered`, at: entry.deliveredAt };
     if (entry.failureReason) {
       return { label: `${channel}: failed (${entry.failureReason})`, at: entry.sentAt };
     }
-    if (entry.openedAt) return { label: `${channel}: opened`, at: entry.openedAt };
-    if (entry.deliveredAt) return { label: `${channel}: delivered`, at: entry.deliveredAt };
     return { label: `${channel}: sent, delivery not confirmed`, at: entry.sentAt };
   }
   if (entry.entityType === 'ESCALATION_EVENT') {

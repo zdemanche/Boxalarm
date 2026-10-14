@@ -110,6 +110,12 @@ export class Shifts extends pulumi.ComponentResource {
             Resource: [tableArn, `${tableArn}/index/GSI3`],
           },
           {
+            Sid: "ShiftCompletionLosapRulesRead" as const,
+            Effect: "Allow" as const,
+            Action: ["dynamodb:GetItem"],
+            Resource: [tableArn],
+          },
+          {
             // completeShiftAttendance's transaction: Put items (attendance + outbox rows)
             // plus an Update (shift METADATA), authorized item-by-item —
             // dynamodb:TransactWriteItems is not an IAM action.

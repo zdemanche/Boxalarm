@@ -83,6 +83,10 @@ function logError(event: string, error: unknown, context: Record<string, unknown
   });
 }
 
+function isClockMap(value: unknown): value is Record<string, number> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function nextQuals(existing: unknown, qualCode: string, currentlyEligible: boolean): string[] {
   const current = Array.isArray(existing)
     ? existing.filter((entry): entry is string => typeof entry === 'string')
@@ -104,27 +108,59 @@ async function updateEligibilitySnapshot(
 ): Promise<SnapshotUpdateOutcome> {
   for (let attempt = 0; attempt < MAX_SNAPSHOT_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: snapshotKey }));
-    const existingItem = existing.Item as { quals?: unknown; qualsUpdatedAt?: unknown } | undefined;
-    // Staleness is gated on quals' own clock, qualsUpdatedAt - every snapshot field has one
-    // (activeUpdatedAt, availabilityUpdatedAt, rolesUpdatedAt, pushContactsUpdatedAt,
-    // phoneUpdatedAt), and snapshotUpdatedAt guards nothing: a newer event for another field
-    // can never make a still-current qual change look stale (review CRITICAL-1).
-    const priorQualsUpdatedAt =
-      typeof existingItem?.qualsUpdatedAt === 'number' ? existingItem.qualsUpdatedAt : undefined;
-    if (priorQualsUpdatedAt !== undefined && priorQualsUpdatedAt > eventSnapshotUpdatedAt) {
+    const existingItem = existing.Item as
+      | {
+          quals?: unknown;
+          qualsUpdatedAt?: unknown;
+          qualClocks?: unknown;
+          qualClocksFloor?: unknown;
+        }
+      | undefined;
+    // Each eligibility event changes ONE qual, so staleness is judged on that qual's own clock
+    // (qualClocks[qualCode]). A single member-wide qualsUpdatedAt dropped a redelivered older
+    // change to qual A as stale once a newer change to qual B had landed (a revoked INTERIOR
+    // stayed on the snapshot and satisfied the tone-2 predicate). Revoked quals keep their
+    // clock as a tombstone. A snapshot written before qualClocks existed has its member-wide
+    // qualsUpdatedAt persisted as qualClocksFloor on the first write and kept on every later
+    // one, so a qual with no clock of its own is judged against that floor forever.
+    const priorClocks = isClockMap(existingItem?.qualClocks) ? existingItem.qualClocks : {};
+    const qualClocksFloor =
+      typeof existingItem?.qualClocksFloor === 'number'
+        ? existingItem.qualClocksFloor
+        : existingItem?.qualClocks === undefined && typeof existingItem?.qualsUpdatedAt === 'number'
+          ? existingItem.qualsUpdatedAt
+          : undefined;
+    const priorQualClock = priorClocks[qualCode] ?? qualClocksFloor;
+    if (priorQualClock !== undefined && priorQualClock > eventSnapshotUpdatedAt) {
       return 'stale';
     }
     const priorQuals = Array.isArray(existingItem?.quals) ? existingItem.quals : [];
     const quals = nextQuals(priorQuals, qualCode, currentlyEligible);
+    const qualClocks = { ...priorClocks, [qualCode]: eventSnapshotUpdatedAt };
+    const priorQualsUpdatedAt =
+      typeof existingItem?.qualsUpdatedAt === 'number' ? existingItem.qualsUpdatedAt : 0;
     // Optimistic check on exactly what was read. `if_not_exists` is an update function, not a
     // condition function: the old `if_not_exists(quals, :emptyList) = :priorQuals` condition
     // made DynamoDB reject every qual change with a ValidationException.
     const readCondition =
       existingItem === undefined
         ? { ConditionExpression: 'attribute_not_exists(pk)', values: {} }
-        : existingItem.quals === undefined
-          ? { ConditionExpression: 'attribute_not_exists(quals)', values: {} }
-          : { ConditionExpression: 'quals = :priorQuals', values: { ':priorQuals': priorQuals } };
+        : {
+            ConditionExpression: [
+              existingItem.quals === undefined
+                ? 'attribute_not_exists(quals)'
+                : 'quals = :priorQuals',
+              existingItem.qualClocks === undefined
+                ? 'attribute_not_exists(qualClocks)'
+                : 'qualClocks = :priorQualClocks',
+            ].join(' AND '),
+            values: {
+              ...(existingItem.quals === undefined ? {} : { ':priorQuals': priorQuals }),
+              ...(existingItem.qualClocks === undefined
+                ? {}
+                : { ':priorQualClocks': existingItem.qualClocks }),
+            },
+          };
 
     try {
       await client.send(
@@ -132,14 +168,16 @@ async function updateEligibilitySnapshot(
           TableName: tableName,
           Key: snapshotKey,
           ConditionExpression: readCondition.ConditionExpression,
-          UpdateExpression:
-            'SET entityType = :entityType, memberId = :memberId, quals = :quals, qualsUpdatedAt = :new, snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :new), active = if_not_exists(active, :defaultActive), availabilityState = if_not_exists(availabilityState, :defaultAvailability), #roles = if_not_exists(#roles, :emptyList)',
+          UpdateExpression: `SET entityType = :entityType, memberId = :memberId, quals = :quals, qualClocks = :qualClocks, ${qualClocksFloor === undefined ? '' : 'qualClocksFloor = :qualClocksFloor, '}qualsUpdatedAt = :qualsUpdatedAt, snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :new), active = if_not_exists(active, :defaultActive), availabilityState = if_not_exists(availabilityState, :defaultAvailability), #roles = if_not_exists(#roles, :emptyList)`,
           // `roles` is a DynamoDB reserved word; bare, the whole update is a ValidationException.
           ExpressionAttributeNames: { '#roles': 'roles' },
           ExpressionAttributeValues: {
             ':entityType': 'MEMBER_ELIGIBILITY_SNAPSHOT',
             ':memberId': memberId,
             ':quals': quals,
+            ':qualClocks': qualClocks,
+            ...(qualClocksFloor === undefined ? {} : { ':qualClocksFloor': qualClocksFloor }),
+            ':qualsUpdatedAt': Math.max(priorQualsUpdatedAt, eventSnapshotUpdatedAt),
             ...readCondition.values,
             ':new': eventSnapshotUpdatedAt,
             ':defaultActive': true,
