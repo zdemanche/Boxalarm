@@ -43,16 +43,24 @@ function buildEvent(
   } as unknown as APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>;
 }
 
+function identityIn(deptId: string | undefined) {
+  return vi
+    .fn()
+    .mockImplementation((_client: unknown, input: { username: string }) =>
+      Promise.resolve({ deptId, sub: input.username }),
+    );
+}
+
 function mockRevocationClient(overrides: {
   revokeMemberSession?: ReturnType<typeof vi.fn>;
-  resolveMemberDeptId?: ReturnType<typeof vi.fn>;
+  resolveMemberIdentity?: ReturnType<typeof vi.fn>;
   isProtectedTarget?: ReturnType<typeof vi.fn>;
 }): void {
   vi.doMock('./cognitoRevocationClient.js', async (importOriginal) => ({
     readRevocationConfig: () => ({ userPoolId: 'pool-1' }),
     createRevocationClient: () => ({}),
     revokeMemberSession: overrides.revokeMemberSession ?? vi.fn(),
-    resolveMemberDeptId: overrides.resolveMemberDeptId ?? vi.fn().mockResolvedValue('dept-001'),
+    resolveMemberIdentity: overrides.resolveMemberIdentity ?? identityIn('dept-001'),
     isProtectedTarget: overrides.isProtectedTarget ?? vi.fn().mockResolvedValue(false),
     mayActOnProtectedTarget: (await importOriginal<typeof import('./cognitoRevocationClient.js')>())
       .mayActOnProtectedTarget,
@@ -247,7 +255,7 @@ describe('deviceLossHandler', () => {
   });
 
   it('does not touch the push registration when the target is in another department', async () => {
-    mockRevocationClient({ resolveMemberDeptId: vi.fn().mockResolvedValue('dept-999') });
+    mockRevocationClient({ resolveMemberIdentity: identityIn('dept-999') });
     const { handler } = await import('./deviceLossHandler.js');
 
     await handler(buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })));
@@ -332,7 +340,7 @@ describe('deviceLossHandler', () => {
 
   it('returns 404 when memberId names an unknown Cognito user', async () => {
     mockRevocationClient({
-      resolveMemberDeptId: vi
+      resolveMemberIdentity: vi
         .fn()
         .mockRejectedValue(new UserNotFoundException({ message: 'no such user', $metadata: {} })),
     });
@@ -362,7 +370,7 @@ describe('deviceLossHandler', () => {
     const revokeMemberSession = vi.fn();
     mockRevocationClient({
       revokeMemberSession,
-      resolveMemberDeptId: vi.fn().mockResolvedValue('dept-002'),
+      resolveMemberIdentity: identityIn('dept-002'),
     });
     const { handler } = await import('./deviceLossHandler.js');
 
@@ -374,11 +382,29 @@ describe('deviceLossHandler', () => {
     expect(revokeMemberSession).not.toHaveBeenCalled();
   });
 
+  it('returns 404 and changes nothing when memberId is a login name rather than the sub', async () => {
+    const revokeMemberSession = vi.fn();
+    mockRevocationClient({
+      revokeMemberSession,
+      resolveMemberIdentity: vi.fn().mockResolvedValue({ deptId: 'dept-001', sub: 'uuid-1' }),
+    });
+    const { handler } = await import('./deviceLossHandler.js');
+
+    const result = (await handler(
+      buildEvent('CHIEF', JSON.stringify({ memberId: 'jsmith@nicholsfd.org' })),
+    )) as APIGatewayProxyStructuredResultV2;
+
+    expect(result.statusCode).toBe(404);
+    expect(revokeMemberSession).not.toHaveBeenCalled();
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
+    expect(invalidateMemberPush).not.toHaveBeenCalled();
+  });
+
   it('returns 403 (fail closed) when the target member department cannot be resolved', async () => {
     const revokeMemberSession = vi.fn();
     mockRevocationClient({
       revokeMemberSession,
-      resolveMemberDeptId: vi.fn().mockResolvedValue(undefined),
+      resolveMemberIdentity: identityIn(undefined),
     });
     const { handler } = await import('./deviceLossHandler.js');
 
@@ -397,7 +423,7 @@ describe('deviceLossHandler', () => {
       },
       createRevocationClient: () => ({}),
       revokeMemberSession: vi.fn(),
-      resolveMemberDeptId: vi.fn(),
+      resolveMemberIdentity: vi.fn(),
     }));
     const { handler } = await import('./deviceLossHandler.js');
 

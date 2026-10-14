@@ -17,9 +17,10 @@ import {
   mayActOnProtectedTarget,
   readRevocationConfig,
   resetMemberPassword,
-  resolveMemberDeptId,
+  resolveMemberIdentity,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
+import type { ResolvedMember } from './cognitoRevocationClient.js';
 import { getAccessStoreClient, readPlatformTableName } from './memberAccessStore.js';
 import { writeRevocationMarker } from '../authorizer/revocationStore.js';
 
@@ -95,9 +96,9 @@ async function resetCredentials(
   }
   const client = getClient();
 
-  let targetDeptId: string | undefined;
+  let target: ResolvedMember;
   try {
-    targetDeptId = await resolveMemberDeptId(client, { userPoolId, username: memberId });
+    target = await resolveMemberIdentity(client, { userPoolId, username: memberId });
   } catch (error) {
     if (error instanceof UserNotFoundException) {
       return notFoundProblem(traceId, `No member found for memberId "${memberId}".`);
@@ -111,9 +112,12 @@ async function resetCredentials(
   }
   // Fail closed, as deviceLossHandler: only a member verified to be in the caller's own
   // department (F9.6), including when the target's department cannot be resolved.
-  if (targetDeptId !== principal.deptId) {
+  if (target.deptId !== principal.deptId) {
     log('credentialReset.denied', { reason: 'CrossDepartmentTarget', memberId, traceId });
     return forbiddenProblem(traceId);
+  }
+  if (target.sub !== memberId) {
+    return notFoundProblem(traceId, `No member found for memberId "${memberId}".`);
   }
 
   // Security-web MINOR 6: a chief's or admin's password is reset only by an admin. Fails

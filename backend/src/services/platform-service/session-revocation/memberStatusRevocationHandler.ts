@@ -136,7 +136,7 @@ async function resolveEffectiveStatus(
  * Security-web MINOR 9: an event emitted before updateMemberStatus carried `deptId` (only a DLQ
  * redrive can deliver one now) used to skip the row re-read and act on its own status - so a
  * redriven LOA or RETIRED event disabled a member who is ACTIVE today. Its department is
- * resolved from the login's custom:deptId (as applyStatus already did for the marker), so it
+ * resolved from the login's custom:deptId (which the marker also uses), so it
  * converges on the row like every other event. A login with no department keeps the event's
  * status: there is no row to read.
  */
@@ -233,9 +233,7 @@ async function applyStatus(
     // M1: the marker makes the authorizer refuse the access tokens already issued (they are
     // verified offline and would otherwise live out their hour). A member with no department
     // attribute holds no token the authorizer accepts, so there is nothing to mark.
-    const deptId =
-      payload.deptId ??
-      (await resolveMemberDeptId(client, { userPoolId, username: payload.memberId }));
+    const { deptId } = payload;
     if (deptId) {
       await writeRevocationMarker(getAccessStoreClient(), tableName, {
         deptId,
