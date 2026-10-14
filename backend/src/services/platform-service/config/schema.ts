@@ -7,8 +7,8 @@ import type { DepartmentConfigType } from './repository.js';
  * in the codebase (see review notes on PR #145 / E8-S4):
  *  - RETENTION mirrors `RetentionConfigValue` in
  *    `platform-service/retention/configRepository.ts` (`{ retentionYears }`).
- *  - LOSAP_POINT_RULES mirrors the `pointsByActivityType` map written by
- *    `personnel-service/losap/configRepository.ts`.
+ *  - LOSAP_POINT_RULES is written only by `personnel-service/losap/configRepository.ts`, which
+ *    mints the `ruleVersionId` attendance records carry, so this route refuses it.
  *  - ALERT_RULES mirrors the fields actually read back out of this configType,
  *    e.g. `certExpiryLeadDays` in
  *    `training-service/certificationExpiryScanner/configReader.ts`.
@@ -30,10 +30,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function unknownFieldErrors(
@@ -98,38 +94,12 @@ function validateRanks(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
-function validateLosapPointRules(value: Record<string, unknown>): FieldError[] {
-  const errors: FieldError[] = [...unknownFieldErrors(value, ['pointsByActivityType'])];
-  if (!isPlainObject(value.pointsByActivityType)) {
-    errors.push({
-      field: 'pointsByActivityType',
-      message: 'is required and must be an object',
-    });
-    return errors;
-  }
-  const entries = Object.entries(value.pointsByActivityType);
-  if (entries.length === 0) {
-    errors.push({
-      field: 'pointsByActivityType',
-      message: 'must have at least one activity type entry',
-    });
-  }
-  for (const [activityType, points] of entries) {
-    if (!isFiniteNumber(points) || points < 0) {
-      errors.push({
-        field: `pointsByActivityType.${activityType}`,
-        message: 'must be a non-negative finite number',
-      });
-    }
-  }
-  return errors;
-}
-
 /**
  * ALERT_RULES. `escalationThresholdN` (seconds before a member's voice escalation) and the
  * tone-ladder fields are projected into the alerting plane's ALERT_RULES_COPY by its own
  * consumer (alerting-service alertRules/alertRulesCopyHandler.ts), which the escalation
- * scheduler and the tone evaluator read; `certExpiryLeadDays` is read by training-service.
+ * scheduler and the tone evaluator read; `certExpiryLeadDays`, `ppeExpiryLeadDays` and
+ * `apparatusTestLeadDays` are read by the training, inventory and apparatus scanners.
  *  - toneLadder: { tone2AtSeconds, tone3AtSeconds } - when tones 2 and 3 are evaluated;
  *  - defaultRule: { minResponders, requiredQuals } - the predicate that stops the ladder:
  *    at least minResponders answered RESPONDING / DIRECT_TO_SCENE holding one of requiredQuals
@@ -138,6 +108,8 @@ function validateLosapPointRules(value: Record<string, unknown>): FieldError[] {
 const ALERT_RULES_KNOWN_FIELDS = [
   'escalationThresholdN',
   'certExpiryLeadDays',
+  'ppeExpiryLeadDays',
+  'apparatusTestLeadDays',
   'toneLadder',
   'defaultRule',
 ] as const;
@@ -157,6 +129,7 @@ const BOUNDS = {
   tone2AtSeconds: [60, 3600],
   tone3AtSeconds: [120, 7200],
   minResponders: [1, 100],
+  leadDays: [1, 365],
 } as const;
 const DEFAULT_TONE_2_AT_SECONDS = 180;
 const DEFAULT_TONE_3_AT_SECONDS = 360;
@@ -236,12 +209,13 @@ function validateAlertRules(value: Record<string, unknown>): FieldError[] {
       });
     }
   }
-  if (value.certExpiryLeadDays !== undefined) {
-    if (!isFiniteNumber(value.certExpiryLeadDays) || value.certExpiryLeadDays <= 0) {
-      errors.push({
-        field: 'certExpiryLeadDays',
-        message: 'must be a positive number when provided',
-      });
+  for (const field of [
+    'certExpiryLeadDays',
+    'ppeExpiryLeadDays',
+    'apparatusTestLeadDays',
+  ] as const) {
+    if (value[field] !== undefined && !withinBounds(value[field], BOUNDS.leadDays)) {
+      errors.push({ field, message: boundsMessage(BOUNDS.leadDays, 'days') });
     }
   }
   if (value.toneLadder !== undefined) {
@@ -460,7 +434,12 @@ export function validateConfigValue(
     case 'RANKS':
       return validateRanks(value);
     case 'LOSAP_POINT_RULES':
-      return validateLosapPointRules(value);
+      return [
+        {
+          field: 'value',
+          message: 'is edited through PUT /api/v1/personnel/losap/rules, not this route',
+        },
+      ];
     case 'ALERT_RULES':
       return validateAlertRules(value);
     case 'CHECKLIST_DEFAULTS':

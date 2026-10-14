@@ -62,33 +62,16 @@ describe('validateConfigValue', () => {
   });
 
   describe('LOSAP_POINT_RULES', () => {
-    it('accepts a valid points map', () => {
+    it('is never written through the generic route (personnel-service owns it and mints ruleVersionId)', () => {
       const errors = validateConfigValue('LOSAP_POINT_RULES', {
-        pointsByActivityType: { TRAINING: 1, RESPONSE: 2 },
+        pointsByActivityType: { DRILL: 1 },
       });
-      expect(errors).toEqual([]);
-    });
-
-    it('rejects a missing pointsByActivityType object', () => {
-      const errors = validateConfigValue('LOSAP_POINT_RULES', {});
-      expect(errors).toContainEqual({
-        field: 'pointsByActivityType',
-        message: 'is required and must be an object',
-      });
-    });
-
-    it('rejects negative or non-numeric point values', () => {
-      const errors = validateConfigValue('LOSAP_POINT_RULES', {
-        pointsByActivityType: { TRAINING: -1, RESPONSE: 'two' },
-      });
-      expect(errors).toContainEqual({
-        field: 'pointsByActivityType.TRAINING',
-        message: 'must be a non-negative finite number',
-      });
-      expect(errors).toContainEqual({
-        field: 'pointsByActivityType.RESPONSE',
-        message: 'must be a non-negative finite number',
-      });
+      expect(errors).toEqual([
+        {
+          field: 'value',
+          message: 'is edited through PUT /api/v1/personnel/losap/rules, not this route',
+        },
+      ]);
     });
   });
 
@@ -101,12 +84,31 @@ describe('validateConfigValue', () => {
       expect(validateConfigValue('ALERT_RULES', { certExpiryLeadDays: 30 })).toEqual([]);
     });
 
+    it('accepts the apparatus-test and PPE lead times the scanners read', () => {
+      expect(
+        validateConfigValue('ALERT_RULES', { ppeExpiryLeadDays: 90, apparatusTestLeadDays: 45 }),
+      ).toEqual([]);
+    });
+
+    it.each(['certExpiryLeadDays', 'ppeExpiryLeadDays', 'apparatusTestLeadDays'])(
+      'bounds %s to a whole number of days from 1 to 365',
+      (field) => {
+        expect(validateConfigValue('ALERT_RULES', { [field]: 365 })).toEqual([]);
+        for (const bad of [0, 0.5, 1.5, 366, 10_000_000, '30']) {
+          expect(validateConfigValue('ALERT_RULES', { [field]: bad })).toContainEqual({
+            field,
+            message: 'must be a whole number of days from 1 to 365',
+          });
+        }
+      },
+    );
+
     it('rejects an empty object with no recognized fields', () => {
       const errors = validateConfigValue('ALERT_RULES', {});
       expect(errors).toContainEqual({
         field: 'value',
         message:
-          'must include at least one of escalationThresholdN, certExpiryLeadDays, toneLadder, defaultRule',
+          'must include at least one of escalationThresholdN, certExpiryLeadDays, ppeExpiryLeadDays, apparatusTestLeadDays, toneLadder, defaultRule',
       });
     });
 

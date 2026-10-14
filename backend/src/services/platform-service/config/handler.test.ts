@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
 import type { AuthorizerContext } from '../authorizer/handler.js';
-import { createConfigCache } from './cache.js';
 
 const DEPT_ID = 'nichols';
 
@@ -94,7 +93,6 @@ describe('department config handler', () => {
     });
     const handler = createHandler({
       docClient: fakeDocClient(send),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
 
     const result = (await handler(
@@ -115,7 +113,6 @@ describe('department config handler', () => {
     const { createHandler } = await import('./handler.js');
     const handler = createHandler({
       docClient: fakeDocClient(() => ({})),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
     const result = (await handler(
       buildEvent('GET', 'STATIONS', memberContext()),
@@ -130,7 +127,6 @@ describe('department config handler', () => {
     const send = vi.fn();
     const handler = createHandler({
       docClient: fakeDocClient(send),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
     const result = (await handler(
       buildEvent('PUT', 'ALERT_RULES', memberContext(), {
@@ -149,7 +145,6 @@ describe('department config handler', () => {
     const send = vi.fn().mockResolvedValue({});
     const handler = createHandler({
       docClient: fakeDocClient(send),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
     const result = (await handler(
       buildEvent('PUT', 'CHECKLIST_DEFAULTS', adminContext(), {
@@ -171,7 +166,6 @@ describe('department config handler', () => {
     const send = vi.fn();
     const handler = createHandler({
       docClient: fakeDocClient(send),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
     const result = (await handler(
       buildEvent('PUT', 'ALERT_RULES', adminContext(), {
@@ -198,7 +192,6 @@ describe('department config handler', () => {
     const send = vi.fn();
     const handler = createHandler({
       docClient: fakeDocClient(send),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
     const result = (await handler(
       buildEvent('PUT', 'RETENTION', adminContext(), {
@@ -229,7 +222,6 @@ describe('department config handler', () => {
     );
     const handler = createHandler({
       docClient: fakeDocClient(send),
-      cache: createConfigCache({ ttlMs: 60_000 }),
     });
     const result = (await handler(
       buildEvent(
@@ -248,44 +240,47 @@ describe('department config handler', () => {
     expect(result.headers?.['content-type']).toBe('application/problem+json');
   });
 
-  it('GET still succeeds when the cache store is down by falling back to DynamoDB', async () => {
+  it('GET on one container sees a save made through another (no per-container cache)', async () => {
     const { createHandler } = await import('./handler.js');
-    const send = vi.fn().mockResolvedValue({
-      Item: {
-        pk: `DEPT#${DEPT_ID}`,
-        sk: 'CONFIG#RANKS',
-        entityType: 'DEPARTMENT_CONFIG',
-        configType: 'RANKS',
-        value: { ranks: ['FF'] },
-        version: 1,
-        updatedAt: '2026-09-15T00:00:00.000Z',
-        updatedBy: 'admin-1',
-      },
-    });
-    const handler = createHandler({
-      docClient: fakeDocClient(send),
-      cache: createConfigCache({
-        ttlMs: 60_000,
-        store: {
-          get() {
-            throw new Error('valkey down');
-          },
-          set() {
-            throw new Error('valkey down');
-          },
-          delete() {
-            /* ignore */
-          },
-        },
-      }),
-    });
-    const result = (await handler(
-      buildEvent('GET', 'RANKS', memberContext()),
+    let stored: Record<string, unknown> | undefined;
+    const send = (command: unknown) => {
+      const name = (command as { constructor: { name: string } }).constructor.name;
+      if (name === 'GetCommand') return { Item: stored };
+      stored = (
+        command as { input: { TransactItems: { Put: { Item: Record<string, unknown> } }[] } }
+      ).input.TransactItems[0]!.Put.Item;
+      return {};
+    };
+    const docClient = fakeDocClient(send);
+    const containerA = createHandler({ docClient });
+    const containerB = createHandler({ docClient });
+    const get = async () =>
+      (await containerB(
+        buildEvent('GET', 'RANKS', memberContext()),
+        {} as never,
+        () => undefined,
+      )) as {
+        statusCode: number;
+        body: string;
+      };
+
+    expect((await get()).statusCode).toBe(404);
+    await containerA(
+      buildEvent('PUT', 'RANKS', adminContext(), { value: { ranks: ['FF'] } }),
       {} as never,
       () => undefined,
-    )) as { statusCode: number; body: string };
-    expect(result.statusCode).toBe(200);
-    const body = JSON.parse(result.body) as { value: { ranks: string[] } };
-    expect(body.value).toEqual({ ranks: ['FF'] });
+    );
+    const afterCreate = await get();
+    expect(afterCreate.statusCode).toBe(200);
+    expect(JSON.parse(afterCreate.body)).toMatchObject({ version: 1 });
+    await containerA(
+      buildEvent('PUT', 'RANKS', adminContext(), {
+        value: { ranks: ['FF', 'LT'] },
+        expectedVersion: 1,
+      }),
+      {} as never,
+      () => undefined,
+    );
+    expect(JSON.parse((await get()).body)).toMatchObject({ version: 2 });
   });
 });

@@ -75,6 +75,7 @@ export async function getDepartmentConfig(
         pk: buildDeptScopedPk(input.deptId),
         sk: configSk(input.configType),
       },
+      ConsistentRead: true,
     }),
   );
   return result.Item as DepartmentConfigItem | undefined;

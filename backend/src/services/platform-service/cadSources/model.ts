@@ -60,6 +60,8 @@ export interface StoredCadSource {
   readonly emailToken?: string;
   readonly savedSenders?: readonly string[];
   readonly parser?: CadParserTemplate;
+  /** Highest parser version ever issued, kept while no template is stored so versions never repeat. */
+  readonly parserVersionHighWater?: number;
   /** IANA zone the CAD writes its times in (default America/New_York). */
   readonly timeZone?: string;
 }
@@ -262,10 +264,11 @@ export function mergeSources(
     sources: input.map((source): StoredCadSource => {
       const old = previous.get(source.sourceId);
       const recipientToken = old?.email?.recipientToken ?? old?.emailToken ?? newToken();
+      const highWater = Math.max(old?.parser?.version ?? 0, old?.parserVersionHighWater ?? 0);
       const parserVersion =
         old?.parser && sameFields(old.parser.fields, source.parserFields)
           ? old.parser.version
-          : (old?.parser?.version ?? 0) + 1;
+          : highWater + 1;
       const webhookKey = old?.webhookKey;
       return {
         sourceId: source.sourceId,
@@ -285,7 +288,9 @@ export function mergeSources(
           : {}),
         ...(source.parserFields
           ? { parser: { version: parserVersion, fields: source.parserFields } }
-          : {}),
+          : highWater > 0
+            ? { parserVersionHighWater: highWater }
+            : {}),
         ...(source.timeZone ? { timeZone: source.timeZone } : {}),
       };
     }),
