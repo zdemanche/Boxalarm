@@ -1,4 +1,5 @@
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import { encodeGeohash } from '../map/geohash.js';
 
 export type HydrantStatus = 'IN_SERVICE' | 'OUT_OF_SERVICE';
 
@@ -24,8 +25,6 @@ export function computeHydrantNextFlowTestDue(lastFlowTestDate: string): string 
   return next.toISOString().slice(0, 10);
 }
 
-const GEOHASH_BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
-
 export function buildHydrantDueGsi2Pk(deptId: VerifiedDeptId, yyyyMm: string): string {
   return `DEPT#${deptId}#DUE#HYDRANT#${yyyyMm}`;
 }
@@ -49,48 +48,6 @@ export function buildHydrantGsi2Keys(
     gsi2pk: buildHydrantDueGsi2Pk(deptId, nextFlowTestDue.slice(0, 7)),
     gsi2sk: `${nextFlowTestDue}#${hydrantId}`,
   };
-}
-
-// ponytail: base32-interleave geohash, no dependency for one ~30-line encoder — upgrade to
-// a geohash package if a second caller needs decode/neighbor support
-function encodeGeohash(latitude: number, longitude: number, precision: number): string {
-  let latMin = -90;
-  let latMax = 90;
-  let lonMin = -180;
-  let lonMax = 180;
-  let isEvenBit = true;
-  let bit = 0;
-  let charValue = 0;
-  let geohash = '';
-  while (geohash.length < precision) {
-    if (isEvenBit) {
-      const mid = (lonMin + lonMax) / 2;
-      if (longitude >= mid) {
-        charValue = (charValue << 1) | 1;
-        lonMin = mid;
-      } else {
-        charValue = charValue << 1;
-        lonMax = mid;
-      }
-    } else {
-      const mid = (latMin + latMax) / 2;
-      if (latitude >= mid) {
-        charValue = (charValue << 1) | 1;
-        latMin = mid;
-      } else {
-        charValue = charValue << 1;
-        latMax = mid;
-      }
-    }
-    isEvenBit = !isEvenBit;
-    bit += 1;
-    if (bit === 5) {
-      geohash += GEOHASH_BASE32[charValue];
-      bit = 0;
-      charValue = 0;
-    }
-  }
-  return geohash;
 }
 
 export interface HydrantGsi3Keys {

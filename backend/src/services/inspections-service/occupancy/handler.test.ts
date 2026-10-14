@@ -334,6 +334,22 @@ describe('occupancy handler', () => {
       expect(result.statusCode).toBe(404);
     });
 
+    it('returns 404 when the repository refuses the update because the occupancy is archived', async () => {
+      mockAuthorization({});
+      const { OccupancyNotFoundError } = await import('./repository.js');
+      mockRepository({
+        getOccupancyById: () => Promise.resolve({ ...SAMPLE_RECORD, archivedAt: 1 }),
+        updateOccupancy: () => Promise.reject(new OccupancyNotFoundError('OCC-1')),
+      });
+      const { updateOccupancyHandler } = await import('./handler.js');
+      const result = (await updateOccupancyHandler(
+        buildEvent({ pathId: 'OCC-1', body: JSON.stringify({ hazards: ['FLAMMABLE'] }) }),
+        {} as never,
+        () => undefined,
+      )) as APIGatewayProxyStructuredResultV2;
+      expect(result.statusCode).toBe(404);
+    });
+
     it('returns 200 on a valid contacts/hazards edit', async () => {
       mockAuthorization({});
       const updateOccupancy = vi.fn(() =>
