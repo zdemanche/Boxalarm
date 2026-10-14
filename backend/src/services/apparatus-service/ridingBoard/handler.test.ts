@@ -266,6 +266,32 @@ describe('assignRidingPositionHandler (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 404 });
   });
 
+  it.each([[''], ['M#1'], [12]])(
+    'B2-096: returns 400 for memberId %j and never writes the seat',
+    async (memberId) => {
+      mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+      const assignSeat = vi.fn();
+      await mockRidingBoardRepository({ assignSeat });
+      mockDynamoClient();
+
+      const { assignRidingPositionHandler } = await import('./handler.js');
+      const result = await assignRidingPositionHandler(
+        buildPostEvent(OFFICER, {
+          body: JSON.stringify({
+            unitId: 'ENGINE-2',
+            positionCode: 'DRIVER',
+            memberId,
+            expectedVersion: 0,
+            clientAssignmentId: 'CLIENT-1',
+          }),
+        }),
+      );
+
+      expect(result).toMatchObject({ statusCode: 400 });
+      expect(assignSeat).not.toHaveBeenCalled();
+    },
+  );
+
   it('returns 400 for a positionCode not configured for the apparatus type', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
     await mockApparatusRepository({

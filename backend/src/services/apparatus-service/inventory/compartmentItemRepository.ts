@@ -97,8 +97,8 @@ function buildAuditEntry(
   action: 'CREATE' | 'UPDATE',
   changedFields: Record<string, { old: unknown; new: unknown }>,
 ): Record<string, unknown> {
-  const ts = Math.floor(Date.now() / 1000);
-  const date = new Date(ts * 1000).toISOString().slice(0, 10);
+  const ts = Date.now();
+  const date = new Date(ts).toISOString().slice(0, 10);
   return {
     pk: buildDeptScopedPk(deptId, 'AUDIT', date),
     sk: `${ts}#COMPARTMENT_ITEM#${itemId}#${actorId}`,
@@ -109,6 +109,8 @@ function buildAuditEntry(
     actorId,
     changedFields,
     ts,
+    gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'COMPARTMENT_ITEM', itemId),
+    gsi3sk: `${ts}`,
   };
 }
 

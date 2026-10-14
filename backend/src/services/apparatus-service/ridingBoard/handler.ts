@@ -171,10 +171,13 @@ async function postAssignment(
   if (typeof positionCode !== 'string' || positionCode.length === 0) {
     return badRequestProblem(traceId, 'positionCode is required and must be a non-empty string.');
   }
-  if (memberId !== null && typeof memberId !== 'string') {
+  if (
+    memberId !== null &&
+    (typeof memberId !== 'string' || memberId.length === 0 || memberId.includes('#'))
+  ) {
     return badRequestProblem(
       traceId,
-      'memberId must be a string (the assigned member) or null (vacate).',
+      "memberId must be a non-empty string without '#' (the assigned member) or null (vacate).",
     );
   }
   if (

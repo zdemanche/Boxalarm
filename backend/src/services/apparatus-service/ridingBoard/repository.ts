@@ -192,7 +192,10 @@ export async function getRidingBoard(
     ...new Set(
       seatAssignments
         .map((seat) => seat.memberId)
-        .filter((memberId): memberId is string => memberId !== null),
+        .filter(
+          (memberId): memberId is string =>
+            memberId !== null && memberId.length > 0 && !memberId.includes('#'),
+        ),
     ),
   ];
   const qualsByMember = new Map<string, ReadonlySet<string>>();

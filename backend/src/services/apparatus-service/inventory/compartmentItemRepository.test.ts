@@ -128,7 +128,11 @@ describe('putCompartmentItem', () => {
         itemName: { old: null, new: 'Pike pole' },
         quantity: { old: null, new: 1 },
       },
+      gsi3pk: `DEPT#dept-001#AUDIT#ENTITY#COMPARTMENT_ITEM#${created.itemId}`,
     });
+    const auditTs = auditPut.Put.Item.ts as number;
+    expect(auditTs).toBeGreaterThan(1_000_000_000_000);
+    expect(auditPut.Put.Item.gsi3sk).toBe(`${auditTs}`);
     expect(String(auditPut.Put.Item.sk)).toContain(
       `#COMPARTMENT_ITEM#${created.itemId}#${ACTOR_ID}`,
     );
@@ -291,6 +295,35 @@ describe('updateCompartmentItemQuantity', () => {
     expect(retried.TransactItems[1].Put.Item).toMatchObject({
       changedFields: { quantity: { old: 3, new: 2 } },
     });
+    logSpy.mockRestore();
+  });
+
+  it('B2-100: an audit-row key collision retries with a fresh audit row instead of reporting not found', async () => {
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const collision = new TransactionCanceledException({
+      message: 'Transaction cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+    });
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { quantity: 4 } })
+      .mockRejectedValueOnce(collision)
+      .mockResolvedValueOnce({ Item: { quantity: 4 } })
+      .mockResolvedValueOnce({});
+
+    await expect(
+      updateCompartmentItemQuantity(
+        fakeClient(send),
+        TABLE_NAME,
+        DEPT_ID,
+        'ENGINE-2',
+        'CI-021',
+        5,
+        ACTOR_ID,
+      ),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(4);
     logSpy.mockRestore();
   });
 
