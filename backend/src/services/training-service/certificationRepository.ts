@@ -135,6 +135,7 @@ export async function createCertification(
   const { tableName } = readTrainingDynamoConfig(env);
   const certId = params.certId;
   const yearMonth = params.expiryDate.slice(0, 7);
+  const status = deriveCertificationStatus('CURRENT', params.expiryDate, params.now);
 
   const certificationItem = {
     pk: buildDeptScopedPk(params.deptId, 'MEMBER', params.memberId),
@@ -147,7 +148,7 @@ export async function createCertification(
     expiryDate: params.expiryDate,
     issuingAuthority: params.issuingAuthority,
     attachmentS3Key: params.attachmentS3Key,
-    status: 'CURRENT',
+    status,
     gsi1pk: `MEMBER#${params.memberId}`,
     gsi1sk: `CERTIFICATION#${params.expiryDate}`,
     gsi2pk: buildDeptScopedPk(params.deptId, 'DUE', 'CERTIFICATION', yearMonth),
@@ -190,7 +191,7 @@ export async function createCertification(
     expiryDate: params.expiryDate,
     issuingAuthority: params.issuingAuthority,
     attachmentS3Key: params.attachmentS3Key,
-    status: 'CURRENT',
+    status,
   };
 }
 

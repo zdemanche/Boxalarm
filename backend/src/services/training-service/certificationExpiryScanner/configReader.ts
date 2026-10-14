@@ -64,13 +64,14 @@ export function monthPartitionsForScan(now: Date, leadDays: number): readonly st
   return months;
 }
 
-export function selectWithinLeadTime<T extends { readonly expiryDate: string }>(
-  records: readonly T[],
-  now: Date,
-  leadDays: number,
-): readonly T[] {
+export function selectWithinLeadTime<
+  T extends { readonly expiryDate: string; readonly status: string },
+>(records: readonly T[], now: Date, leadDays: number): readonly T[] {
   const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   return records.filter((record) => {
+    if (record.status !== 'CURRENT') {
+      return false;
+    }
     if (!ISO_DATE.test(record.expiryDate)) {
       return false;
     }

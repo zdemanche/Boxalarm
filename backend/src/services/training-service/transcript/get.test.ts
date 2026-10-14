@@ -133,6 +133,32 @@ describe('transcript/get.ts handler (entrypoint)', () => {
     expect(body.hoursByCategory).toEqual({ LADDER_OPS: 3 });
   });
 
+  it('leaves sign-ups with no recorded hours out of the transcript', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, allowClient());
+    const { createDynamoClient } = await import('../dynamoClient.js');
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({
+        Items: [
+          { eventId: 'e1', category: 'LADDER_OPS', hours: 3, gsi1sk: 'TRAINING_ATTENDANCE#100' },
+          { eventId: 'e2', category: 'HOSE_OPS', gsi1sk: 'TRAINING_ATTENDANCE#200' },
+        ],
+      });
+    createDynamoClient({ send } as unknown as DynamoDBDocumentClient);
+    const { handler } = await import('./get.js');
+
+    const result = await handler(buildEvent());
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      attendance: { eventId: string }[];
+      hoursByCategory: Record<string, number>;
+    };
+    expect(body.attendance.map((a) => a.eventId)).toEqual(['e1']);
+    expect(body.hoursByCategory).toEqual({ LADDER_OPS: 3 });
+  });
+
   it('returns 200 text/csv with transcript content for format=csv (AC2)', async () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, allowClient());

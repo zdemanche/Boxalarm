@@ -170,6 +170,51 @@ describe('signupHandler (POST /training/events/{eventId}/signup)', () => {
     ).toBe('never-signed-up');
   });
 
+  it.each([
+    [
+      'a repeated memberId',
+      [
+        { memberId: 'm1', hours: 2 },
+        { memberId: 'm1', hours: 3 },
+      ],
+    ],
+    [
+      'more than 100 attendees',
+      Array.from({ length: 101 }, (_, i) => ({ memberId: `m${i}`, hours: 1 })),
+    ],
+  ])('returns 400 without writing for %s', async (_label, attendees) => {
+    const putSpy = vi.fn(() => ({}));
+    await seedClients(process.env, seedGetEventClient(EVENT_ITEM, putSpy), allowVp());
+    const { handler } = await import('./signupHandler.js');
+
+    const result = await handler(
+      buildEvent({ principal: OFFICER, body: JSON.stringify({ attendees }) }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(putSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly 100 distinct attendees', async () => {
+    await seedClients(
+      process.env,
+      seedGetEventClient(EVENT_ITEM, () => ({})),
+      allowVp(),
+    );
+    const { handler } = await import('./signupHandler.js');
+
+    const result = await handler(
+      buildEvent({
+        principal: OFFICER,
+        body: JSON.stringify({
+          attendees: Array.from({ length: 100 }, (_, i) => ({ memberId: `m${i}`, hours: 1 })),
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+  });
+
   it('denies attendees recording from a non-training-officer principal (403 row)', async () => {
     const putSpy = vi.fn(() => ({}));
     await seedClients(process.env, seedGetEventClient(EVENT_ITEM, putSpy), denyVp());

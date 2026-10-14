@@ -119,33 +119,51 @@ describe('monthPartitionsForScan', () => {
 interface FakeRecord {
   readonly certId: string;
   readonly expiryDate: string;
+  readonly status: 'CURRENT' | 'EXPIRED' | 'REVOKED';
 }
 
 describe('selectWithinLeadTime', () => {
   const now = new Date('2026-09-14T00:00:00Z');
 
   it('includes a record exactly at the lead-time boundary', () => {
-    const records: FakeRecord[] = [{ certId: 'CERT-1', expiryDate: '2026-10-14' }];
+    const records: FakeRecord[] = [
+      { certId: 'CERT-1', expiryDate: '2026-10-14', status: 'CURRENT' },
+    ];
     expect(selectWithinLeadTime(records, now, 30)).toEqual(records);
   });
 
   it('excludes a record one day beyond the lead-time boundary', () => {
-    const records: FakeRecord[] = [{ certId: 'CERT-1', expiryDate: '2026-10-15' }];
+    const records: FakeRecord[] = [
+      { certId: 'CERT-1', expiryDate: '2026-10-15', status: 'CURRENT' },
+    ];
     expect(selectWithinLeadTime(records, now, 30)).toEqual([]);
   });
 
   it('includes a record due today (0 days out)', () => {
-    const records: FakeRecord[] = [{ certId: 'CERT-1', expiryDate: '2026-09-14' }];
+    const records: FakeRecord[] = [
+      { certId: 'CERT-1', expiryDate: '2026-09-14', status: 'CURRENT' },
+    ];
     expect(selectWithinLeadTime(records, now, 30)).toEqual(records);
   });
 
   it('excludes a record that already expired yesterday', () => {
-    const records: FakeRecord[] = [{ certId: 'CERT-1', expiryDate: '2026-09-13' }];
+    const records: FakeRecord[] = [
+      { certId: 'CERT-1', expiryDate: '2026-09-13', status: 'CURRENT' },
+    ];
     expect(selectWithinLeadTime(records, now, 30)).toEqual([]);
   });
 
   it('excludes a record with a malformed expiryDate rather than crashing', () => {
-    const records: FakeRecord[] = [{ certId: 'CERT-1', expiryDate: 'not-a-date' }];
+    const records: FakeRecord[] = [
+      { certId: 'CERT-1', expiryDate: 'not-a-date', status: 'CURRENT' },
+    ];
+    expect(selectWithinLeadTime(records, now, 30)).toEqual([]);
+  });
+
+  it('excludes a REVOKED record inside the lead window', () => {
+    const records: FakeRecord[] = [
+      { certId: 'CERT-1', expiryDate: '2026-09-30', status: 'REVOKED' },
+    ];
     expect(selectWithinLeadTime(records, now, 30)).toEqual([]);
   });
 });

@@ -112,6 +112,55 @@ describe('create.ts handler (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it.each(['2026-13-05', '2027-00-15', '2026-02-30', '2026-05-45'])(
+    'returns 400 for the impossible calendar date %s and never writes',
+    async (badDate) => {
+      const { createAuthzClient } = await import('@boxalarm/authz');
+      createAuthzClient(process.env, decidingClient('ALLOW'));
+      const { createDynamoClient } = await import('../dynamoClient.js');
+      const send = vi.fn().mockResolvedValue({});
+      createDynamoClient({ send } as unknown as DynamoDBDocumentClient);
+      const { handler } = await import('./create.js');
+
+      const result = await handler(
+        buildEvent(
+          JSON.stringify({
+            certType: 'FF1',
+            issueDate: '2024-01-10',
+            expiryDate: badDate,
+            issuingAuthority: 'CT DESPP',
+          }),
+        ),
+      );
+
+      expect(result).toMatchObject({ statusCode: 400 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        errors: { field: string }[];
+      };
+      expect(body.errors.map((e) => e.field)).toContain('expiryDate');
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns 400 for an impossible issueDate', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, decidingClient('ALLOW'));
+    const { handler } = await import('./create.js');
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          certType: 'FF1',
+          issueDate: '2024-02-30',
+          expiryDate: '2027-01-10',
+          issuingAuthority: 'CT DESPP',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+  });
+
   it('creates the record and returns 201 with a CURRENT status (AC1)', async () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, decidingClient('ALLOW'));
