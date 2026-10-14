@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@pulumi/aws": "7.44.0",
+    "@pulumi/aws": "7.50.0",
     "@pulumi/pulumi": "3.263.0"
   },
   "devDependencies": {
