@@ -83,10 +83,12 @@ export function TrainingHoursPage() {
     );
   }
 
-  const members = hoursQuery.data?.members ?? [];
-  const categories = [...new Set(members.flatMap((m) => m.categories.map((c) => c.category)))].sort(
-    (a, b) => a.localeCompare(b),
-  );
+  const members = (hoursQuery.data?.members ?? []).filter((m) => sumHours(m.categories) > 0);
+  const categories = [
+    ...new Set(
+      members.flatMap((m) => m.categories.filter((c) => c.hours > 0).map((c) => c.category)),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
   const rows: MemberRow[] = members.map((m) => {
     const member = membersQuery.data?.find((x) => x.memberId === m.memberId);
     return {

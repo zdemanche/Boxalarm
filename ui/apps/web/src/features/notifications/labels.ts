@@ -69,6 +69,16 @@ export const REMINDER_PREFERENCES: readonly ReminderPreference[] = [
     legend: 'Supply reorder reminders',
     roles: ['APPARATUS', 'ADMIN'],
   },
+  {
+    category: 'neris-rejected',
+    legend: 'NERIS returned reports',
+    roles: ['OFFICER', 'CHIEF', 'ADMIN'],
+  },
+  {
+    category: 'neris-no-activity',
+    legend: 'NERIS no-activity reminders',
+    roles: ['CHIEF', 'ADMIN'],
+  },
 ];
 
 /** The categories this member can actually receive. */
