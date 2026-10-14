@@ -131,12 +131,13 @@ function buildTombstoneUpdate(payload: PrePlanUpdatedPayload, snapshotUpdatedAt:
     UpdateExpression:
       'SET entityType = :entityType, occupancyId = :occupancyId, archivedAt = :snapshotUpdatedAt, ' +
       'snapshotUpdatedAt = :snapshotUpdatedAt, prePlanUpdatedAt = :snapshotUpdatedAt ' +
-      'REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk',
+      'REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk, addressTown, addressZip, addressState',
     values: {
       ':entityType': 'PRE_PLAN_COPY',
       ':occupancyId': payload.occupancyId,
       ':snapshotUpdatedAt': snapshotUpdatedAt,
     } as Record<string, unknown>,
+    addressUnindexed: false,
   };
 }
 
@@ -190,9 +191,7 @@ function buildCopyUpdate(
     : undefined;
   setOrRemove('addressKey', normalized?.key);
   setOrRemove('addressUnit', normalized?.unit);
-  setOrRemove('addressTown', normalized?.town);
-  setOrRemove('addressZip', normalized?.zip);
-  setOrRemove('addressState', normalized?.state);
+  removeClauses.push('addressTown', 'addressZip', 'addressState');
   setOrRemove('gsi1pk', addressIndex?.gsi1pk);
   setOrRemove('gsi1sk', addressIndex?.gsi1sk);
 
@@ -210,6 +209,7 @@ function buildCopyUpdate(
       `SET ${setClauses.join(', ')}` +
       (removeClauses.length > 0 ? ` REMOVE ${removeClauses.join(', ')}` : ''),
     values,
+    addressUnindexed: payload.address !== undefined && normalized === null,
   };
 }
 
@@ -239,7 +239,7 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
     }
 
     const { eventId, payload } = envelope;
-    const { UpdateExpression, values } = update;
+    const { UpdateExpression, values, addressUnindexed } = update;
 
     try {
       await ddb.send(
@@ -320,6 +320,16 @@ export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
         { occupancyId: payload.occupancyId, missingFields: missingAc1Fields },
       );
       emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyMissingFields');
+    }
+
+    if (addressUnindexed) {
+      logError(
+        'preplan_copy.address_unindexed',
+        new Error('the occupancy address could not be normalized into an index key'),
+        eventId,
+        { occupancyId: payload.occupancyId },
+      );
+      emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyAddressUnindexed');
     }
 
     emitOutcomeMetric(METRIC_NAMESPACE, 'PrePlanCopyUpdated');

@@ -199,6 +199,12 @@ const STATE_NAMES: ReadonlyMap<string, string> = new Map(
   ).map(([name, code]) => [localityKey(name), code]),
 );
 
+/** A configured state ("CT", "Connecticut") as the code addresses are compared with, or null. */
+export function canonicalState(raw: string): string | null {
+  const key = localityKey(raw);
+  return STATE_NAMES.get(key) ?? (STATE_CODES.has(key) ? key : null);
+}
+
 const ZIP = /^(\d{5})(?:-\d{4})?$/;
 const HOUSE_NUMBER = /^\d+[A-Z]?(?:-\d+[A-Z]?)?$/;
 const ROUTE_NUMBER = /^\d+[A-Z]?$/;
@@ -432,7 +438,8 @@ function routeAt(tokens: readonly string[]): { route: string[]; length: number }
 /**
  * Where a street with a suffix ends: the last street-type word before any unit — except a
  * final state code standing right after the street or after a known place ("12 OAK CT CT",
- * "12 OAK CT TRUMBULL CT"), which is the state, not a second "Court".
+ * "12 OAK CT TRUMBULL CT"), which is the state, not a second "Court". A lone final "CT" after
+ * a town-like word ("12 GEORGE WASHINGTON CT") stays the street's own "Court".
  */
 function suffixedStreetEnd(tokens: readonly string[]): number {
   let first = -1;
@@ -463,10 +470,21 @@ function suffixedStreetEnd(tokens: readonly string[]): number {
   return end;
 }
 
+/** "N TRUMBULL CT 06611": the directional trails the street because only the rest is a town. */
+function directionalBeforeTown(tokens: readonly string[], next: number): boolean {
+  const unit = tokens.findIndex((_, i) => i >= next && isUnitStart(tokens, i));
+  const words = tokens.slice(next, unit < 0 ? undefined : unit);
+  if (ZIP.test(words[words.length - 1] ?? '')) words.pop();
+  if (words.length > 1 && STATE_CODES.has(words[words.length - 1] as string)) words.pop();
+  const isPlace = (candidate: readonly string[]) =>
+    candidate.length > 0 && trailingPlace(candidate, knownLocalities()) === candidate.length;
+  return isPlace(words) && !isPlace([tokens[next - 1] as string, ...words]);
+}
+
 /**
- * Trailers after the street: EXT always; a directional only when it ends the line or a unit
- * follows ("MAIN ST N", "MAIN ST N APT 4") — never before a word, which is a town ("MAIN ST
- * NORTH HAVEN").
+ * Trailers after the street: EXT always; a directional when it ends the line, a unit follows
+ * or only the words after it are a town ("MAIN ST N", "MAIN ST N APT 4", "MAIN ST N
+ * TRUMBULL") — never when the directional belongs to the town ("MAIN ST NORTH HAVEN").
  */
 function extendTrailers(tokens: readonly string[], end: number): number {
   let result = end;
@@ -482,7 +500,7 @@ function extendTrailers(tokens: readonly string[], end: number): number {
       isUnitStart(tokens, next) ||
       ZIP.test(tokens[next] as string) ||
       (STATE_CODES.has(tokens[next] as string) && next === tokens.length - 1);
-    if (DIRECTIONALS.has(token) && nextIsTail) {
+    if (DIRECTIONALS.has(token) && (nextIsTail || directionalBeforeTown(tokens, next))) {
       result = i;
       continue;
     }
@@ -560,6 +578,7 @@ export function normalizeAddress(
 
   if (
     street.length < 2 ||
+    street.slice(1).includes('#') ||
     !street.slice(1).some((token) => /[A-Z]/.test(token)) ||
     // "123 Apt 4": with no suffix to anchor it, a designator right after the number means
     // there is no street name to key on.

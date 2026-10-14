@@ -191,6 +191,7 @@ describe("PrePlanCopies — home-locality alarms (round-4 m7)", () => {
   it.each([
     ["home-locality-invalid", "HomeLocalityInvalid"],
     ["home-locality-missing", "HomeLocalityMissing"],
+    ["preplan-address-unindexed", "PrePlanCopyAddressUnindexed"],
   ])("%s alarms on %s through the alerting-page topic", async (key, metricName) => {
     await build();
     const alarm = alarmByName(`boxalarm-dev-alerting-${key}`);

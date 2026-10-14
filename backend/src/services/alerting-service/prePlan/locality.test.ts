@@ -27,6 +27,21 @@ describe('parseHomeLocality', () => {
     expect([...(home?.zips ?? [])]).toEqual(['06611']);
   });
 
+  it('reads a spelled-out state and a "Town, ST" town, keeping names as typed', () => {
+    const home = parseHomeLocality({
+      towns: ['Trumbull, CT'],
+      zips: ['06611'],
+      state: 'Connecticut',
+    });
+    expect(home?.state).toBe('CT');
+    expect([...(home?.towns ?? [])]).toEqual(['TRUMBULL']);
+    expect(home?.names).toEqual(['Trumbull, CT']);
+  });
+
+  it.each(['XX', 'Conn.'])('is undefined for the unrecognised state %s', (state) => {
+    expect(parseHomeLocality({ towns: ['Trumbull'], zips: ['06611'], state })).toBeUndefined();
+  });
+
   it('is undefined for an empty or malformed config', () => {
     expect(parseHomeLocality({ towns: [], zips: [] })).toBeUndefined();
     expect(parseHomeLocality('Trumbull')).toBeUndefined();
@@ -202,6 +217,16 @@ describe('loadHomeLocality', () => {
     it('an unparseable HOME_LOCALITY item', async () => {
       const { home, errors, metrics } = await run(
         { towns: 'Trumbull' },
+        { ALERTING_HOME_LOCALITY: JSON.stringify({ deptId: 'NICHOLS', towns: ['Trumbull'] }) },
+      );
+      expect([...home.towns]).toEqual(['TRUMBULL']);
+      expect(errors).toContain('preplan_copy.home_locality_invalid');
+      expect(metrics).toContain('HomeLocalityInvalid');
+    });
+
+    it('an item with an unrecognised state falls back to the env default', async () => {
+      const { home, errors, metrics } = await run(
+        { towns: ['Monroe'], zips: ['06468'], state: 'Conn.' },
         { ALERTING_HOME_LOCALITY: JSON.stringify({ deptId: 'NICHOLS', towns: ['Trumbull'] }) },
       );
       expect([...home.towns]).toEqual(['TRUMBULL']);
