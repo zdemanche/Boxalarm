@@ -74,8 +74,8 @@ function makeManager(groups: string[]): UserManager {
   } as unknown as UserManager;
 }
 
-function renderIncidents(groups: string[], path = '/incidents') {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderIncidents(groups: string[], path = '/incidents', staleTime = 0) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
   return render(
     <QueryClientProvider client={client}>
       <AuthProvider userManager={makeManager(groups)}>
@@ -1469,4 +1469,187 @@ test('an unparsed CAD dispatch shows a VERIFY marker and its text, not the place
       name: 'Start report for STRUCTURE FIRE at unverified location: "STRUC FIRE 12 ELM ST X OAK"',
     }),
   ).toBeTruthy();
+});
+
+test('starting a report refreshes the dispatch list, so coming back offers Open report', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  let reportExists = false;
+  server.use(
+    http.get('/api/v1/incidents', () => HttpResponse.json({ incidents: [] })),
+    http.get('/api/v1/incidents/dispatches', () =>
+      HttpResponse.json({
+        recentWindowHours: 72,
+        nextCursor: null,
+        dispatches: [
+          {
+            dispatchId: 'd-back',
+            incidentType: 'Structure fire',
+            address: '18 Nichols Ave',
+            dispatchedAt: now - 3600,
+            report: reportExists ? { incidentId: 'd-back', status: 'DRAFT' } : null,
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/incidents', () => {
+      reportExists = true;
+      return HttpResponse.json(detail({ incidentId: 'd-back' }), { status: 201 });
+    }),
+    http.get('/api/v1/incidents/d-back', () => HttpResponse.json(detail({ incidentId: 'd-back' }))),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents', 30_000);
+  await user.click(
+    await screen.findByRole('button', {
+      name: 'Start report for Structure fire at 18 Nichols Ave',
+    }),
+  );
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('link', { name: 'Incidents' }));
+  expect(await screen.findByRole('link', { name: 'Open report (Draft)' })).toBeTruthy();
+});
+
+test('unlocking a rejected report shows Draft and a later save does not bring Rejected back', async () => {
+  let current = detail({
+    status: 'REJECTED',
+    submissionStatus: 'FAILED',
+    ...LOCKED,
+    corePayload: { ...detail().corePayload, action_taken: 'NO_ACTION' },
+  });
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.get('/api/v1/incidents/i-1/submissions', () =>
+      HttpResponse.json({
+        incidentId: 'i-1',
+        status: current.status,
+        submissionStatus: 'FAILED',
+        submissionFailureReason: 'SERVER_ERROR',
+      }),
+    ),
+    http.post('/api/v1/incidents/i-1/unlock', () => {
+      current = { ...current, lockedAt: null, lockedBy: null, status: 'DRAFT' };
+      return HttpResponse.json({
+        incidentId: 'i-1',
+        unlockedAt: 1_700_200_000,
+        unlockedBy: 'u1',
+        reason: 'Wrong unit times',
+      });
+    }),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      current = {
+        ...current,
+        corePayload: { ...current.corePayload, ...body.fields },
+        status: 'VALIDATED',
+      };
+      return HttpResponse.json(current);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['CHIEF'], '/incidents/i-1');
+  await screen.findByText(/edits are closed/);
+  const panel = await reviewPanel();
+  await user.click(panel.getByRole('button', { name: 'Unlock report' }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Unlock this report' }));
+  await user.type(dialog.getByLabelText('Reason for unlocking'), 'Wrong unit times');
+  await user.click(dialog.getByRole('button', { name: 'Unlock' }));
+  await waitFor(() => expect(screen.queryByText(/edits are closed/)).toBeNull());
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  expect((await screen.findByText(/Report status:/)).textContent).toContain('Draft');
+
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'EXTINGUISH' } });
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+  await waitFor(() => expect(current.status).toBe('VALIDATED'));
+  await user.click(await screen.findByRole('button', { name: 'Review and submit' }));
+  await waitFor(() =>
+    expect(screen.getByText(/Report status:/).textContent).toContain('Validated'),
+  );
+});
+
+test('saving one step keeps unsaved edits made on another step', async () => {
+  let current = detail({ corePayload: { ...detail().corePayload, action_taken: 'NO_ACTION' } });
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      current = { ...current, corePayload: { ...current.corePayload, ...body.fields } };
+      return HttpResponse.json(current);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+  fireEvent.change(screen.getByLabelText('Action taken'), { target: { value: 'EXTINGUISH' } });
+  await user.click(screen.getByRole('button', { name: 'Location' }));
+  await user.type(screen.getByLabelText(/Cross streets/), 'Elm and Oak');
+  await user.click(screen.getByRole('button', { name: 'Save and continue' }));
+  await waitFor(() => expect(current.corePayload.cross_streets).toBe('Elm and Oak'));
+  await user.click(screen.getByRole('button', { name: 'Incident type and actions' }));
+  expect(screen.getByLabelText('Action taken')).toHaveProperty('value', 'EXTINGUISH');
+});
+
+test('a gateway-shaped 503 on a narrative save shows an alert', async () => {
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(detail())),
+    http.put('/api/v1/incidents/i-1/narrative', () =>
+      HttpResponse.json({ message: 'Service Unavailable' }, { status: 503 }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  await user.click(screen.getByRole('button', { name: 'Narrative' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Narrative' }), {
+    target: { value: 'Edited narrative.' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Save narrative' }));
+  expect((await screen.findByRole('alert')).textContent).toBe('Unable to save the narrative.');
+});
+
+test('a fix that adds a step keeps the officer on the step they are on', async () => {
+  let current = detail({
+    corePayload: { incident_type: 'MEDICAL||ILLNESS||BREATHING_PROBLEMS', address: '14 Elm St' },
+  });
+  server.use(
+    http.get('/api/v1/incidents/i-1', () => HttpResponse.json(current)),
+    http.post('/api/v1/incidents/i-1/validate', () =>
+      HttpResponse.json({
+        ...cleanReport(),
+        blocking: [
+          {
+            path: 'fields.incident_type',
+            code: 'WRONG_TYPE',
+            message: 'The type does not match the dispatch.',
+            section: 'core',
+            fix: {
+              label: 'Use Chimney fire',
+              path: 'fields.incident_type',
+              value: 'FIRE||STRUCTURE_FIRE||CHIMNEY_FIRE',
+            },
+          },
+        ],
+      }),
+    ),
+    http.put('/api/v1/incidents/i-1', async ({ request }) => {
+      const body = (await request.json()) as { fields: Record<string, string> };
+      current = { ...current, corePayload: { ...current.corePayload, ...body.fields } };
+      return HttpResponse.json(current);
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderIncidents(['OFFICER'], '/incidents/i-1');
+  await screen.findByRole('heading', { level: 1, name: /14 Elm St/ });
+  expect(screen.queryByRole('button', { name: 'Fire protection systems' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'Review and submit' }));
+  const panel = await reviewPanel();
+  await user.click(await panel.findByRole('button', { name: 'Fix: Use Chimney fire' }));
+  expect(await screen.findByRole('button', { name: 'Fire protection systems' })).toBeTruthy();
+  expect(document.getElementById('incident-step-heading')?.textContent).toBe('Review and submit');
 });

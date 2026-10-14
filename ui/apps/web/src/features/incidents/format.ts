@@ -1,10 +1,19 @@
+import { ApiError } from '../../lib/apiClient';
+
 export function epochToDateInput(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
+  const date = new Date(epochSeconds * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 export function dateInputToEpoch(value: string, endOfDay: boolean): number {
-  const ms = Date.parse(`${value}T${endOfDay ? '23:59:59' : '00:00:00'}Z`);
+  const ms = Date.parse(`${value}T${endOfDay ? '23:59:59' : '00:00:00'}`);
   return Math.floor(ms / 1000);
+}
+
+export function problemMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof ApiError)) return fallback;
+  return error.problem.detail || error.problem.title || fallback;
 }
 
 export function formatDate(epochSeconds?: number): string {

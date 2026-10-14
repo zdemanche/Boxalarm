@@ -216,6 +216,7 @@ export function IncidentsListPage() {
   const now = Math.floor(Date.now() / 1000);
   const [fromDate, setFromDate] = useState(epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400));
   const [toDate, setToDate] = useState(epochToDateInput(now));
+  const defaultToDate = useRef(toDate);
   const [selectedStatuses, setSelectedStatuses] = useState<IncidentStatus[]>([]);
   const [dispatchId, setDispatchId] = useState('');
   const errorRef = useRef<HTMLDivElement>(null);
@@ -225,7 +226,10 @@ export function IncidentsListPage() {
     queryFn: () =>
       searchIncidents(auth, {
         fromAlarmAt: dateInputToEpoch(fromDate, false),
-        toAlarmAt: dateInputToEpoch(toDate, true),
+        toAlarmAt:
+          toDate === defaultToDate.current
+            ? Math.max(dateInputToEpoch(toDate, true), Math.floor(Date.now() / 1000))
+            : dateInputToEpoch(toDate, true),
       }),
   });
 
@@ -244,12 +248,13 @@ export function IncidentsListPage() {
       createIncidentFromDispatch(auth, { dispatchId: targetDispatchId }),
     onSuccess: (created) => {
       queryClient.setQueryData(['incident', created.incidentId], created);
+      void queryClient.invalidateQueries({ queryKey: ['incidents'] });
       setDispatchId('');
       navigate(`/incidents/${created.incidentId}`);
     },
     onError: (error) => {
       if (error instanceof ApiError && error.problem.status === 409) {
-        void queryClient.invalidateQueries({ queryKey: ['incidents', 'dispatches'] });
+        void queryClient.invalidateQueries({ queryKey: ['incidents'] });
       }
     },
   });
@@ -345,6 +350,7 @@ export function IncidentsListPage() {
     const nextNow = Math.floor(Date.now() / 1000);
     setFromDate(epochToDateInput(nextNow - DEFAULT_RANGE_DAYS * 86400));
     setToDate(epochToDateInput(nextNow));
+    defaultToDate.current = epochToDateInput(nextNow);
     setSelectedStatuses([]);
   }
 
@@ -395,7 +401,9 @@ export function IncidentsListPage() {
       />
       {createError ? (
         <div ref={errorRef} tabIndex={-1} role="alert" className={styles.createError}>
-          <p className={styles.createErrorTitle}>{createError.title}</p>
+          <p className={styles.createErrorTitle}>
+            {createError.title || 'Unable to start the report.'}
+          </p>
           {createError.detail ? <p>{createError.detail}</p> : null}
         </div>
       ) : null}
