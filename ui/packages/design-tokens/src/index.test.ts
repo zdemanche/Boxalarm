@@ -14,8 +14,10 @@ import {
   statusChipPalette,
   statusPalette,
   surfacePalette,
+  targetSize,
   touchTarget,
   typeScale,
+  fieldTypeScale,
   typography,
 } from './index';
 
@@ -238,6 +240,32 @@ describe('typeScale', () => {
     for (const step of Object.values(typeScale)) {
       expect(step.size).toBeGreaterThanOrEqual(12);
     }
+  });
+});
+
+describe('fieldTypeScale', () => {
+  test('matches docs/design.md §2.4 field scale', () => {
+    expect(fieldTypeScale.address.size).toBe(32);
+    expect(fieldTypeScale.title.size).toBe(24);
+    expect(fieldTypeScale.heading.size).toBe(20);
+    expect(fieldTypeScale.body.size).toBe(17);
+    expect(fieldTypeScale.label.size).toBe(15);
+    expect(fieldTypeScale.caption.size).toBe(13);
+  });
+
+  test('body is at least 16 and no step is below 13 (docs/a11y-spec.md §1.1)', () => {
+    expect(fieldTypeScale.body.size).toBeGreaterThanOrEqual(16);
+    for (const step of Object.values(fieldTypeScale)) {
+      expect(step.size).toBeGreaterThanOrEqual(13);
+    }
+  });
+});
+
+describe('targetSize', () => {
+  test('carries the alert floor and field gap (docs/a11y-spec.md §1.1)', () => {
+    expect(targetSize.alert).toBe(72);
+    expect(targetSize.alert).toBeGreaterThan(targetSize.field);
+    expect(targetSize.fieldGap).toBe(12);
   });
 });
 
