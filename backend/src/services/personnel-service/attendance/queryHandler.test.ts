@@ -284,13 +284,14 @@ describe('onBehalfHandler', () => {
     expect(client.send).not.toHaveBeenCalled();
   });
 
-  it('returns 404 when the memberId path parameter is missing', async () => {
+  // withAuthorization refuses an empty resource id (400) before Verified Permissions is called.
+  it('returns 400 when the memberId path parameter is missing', async () => {
     mockAuthzDecision('ALLOW');
     mockDynamo('OK');
     const { onBehalfHandler } = await import('./queryHandler.js');
 
     const result = await onBehalfHandler(buildEvent({ pathParameters: {} }));
 
-    expect(result).toMatchObject({ statusCode: 404 });
+    expect(result).toMatchObject({ statusCode: 400 });
   });
 });

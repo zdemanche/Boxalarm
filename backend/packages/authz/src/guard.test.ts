@@ -150,34 +150,60 @@ describe('withAuthorization', () => {
 
   it('fires the unconditional alarm-on-invocation metric regardless of allow or deny (AC5)', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const { withAuthorization } = await import('./guard.js');
-
-    const allowWrapped = withAuthorization(vi.fn().mockResolvedValue({ statusCode: 200 }), {
+    const options = {
       actionType: 'Boxalarm::Action',
       actionId: 'ExportDepartmentData',
       resourceType: 'Boxalarm::Export',
       resourceId: () => 'export-1',
       alarmOnInvocation: 'PlatformExportInvoked',
+    };
+
+    const { withAuthorization: withAllow } = await import('./guard.js');
+    const allowInner = vi.fn().mockResolvedValue({ statusCode: 200 });
+    const allowResult = await withAllow(allowInner, {
+      ...options,
       client: fakeClientDeciding('ALLOW'),
-    });
-    await allowWrapped(buildEvent({ authorization: 'Bearer token' }, CHIEF));
+    })(buildEvent({ authorization: 'Bearer token' }, CHIEF));
 
-    const denyWrapped = withAuthorization(vi.fn(), {
-      actionType: 'Boxalarm::Action',
-      actionId: 'ExportDepartmentData',
-      resourceType: 'Boxalarm::Export',
-      resourceId: () => 'export-1',
-      alarmOnInvocation: 'PlatformExportInvoked',
+    vi.resetModules();
+    const { withAuthorization: withDeny } = await import('./guard.js');
+    const denyInner = vi.fn();
+    const denyResult = await withDeny(denyInner, {
+      ...options,
       client: fakeClientDeciding('DENY'),
-    });
-    await denyWrapped(buildEvent({ authorization: 'Bearer token' }, NON_PRIVILEGED[0]));
+    })(buildEvent({ authorization: 'Bearer token' }, NON_PRIVILEGED[0]));
 
+    expect(allowResult).toMatchObject({ statusCode: 200 });
+    expect(denyResult).toMatchObject({ statusCode: 403 });
+    expect(denyInner).not.toHaveBeenCalled();
     const invocationLogs = logSpy.mock.calls.filter((call) =>
       (call[0] as string).includes('PlatformExportInvoked'),
     );
     expect(invocationLogs).toHaveLength(2);
     logSpy.mockRestore();
   });
+
+  it.each(['', '   '])(
+    'returns 400, not a 503 authorization outage, for an empty resource id %j',
+    async (resourceId) => {
+      const { withAuthorization } = await import('./guard.js');
+      const send = vi.fn();
+      const inner = vi.fn();
+      const wrapped = withAuthorization(inner, {
+        actionType: 'Boxalarm::Action',
+        actionId: 'ReadPlatformConfig',
+        resourceType: 'Boxalarm::Config',
+        resourceId: () => resourceId,
+        client: { send } as unknown as VerifiedPermissionsClient,
+      });
+
+      const result = await wrapped(buildEvent({ authorization: 'Bearer token' }, CHIEF));
+
+      expect(result).toMatchObject({ statusCode: 400 });
+      expect(send).not.toHaveBeenCalled();
+      expect(inner).not.toHaveBeenCalled();
+    },
+  );
 
   it('denies all four non-privileged personas and allows chief/admin on an export/disposal-shaped action (AC5)', async () => {
     const { withAuthorization } = await import('./guard.js');
@@ -324,5 +350,6 @@ describe('withBatchAuthorization', () => {
     });
     await emptyWrapped(buildEvent({ authorization: 'Bearer token' }, CHIEF));
     expect(emptySend).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

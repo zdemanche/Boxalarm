@@ -13,6 +13,7 @@ import {
 } from './decide.js';
 import { emitAuthzMetric, emitInvocationMetric } from './metrics.js';
 import {
+  badRequestProblem,
   forbiddenProblem,
   serviceUnavailableProblem,
   unauthorizedProblem,
@@ -129,13 +130,17 @@ export function withAuthorization<TResult extends APIGatewayProxyResultV2>(
     const { token, principal } = resolved;
 
     try {
+      const resourceId = options.resourceId(event);
+      if (resourceId.trim().length === 0) {
+        return badRequestProblem(traceId, 'The request does not identify a resource.');
+      }
       const client = createAuthzClient(process.env, options.client);
       const config = readAuthzConfig(process.env);
       const allowed = await isAuthorized(client, config, token, {
         actionType: options.actionType,
         actionId: options.actionId,
         resourceType: options.resourceType,
-        resourceId: options.resourceId(event),
+        resourceId,
       });
       if (!allowed) {
         logAuthzOutcome('authz.denied', 'CedarDeny', traceId, principal.deptId);
