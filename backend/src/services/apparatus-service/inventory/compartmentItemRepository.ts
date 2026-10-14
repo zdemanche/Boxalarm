@@ -12,6 +12,7 @@ import {
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
 const SK_PREFIX = 'COMPARTMENT_ITEM#';
+const MAX_QUANTITY_UPDATE_ATTEMPTS = 3;
 
 export interface CompartmentItemInput {
   readonly compartmentCode: string;
@@ -195,38 +196,58 @@ export async function updateCompartmentItemQuantity(
   const pk = buildDeptScopedPk(deptId, 'APPARATUS', unitId);
   const sk = `${SK_PREFIX}${itemId}`;
   try {
-    const existing = await client.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
-    const oldQuantity =
-      existing.Item && existing.Item.quantity !== undefined ? Number(existing.Item.quantity) : null;
-    const auditEntry = buildAuditEntry(deptId, itemId, actorId, 'UPDATE', {
-      quantity: { old: oldQuantity, new: quantity },
-    });
-    await client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: tableName,
-              Key: { pk, sk },
-              UpdateExpression: 'SET quantity = :quantity',
-              ConditionExpression: 'attribute_exists(pk) AND attribute_exists(sk)',
-              ExpressionAttributeValues: { ':quantity': quantity },
-            },
-          },
-          {
-            Put: {
-              TableName: tableName,
-              Item: auditEntry,
-              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
-            },
-          },
-        ],
-      }),
-    );
+    for (let attempt = 1; ; attempt += 1) {
+      const existing = await client.send(
+        new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
+      );
+      if (!existing.Item) {
+        logStoreError('inventory.updateQuantity.notFound', { deptId, unitId, itemId }, undefined);
+        throw new CompartmentItemNotFoundError(itemId);
+      }
+      const oldQuantity =
+        existing.Item.quantity !== undefined ? Number(existing.Item.quantity) : null;
+      const auditEntry = buildAuditEntry(deptId, itemId, actorId, 'UPDATE', {
+        quantity: { old: oldQuantity, new: quantity },
+      });
+      try {
+        await client.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Update: {
+                  TableName: tableName,
+                  Key: { pk, sk },
+                  UpdateExpression: 'SET quantity = :quantity',
+                  ConditionExpression:
+                    oldQuantity === null
+                      ? 'attribute_exists(pk) AND attribute_exists(sk) AND attribute_not_exists(quantity)'
+                      : 'attribute_exists(pk) AND attribute_exists(sk) AND quantity = :oldQuantity',
+                  ExpressionAttributeValues:
+                    oldQuantity === null
+                      ? { ':quantity': quantity }
+                      : { ':quantity': quantity, ':oldQuantity': oldQuantity },
+                },
+              },
+              {
+                Put: {
+                  TableName: tableName,
+                  Item: auditEntry,
+                  ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+                },
+              },
+            ],
+          }),
+        );
+        return;
+      } catch (error) {
+        if (!isConditionalCheckFailure(error) || attempt >= MAX_QUANTITY_UPDATE_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
   } catch (error) {
-    if (isConditionalCheckFailure(error)) {
-      logStoreError('inventory.updateQuantity.notFound', { deptId, unitId, itemId }, error);
-      throw new CompartmentItemNotFoundError(itemId);
+    if (error instanceof CompartmentItemNotFoundError) {
+      throw error;
     }
     logStoreError('inventory.updateQuantity.storeError', { deptId, unitId, itemId }, error);
     throw new CompartmentItemStoreUnavailableError(error);

@@ -142,6 +142,7 @@ export interface BoardPosition {
   readonly code: string;
   readonly label: string;
   readonly requiredQual?: string;
+  readonly version: number;
   readonly assignment?: BoardPositionAssignment;
 }
 
@@ -223,6 +224,7 @@ export async function getRidingBoard(
         const base = {
           code: position.code,
           label: position.label,
+          version: seat?.version ?? 0,
           ...(position.requiredQual !== undefined ? { requiredQual: position.requiredQual } : {}),
         };
         if (!seat || seat.memberId === null) {

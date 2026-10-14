@@ -358,4 +358,34 @@ describe('getRidingBoard', () => {
       board.apparatus[0]?.positions.every((position) => position.assignment === undefined),
     ).toBe(true);
   });
+
+  it('B2-005: a vacated seat still exposes its stored version so the next assign can pass the version condition', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem(), configItem()]);
+    const seat = { unitId: 'ENGINE-2', positionCode: 'DRIVER', assignedBy: 'officer-1' };
+    await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...seat,
+      memberId: 'MBR-0012',
+      expectedVersion: 0,
+      clientAssignmentId: 'CLIENT-1',
+    });
+    await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...seat,
+      memberId: null,
+      expectedVersion: 1,
+      clientAssignmentId: 'CLIENT-2',
+    });
+
+    const board = await getRidingBoard(client, TABLE, DEPT_ID, DISPATCH_ID);
+    const driver = board.apparatus[0]?.positions.find((position) => position.code === 'DRIVER');
+    expect(driver?.assignment).toBeUndefined();
+    expect(driver?.version).toBe(2);
+
+    const outcome = await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...seat,
+      memberId: 'MBR-0034',
+      expectedVersion: driver?.version ?? 0,
+      clientAssignmentId: 'CLIENT-3',
+    });
+    expect(outcome).toMatchObject({ kind: 'ASSIGNED', memberId: 'MBR-0034', version: 3 });
+  });
 });
