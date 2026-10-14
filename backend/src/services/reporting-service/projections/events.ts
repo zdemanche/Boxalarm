@@ -27,10 +27,15 @@ const PROJECTION_EVENT_TYPES = new Set([
   'personnel.availability.changed',
   'neris.incident.submitted',
   'neris.submission.failed',
+  'neris.incident.approved',
+  'neris.incident.rejected',
+  'neris.incident.failed',
+  'neris.incident.deleted',
+  'neris.incident.missing',
+  'neris.incident.transmitted',
   'training.expiry.due',
   'cert.expiry.due',
-  'apparatus.out_of_service',
-  'apparatus.defect.reported',
+  'apparatus.serviceStatus.changed',
   'scheduling.coverage_gap.detected',
 ]);
 
@@ -115,7 +120,34 @@ function memberStatusWrite(payload: Readonly<Record<string, unknown>>): Projecti
 }
 
 function apparatusUnitId(payload: Readonly<Record<string, unknown>>): string {
-  return stringField(payload, 'unitId') ?? requireString(payload, 'apparatusId');
+  return (
+    stringField(payload, 'unitId') ??
+    stringField(payload, 'unitLabel') ??
+    requireString(payload, 'apparatusId')
+  );
+}
+
+const NERIS_TERMINAL_FAILURES = new Set(['REJECTED', 'FAILED', 'DELETED']);
+
+function nerisFailedWrite(
+  payload: Readonly<Record<string, unknown>>,
+  failureReason: string,
+): ProjectionWrite {
+  const incidentId = requireString(payload, 'incidentId');
+  return {
+    kind: 'update',
+    sk: `NERIS#${incidentId}`,
+    values: { entityType: 'REPORTING_NERIS', incidentId, status: 'FAILED', failureReason },
+  };
+}
+
+const CERT_ROW_GRACE_SECONDS = 86_400;
+
+function certTtl(expiryDate: string): { ttl?: number } {
+  const expiryMs = Date.parse(`${expiryDate}T00:00:00.000Z`);
+  return Number.isNaN(expiryMs)
+    ? {}
+    : { ttl: Math.floor(expiryMs / 1000) + CERT_ROW_GRACE_SECONDS };
 }
 
 export function projectionWrites(event: DomainEvent, nowMs: number): readonly ProjectionWrite[] {
@@ -195,6 +227,24 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         },
       ];
     }
+    case 'neris.incident.approved':
+      return [{ kind: 'delete', sk: `NERIS#${requireString(payload, 'incidentId')}` }];
+    case 'neris.incident.transmitted': {
+      const nerisStatus = stringField(payload, 'nerisStatus') ?? 'SUBMITTED';
+      if (nerisStatus === 'APPROVED') {
+        return [{ kind: 'delete', sk: `NERIS#${requireString(payload, 'incidentId')}` }];
+      }
+      return NERIS_TERMINAL_FAILURES.has(nerisStatus)
+        ? [nerisFailedWrite(payload, nerisStatus)]
+        : [];
+    }
+    case 'neris.incident.rejected':
+    case 'neris.incident.failed':
+      return [nerisFailedWrite(payload, stringField(payload, 'nerisStatus') ?? 'unknown')];
+    case 'neris.incident.deleted':
+      return [nerisFailedWrite(payload, 'DELETED')];
+    case 'neris.incident.missing':
+      return [nerisFailedWrite(payload, 'MISSING')];
     case 'training.expiry.due':
     case 'cert.expiry.due': {
       const memberId = requireString(payload, 'memberId');
@@ -204,11 +254,18 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         {
           kind: 'update',
           sk: `CERT#${certId}`,
-          values: { entityType: 'REPORTING_CERT', memberId, certId, expiryDate },
+          values: {
+            entityType: 'REPORTING_CERT',
+            memberId,
+            certId,
+            expiryDate,
+            ...(typeof payload.leadDays === 'number' ? { leadDays: payload.leadDays } : {}),
+            ...certTtl(expiryDate),
+          },
         },
       ];
     }
-    case 'apparatus.out_of_service': {
+    case 'apparatus.serviceStatus.changed': {
       const unitId = apparatusUnitId(payload);
       const status = stringField(payload, 'status') ?? 'OUT_OF_SERVICE';
       if (status === 'IN_SERVICE') {
@@ -223,25 +280,6 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
             unitId,
             reason: stringField(payload, 'reason') ?? 'unspecified',
             startedAt: epochMs(payload.startAt, nowMs),
-          },
-        },
-      ];
-    }
-    case 'apparatus.defect.reported': {
-      const outOfService = payload.outOfService === true || payload.severity === 'OUT_OF_SERVICE';
-      if (!outOfService) {
-        return [];
-      }
-      const unitId = apparatusUnitId(payload);
-      return [
-        {
-          kind: 'update',
-          sk: `OOS#${unitId}`,
-          values: {
-            entityType: 'REPORTING_OOS',
-            unitId,
-            reason: stringField(payload, 'reason') ?? stringField(payload, 'summary') ?? 'defect',
-            startedAt: epochMs(payload.reportedAt, nowMs),
           },
         },
       ];

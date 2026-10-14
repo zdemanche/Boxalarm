@@ -36,4 +36,21 @@ describe('assembleDashboard', () => {
       ],
     });
   });
+
+  it('drops expired certifications and those beyond their lead window', () => {
+    const view = assembleDashboard(
+      [
+        { sk: 'CERT#c-1', memberId: 'm-1', certId: 'c-1', expiryDate: '2026-09-01', leadDays: 30 },
+        { sk: 'CERT#c-2', memberId: 'm-1', certId: 'c-2', expiryDate: '2026-10-01', leadDays: 30 },
+        { sk: 'CERT#c-3', memberId: 'm-2', certId: 'c-3', expiryDate: '2027-03-01', leadDays: 30 },
+        { sk: 'CERT#c-4', memberId: 'm-2', certId: 'c-4', expiryDate: '2026-09-25', leadDays: 30 },
+      ],
+      now,
+    );
+    expect(view.expiringCertifications.certifications.map((cert) => cert.certId)).toEqual([
+      'c-2',
+      'c-4',
+    ]);
+    expect(view.expiringCertifications.count).toBe(2);
+  });
 });

@@ -65,10 +65,15 @@ export const PROJECTION_EVENT_TYPES = [
   "personnel.availability.changed",
   "neris.incident.submitted",
   "neris.submission.failed",
+  "neris.incident.approved",
+  "neris.incident.rejected",
+  "neris.incident.failed",
+  "neris.incident.deleted",
+  "neris.incident.missing",
+  "neris.incident.transmitted",
   "training.expiry.due",
   "cert.expiry.due",
-  "apparatus.out_of_service",
-  "apparatus.defect.reported",
+  "apparatus.serviceStatus.changed",
   "scheduling.coverage_gap.detected",
 ] as const;
 

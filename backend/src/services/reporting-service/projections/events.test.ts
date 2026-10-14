@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MalformedEventError, parseDomainEvent, projectionWrites } from './events.js';
+import {
+  isProjectionEvent,
+  MalformedEventError,
+  parseDomainEvent,
+  projectionWrites,
+} from './events.js';
 
 const now = 1_700_000_000_000;
 
@@ -73,13 +78,75 @@ describe('projection event parsing', () => {
     const writes = projectionWrites(
       {
         eventId: 'evt-4',
-        eventType: 'apparatus.out_of_service',
+        eventType: 'apparatus.serviceStatus.changed',
         deptId: 'NICHOLS',
         payload: { unitId: 'E1', status: 'IN_SERVICE' },
       },
       now,
     );
     expect(writes).toEqual([{ kind: 'delete', sk: 'OOS#E1' }]);
+  });
+
+  it('leaves the OOS rollup to serviceStatus.changed, not the defect report', () => {
+    expect(isProjectionEvent('apparatus.defect.reported')).toBe(false);
+  });
+
+  it('collapses a defect flip and its origin DEFECT status event onto one OOS row', () => {
+    const fromStatus = projectionWrites(
+      {
+        eventId: 'evt-s',
+        eventType: 'apparatus.serviceStatus.changed',
+        deptId: 'NICHOLS',
+        payload: { unitId: 'E1', status: 'OUT_OF_SERVICE', origin: 'DEFECT' },
+      },
+      now,
+    );
+    expect(fromStatus).toHaveLength(1);
+    expect(fromStatus[0]).toMatchObject({ sk: 'OOS#E1' });
+  });
+
+  it('clears a NERIS row on approval and marks it FAILED on rejection', () => {
+    const base = { deptId: 'NICHOLS', payload: { incidentId: 'inc-1', nerisStatus: 'REJECTED' } };
+    expect(
+      projectionWrites({ ...base, eventId: 'e1', eventType: 'neris.incident.approved' }, now),
+    ).toEqual([{ kind: 'delete', sk: 'NERIS#inc-1' }]);
+    expect(
+      projectionWrites({ ...base, eventId: 'e2', eventType: 'neris.incident.rejected' }, now)[0],
+    ).toMatchObject({ sk: 'NERIS#inc-1', values: { status: 'FAILED', failureReason: 'REJECTED' } });
+    expect(
+      projectionWrites({ ...base, eventId: 'e3', eventType: 'neris.incident.failed' }, now)[0],
+    ).toMatchObject({ values: { status: 'FAILED' } });
+  });
+
+  it('keeps deleted and missing NERIS records on the failed tile', () => {
+    const base = { deptId: 'NICHOLS', payload: { incidentId: 'inc-1' } };
+    for (const [eventType, failureReason] of [
+      ['neris.incident.deleted', 'DELETED'],
+      ['neris.incident.missing', 'MISSING'],
+    ] as const) {
+      expect(projectionWrites({ ...base, eventId: 'e', eventType }, now)[0]).toMatchObject({
+        sk: 'NERIS#inc-1',
+        values: { status: 'FAILED', failureReason },
+      });
+    }
+  });
+
+  it('settles a NERIS row from the status returned at transmit time', () => {
+    const at = (nerisStatus: string) =>
+      projectionWrites(
+        {
+          eventId: 'e',
+          eventType: 'neris.incident.transmitted',
+          deptId: 'NICHOLS',
+          payload: { incidentId: 'inc-1', nerisStatus },
+        },
+        now,
+      );
+    expect(at('APPROVED')).toEqual([{ kind: 'delete', sk: 'NERIS#inc-1' }]);
+    expect(at('REJECTED')[0]).toMatchObject({
+      values: { status: 'FAILED', failureReason: 'REJECTED' },
+    });
+    expect(at('PENDING_APPROVAL')).toEqual([]);
   });
 
   it('stores a coverage gap and an expiring certification', () => {
@@ -100,11 +167,18 @@ describe('projection event parsing', () => {
           eventId: 'evt-6',
           eventType: 'cert.expiry.due',
           deptId: 'NICHOLS',
-          payload: { memberId: 'm-1', certId: 'c-1', expiryDate: '2026-10-01' },
+          payload: { memberId: 'm-1', certId: 'c-1', expiryDate: '2026-10-01', leadDays: 30 },
         },
         now,
       )[0],
-    ).toMatchObject({ sk: 'CERT#c-1', values: { expiryDate: '2026-10-01' } });
+    ).toMatchObject({
+      sk: 'CERT#c-1',
+      values: {
+        expiryDate: '2026-10-01',
+        leadDays: 30,
+        ttl: Date.parse('2026-10-02T00:00:00.000Z') / 1000,
+      },
+    });
   });
 
   it('marks a member unavailable from a mark-off event', () => {
