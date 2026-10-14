@@ -135,6 +135,20 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
     expect(client.sendMock).not.toHaveBeenCalled();
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event('GLOVES-L', {}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('400 (not 500) when the itemId path parameter contains "#"', async () => {
+    const send = vi.fn();
+    const result = await invoke(event('a#b', {}), fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('400 problem+json when neither stockLevel nor reorderThreshold is present', async () => {
     const result = await invoke(
       event('gloves-m', {}),

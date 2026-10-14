@@ -88,6 +88,20 @@ describe('handler (PUT /api/v1/inventory/equipment/{assetId}/assignment)', () =>
     expect(input.resource).toEqual({ entityType: 'Boxalarm::Asset', entityId: 'AS-1' });
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event('AS-1', {}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('400 (not 500) when the assetId path parameter contains "#"', async () => {
+    const send = vi.fn();
+    const result = await invoke(event('a#b', {}), fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('400 problem+json when assignedToType is not MEMBER|APPARATUS', async () => {
     const result = await invoke(
       event('AS-1', { assignedToType: 'ROBOT', assignedToId: 'X' }),

@@ -35,6 +35,32 @@ export class DependencyUnavailableError extends ProblemError {
   }
 }
 
+export function parseJsonBody(body: string | null | undefined): Record<string, unknown> {
+  if (!body) {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new ValidationError('request body must be valid JSON');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new ValidationError('request body must be a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+export function requirePathId(value: string | undefined, name: string): string {
+  if (!value) {
+    throw new ValidationError(`${name} path parameter is required`);
+  }
+  if (value.includes('#')) {
+    throw new ValidationError(`${name} path parameter must not contain "#"`);
+  }
+  return value;
+}
+
 export interface ProblemResponse {
   readonly statusCode: number;
   readonly headers: Record<string, string>;

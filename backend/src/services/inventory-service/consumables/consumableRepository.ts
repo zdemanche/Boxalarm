@@ -251,16 +251,16 @@ export async function restockConsumable(
 ): Promise<ConsumableStock | undefined> {
   const expressionValues: Record<string, number> = {};
   const setClauses: string[] = [];
-  const changedFields: AuditChangedFields = {};
+  const applied: Record<string, number> = {};
   if (input.stockLevel !== undefined) {
     setClauses.push('stockLevel = :stockLevel');
     expressionValues[':stockLevel'] = input.stockLevel;
-    changedFields.stockLevel = { new: input.stockLevel };
+    applied.stockLevel = input.stockLevel;
   }
   if (input.reorderThreshold !== undefined) {
     setClauses.push('reorderThreshold = :reorderThreshold');
     expressionValues[':reorderThreshold'] = input.reorderThreshold;
-    changedFields.reorderThreshold = { new: input.reorderThreshold };
+    applied.reorderThreshold = input.reorderThreshold;
   }
 
   let attributes: Record<string, unknown> | undefined;
@@ -272,7 +272,7 @@ export async function restockConsumable(
         ConditionExpression: 'attribute_exists(pk)',
         UpdateExpression: `SET ${setClauses.join(', ')}`,
         ExpressionAttributeValues: expressionValues,
-        ReturnValues: 'ALL_NEW',
+        ReturnValues: 'ALL_OLD',
       }),
     );
     attributes = result.Attributes;
@@ -286,6 +286,13 @@ export async function restockConsumable(
     return undefined;
   }
 
+  const previous = attributes;
+  const changedFields: AuditChangedFields = Object.fromEntries(
+    Object.entries(applied).map(([field, value]) => [
+      field,
+      { old: previous[field] ?? null, new: value },
+    ]),
+  );
   await writeAuditLogEntry(docClient, tableName, deptId, actorId, itemId, 'UPDATE', changedFields);
-  return toConsumableStock(attributes as unknown as ConsumableStockItem);
+  return toConsumableStock({ ...previous, ...applied } as unknown as ConsumableStockItem);
 }

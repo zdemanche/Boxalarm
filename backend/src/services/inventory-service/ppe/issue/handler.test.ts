@@ -122,6 +122,10 @@ describe('inventory ppe issue handler', () => {
       JSON.stringify({ itemType: 'TURNOUT_COAT', size: '44R', issueDate: '01/10/2026' }),
     ],
     [
+      'impossible calendar issueDate',
+      JSON.stringify({ itemType: 'TURNOUT_COAT', size: '44R', issueDate: '2025-02-31' }),
+    ],
+    [
       'future issueDate',
       JSON.stringify({ itemType: 'TURNOUT_COAT', size: '44R', issueDate: '2099-01-01' }),
     ],

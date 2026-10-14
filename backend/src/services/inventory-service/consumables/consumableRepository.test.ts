@@ -213,6 +213,28 @@ describe('restockConsumable', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
+  it('records the prior stockLevel as old and returns the new value (audit before/after)', async () => {
+    let auditFields: unknown;
+    const { client } = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        expect(command.input.ReturnValues).toBe('ALL_OLD');
+        return { Attributes: consumableItem('GLOVES-L', { stockLevel: 12, reorderThreshold: 5 }) };
+      }
+      if (command instanceof PutCommand) {
+        auditFields = command.input.Item?.changedFields;
+      }
+      return {};
+    });
+
+    const consumable = await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', {
+      stockLevel: 3,
+    });
+
+    expect(auditFields).toEqual({ stockLevel: { old: 12, new: 3 } });
+    expect(consumable?.stockLevel).toBe(3);
+    expect(consumable?.reorderFlagged).toBe(true);
+  });
+
   it('returns undefined (no audit write) when the item does not exist', async () => {
     const { client, send } = fakeDocClient(() => {
       throw new ConditionalCheckFailedException({ message: 'condition failed', $metadata: {} });

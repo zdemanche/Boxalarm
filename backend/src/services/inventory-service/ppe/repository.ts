@@ -122,24 +122,32 @@ export async function issuePpeAssignment(
 
   const ts = Math.floor(params.now.getTime() / 1000);
   const date = params.now.toISOString().slice(0, 10);
+  const auditEntityId = `${params.memberId}-${ppeItemId}`;
   const auditPut = {
     Put: {
       TableName: tableName,
       Item: {
         pk: buildDeptScopedPk(params.deptId, 'AUDIT', date),
-        sk: `${ts}#PPE_ASSIGNMENT#${ppeItemId}#${params.actorId}`,
+        sk: `${ts}#PPE_ASSIGNMENT#${auditEntityId}#${params.actorId}`,
         entityType: 'AUDIT_LOG_ENTRY',
         mutatedEntityType: 'PPE_ASSIGNMENT',
-        mutatedEntityId: ppeItemId,
+        mutatedEntityId: auditEntityId,
         action: 'CREATE',
         actorId: params.actorId,
         changedFields: {
+          memberId: { old: null, new: params.memberId },
           itemType: { old: null, new: itemType },
           size: { old: null, new: params.size },
           issueDate: { old: null, new: params.issueDate },
         },
         ts,
-        gsi3pk: buildDeptScopedPk(params.deptId, 'AUDIT', 'ENTITY', 'PPE_ASSIGNMENT', ppeItemId),
+        gsi3pk: buildDeptScopedPk(
+          params.deptId,
+          'AUDIT',
+          'ENTITY',
+          'PPE_ASSIGNMENT',
+          auditEntityId,
+        ),
         gsi3sk: `${ts}`,
       },
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',

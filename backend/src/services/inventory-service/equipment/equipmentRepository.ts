@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -62,33 +68,42 @@ function assetKey(deptId: VerifiedDeptId, assetId: string) {
 
 type AuditChangedFields = Record<string, { readonly old?: unknown; readonly new: unknown }>;
 
-async function writeAuditLogEntry(
-  docClient: DynamoDBDocumentClient,
-  tableName: string,
+function buildAuditItem(
   deptId: VerifiedDeptId,
   actorId: string,
   action: 'CREATE' | 'UPDATE',
   assetId: string,
   changedFields: AuditChangedFields,
-): Promise<void> {
+) {
   const ts = Date.now();
   const date = new Date(ts).toISOString().slice(0, 10);
+  return {
+    pk: buildDeptScopedPk(deptId, 'AUDIT', date),
+    sk: `${ts}#EQUIPMENT_ASSET#${assetId}#${actorId}`,
+    entityType: 'AUDIT_LOG_ENTRY',
+    mutatedEntityType: 'EQUIPMENT_ASSET',
+    mutatedEntityId: assetId,
+    action,
+    actorId,
+    changedFields,
+    ts,
+    gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'EQUIPMENT_ASSET', assetId),
+    gsi3sk: String(ts),
+  };
+}
+
+async function writeAuditLogEntry(
+  docClient: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  actorId: string,
+  assetId: string,
+  changedFields: AuditChangedFields,
+): Promise<void> {
   await docClient.send(
     new PutCommand({
       TableName: tableName,
-      Item: {
-        pk: buildDeptScopedPk(deptId, 'AUDIT', date),
-        sk: `${ts}#EQUIPMENT_ASSET#${assetId}#${actorId}`,
-        entityType: 'AUDIT_LOG_ENTRY',
-        mutatedEntityType: 'EQUIPMENT_ASSET',
-        mutatedEntityId: assetId,
-        action,
-        actorId,
-        changedFields,
-        ts,
-        gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'EQUIPMENT_ASSET', assetId),
-        gsi3sk: String(ts),
-      },
+      Item: buildAuditItem(deptId, actorId, 'UPDATE', assetId, changedFields),
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
     }),
   );
@@ -118,11 +133,29 @@ export async function createEquipmentAsset(
     gsi3pk: buildDeptScopedPk(deptId, 'EQUIPMENT_ASSET'),
     gsi3sk: assetId,
   };
-  await docClient.send(new PutCommand({ TableName: tableName, Item: item }));
-  await writeAuditLogEntry(docClient, tableName, deptId, actorId, 'CREATE', assetId, {
-    serialNumber: { new: input.serialNumber },
-    location: { new: input.location },
-  });
+  await docClient.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: tableName,
+            Item: item,
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        },
+        {
+          Put: {
+            TableName: tableName,
+            Item: buildAuditItem(deptId, actorId, 'CREATE', assetId, {
+              serialNumber: { old: null, new: input.serialNumber },
+              location: { old: null, new: input.location },
+            }),
+            ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+          },
+        },
+      ],
+    }),
+  );
   return toEquipmentAsset(item);
 }
 
@@ -219,9 +252,12 @@ async function conditionalUpdate(
   assetId: string,
   updateExpression: string,
   expressionValues: Record<string, string>,
+  applied: Partial<EquipmentAssetItem>,
   expressionNames?: Record<string, string>,
   rejectRetired = false,
-): Promise<EquipmentAsset | undefined> {
+): Promise<
+  { readonly previous: EquipmentAssetItem; readonly current: EquipmentAssetItem } | undefined
+> {
   try {
     const result = await docClient.send(
       new UpdateCommand({
@@ -236,12 +272,14 @@ async function conditionalUpdate(
           ? { ...expressionValues, ':retired': 'RETIRED' }
           : expressionValues,
         ...(expressionNames ? { ExpressionAttributeNames: expressionNames } : {}),
-        ReturnValues: 'ALL_NEW',
+        ReturnValues: 'ALL_OLD',
       }),
     );
-    return result.Attributes
-      ? toEquipmentAsset(result.Attributes as EquipmentAssetItem)
-      : undefined;
+    if (!result.Attributes) {
+      return undefined;
+    }
+    const previous = result.Attributes as EquipmentAssetItem;
+    return { previous, current: { ...previous, ...applied } };
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
       if (rejectRetired && error.Item?.lifecycleStatus?.S === 'RETIRED') {
@@ -274,23 +312,25 @@ export async function setAssignment(
   } else {
     updateExpression += ' REMOVE gsi1pk, gsi1sk';
   }
-  const asset = await conditionalUpdate(
+  const updated = await conditionalUpdate(
     docClient,
     tableName,
     deptId,
     assetId,
     updateExpression,
     expressionValues,
+    { assignedToType, assignedToId },
     undefined,
     true,
   );
-  if (asset) {
-    await writeAuditLogEntry(docClient, tableName, deptId, actorId, 'UPDATE', assetId, {
-      assignedToType: { new: assignedToType },
-      assignedToId: { new: assignedToId },
-    });
+  if (!updated) {
+    return undefined;
   }
-  return asset;
+  await writeAuditLogEntry(docClient, tableName, deptId, actorId, assetId, {
+    assignedToType: { old: updated.previous.assignedToType ?? null, new: assignedToType },
+    assignedToId: { old: updated.previous.assignedToId ?? null, new: assignedToId },
+  });
+  return toEquipmentAsset(updated.current);
 }
 
 export async function setLocation(
@@ -301,19 +341,21 @@ export async function setLocation(
   assetId: string,
   location: string,
 ): Promise<EquipmentAsset | undefined> {
-  const asset = await conditionalUpdate(
+  const updated = await conditionalUpdate(
     docClient,
     tableName,
     deptId,
     assetId,
     'SET #location = :location',
     { ':location': location },
+    { location },
     { '#location': 'location' },
   );
-  if (asset) {
-    await writeAuditLogEntry(docClient, tableName, deptId, actorId, 'UPDATE', assetId, {
-      location: { new: location },
-    });
+  if (!updated) {
+    return undefined;
   }
-  return asset;
+  await writeAuditLogEntry(docClient, tableName, deptId, actorId, assetId, {
+    location: { old: updated.previous.location, new: location },
+  });
+  return toEquipmentAsset(updated.current);
 }

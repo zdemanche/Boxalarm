@@ -120,7 +120,14 @@ describe('issuePpeAssignment (AC1)', () => {
     expect(items[1]?.Put?.Item).toMatchObject({
       mutatedEntityType: 'PPE_ASSIGNMENT',
       action: 'CREATE',
-      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#PPE_ASSIGNMENT#TURNOUT-COAT-2026-01-10',
+      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#PPE_ASSIGNMENT#MBR-1-TURNOUT-COAT-2026-01-10',
+      mutatedEntityId: 'MBR-1-TURNOUT-COAT-2026-01-10',
+      changedFields: {
+        memberId: { old: null, new: 'MBR-1' },
+        itemType: { old: null, new: 'TURNOUT_COAT' },
+        size: { old: null, new: '44R' },
+        issueDate: { old: null, new: '2026-01-10' },
+      },
       gsi3sk: '1768003200',
     });
   });
@@ -149,6 +156,19 @@ describe('issuePpeAssignment (AC1)', () => {
       (call) => (call[0] as TransactWriteCommand).input.TransactItems?.[0]?.Put?.Item?.sk as string,
     );
     expect(sks).toEqual(['PPE#TURNOUT-COAT-2026-01-10', 'PPE#TURNOUT-COAT-2026-10-01']);
+  });
+
+  it('gives two members issued the same item type in the same second distinct audit sort keys', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    await issuePpeAssignment(client, config, params);
+    await issuePpeAssignment(client, config, { ...params, memberId: 'MBR-2' });
+
+    const auditSks = send.mock.calls.map(
+      (call) => (call[0] as TransactWriteCommand).input.TransactItems?.[1]?.Put?.Item?.sk as string,
+    );
+    expect(new Set(auditSks).size).toBe(2);
   });
 
   it('throws PpeAssignmentConflictError, not a raw exception, on a re-issue conflict (409 path)', async () => {

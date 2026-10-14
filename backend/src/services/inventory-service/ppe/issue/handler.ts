@@ -21,6 +21,14 @@ import {
 const METRIC_NAMESPACE = 'Boxalarm/Ppe';
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+function isCalendarDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
 interface IssuePpeRequestBody {
   readonly itemType: string;
   readonly size: string;
@@ -50,7 +58,7 @@ function parseIssueRequest(
   if (typeof size !== 'string' || !size.trim()) {
     return 'size is required and must be a non-empty string';
   }
-  if (typeof issueDate !== 'string' || !ISO_DATE.test(issueDate)) {
+  if (typeof issueDate !== 'string' || !isCalendarDate(issueDate)) {
     return 'issueDate is required and must be an ISO date (YYYY-MM-DD)';
   }
   if (issueDate > now.toISOString().slice(0, 10)) {
