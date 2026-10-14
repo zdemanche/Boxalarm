@@ -7,7 +7,6 @@ import type {
   CadTestParseResult,
   RotatedWebhookKey,
   ConfigResponse,
-  DisposalResult,
   EditableConfigType,
   ExportStatus,
   MemberDevices,
@@ -78,15 +77,6 @@ export async function putRetentionConfig(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ retentionYears }),
   });
-}
-
-export async function runDisposal(tokens: AuthTokenSource): Promise<DisposalResult> {
-  const response = await apiRequest('platform/retention/disposal', tokens, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  return (await response.json()) as DisposalResult;
 }
 
 /**

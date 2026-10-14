@@ -72,13 +72,6 @@ export interface MemberDevices {
   devices: MemberDevice[];
 }
 
-export interface DisposalResult {
-  retentionYearsUsed: number;
-  hardDeleted: number;
-  cryptoShredded: number;
-  refused: string[];
-}
-
 export const LIFE_SAFETY_RECORD_CLASSES = [
   'DELIVERY_RECEIPT',
   'DISPATCH_ALERT',

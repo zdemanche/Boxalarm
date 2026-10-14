@@ -187,7 +187,7 @@ describe('department config handler', () => {
     });
   });
 
-  it('PUT returns 400 with field-level errors for a malformed RETENTION value', async () => {
+  it('PUT refuses a valid RETENTION value without writing, so retention is never changed without an audit row', async () => {
     const { createHandler } = await import('./handler.js');
     const send = vi.fn();
     const handler = createHandler({
@@ -195,7 +195,7 @@ describe('department config handler', () => {
     });
     const result = (await handler(
       buildEvent('PUT', 'RETENTION', adminContext(), {
-        value: { retentionYears: -1 },
+        value: { retentionYears: 1 },
       }),
       {} as never,
       () => undefined,
@@ -206,8 +206,8 @@ describe('department config handler', () => {
       errors?: readonly { field: string; message: string }[];
     };
     expect(body.errors).toContainEqual({
-      field: 'retentionYears',
-      message: 'is required and must be a positive integer',
+      field: 'value',
+      message: 'is edited through PUT /api/v1/platform/retention, not this route',
     });
   });
 

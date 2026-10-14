@@ -7,7 +7,7 @@ import {
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { LIFE_SAFETY_ENTITY_TYPES, SECONDS_PER_YEAR, runDisposal } from './disposal.js';
+import { LIFE_SAFETY_ENTITY_TYPES, retentionCutoffEpochSeconds, runDisposal } from './disposal.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
@@ -66,7 +66,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('crypto-shreds archived incident / delivery-receipt classes via ScheduleKeyDeletion', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 8);
     const kms = fakeKmsClient();
     const incPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-1');
     const rcptPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'RCPT-1');
@@ -115,7 +115,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('ignores caller-supplied kmsKeyId and uses the stored key only', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 8);
     const kms = fakeKmsClient();
     const incPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-2');
     const { client } = createMemoryDocClient({
@@ -145,7 +145,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('refuses life-safety evidence classes and never DeleteItem / shreds them', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const kms = fakeKmsClient();
     const lifeSafety = [...LIFE_SAFETY_ENTITY_TYPES].map((entityType, index) => ({
       pk: buildDeptScopedPk(DEPT_ID, 'EVIDENCE', entityType),
@@ -199,7 +199,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('refuses (not throws) a candidate missing kmsKeyId, and keeps processing the batch', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 8);
     const kms = fakeKmsClient();
     const noKeyPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-NOKEY');
     const okPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-OK');
@@ -243,10 +243,10 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('refuses (not throws) a candidate when no kmsClient was provided, and keeps processing the batch', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 8);
     const shredPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-NOCLIENT');
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-STILL-RUNS');
-    const oosAge = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const oosAge = retentionCutoffEpochSeconds(nowEpoch, 8);
     const { client, store } = createMemoryDocClient({
       [keyOf(shredPk, 'METADATA')]: {
         pk: shredPk,
@@ -287,7 +287,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('classifies INCIDENT as life-safety evidence and never disposes it (E8-S9 review, PR #149 follow-up)', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const incidentPk = buildDeptScopedPk(DEPT_ID, 'NERIS', 'INC-1');
     const incidentSk = 'METADATA';
     const { client, store } = createMemoryDocClient({
@@ -318,7 +318,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
 
   it('records scheduled KMS key ids on the AUDIT_LOG_ENTRY, not just aggregate counts', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 8 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 8);
     const kms = fakeKmsClient();
     const incPk = buildDeptScopedPk(DEPT_ID, 'ARCHIVE', 'INC-AUDIT');
     const { client, puts } = createMemoryDocClient({
@@ -341,7 +341,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
       candidates: [{ pk: incPk, sk: 'METADATA' }],
     });
 
-    const audit = puts.find((item) => item.entityType === 'AUDIT_LOG_ENTRY') as
+    const audit = puts.find((item) => item.mutatedEntityType === 'RETENTION_DISPOSAL') as
       { changedFields: { scheduledKmsKeyIds: { new: readonly string[] } } } | undefined;
     expect(audit?.changedFields.scheduledKmsKeyIds.new).toEqual([
       'arn:aws:kms:us-east-1:123:key/audited-key',
@@ -363,7 +363,7 @@ describe('runDisposal crypto-shred and life-safety (AC3, AC4)', () => {
       candidates: [],
     });
 
-    const audit = puts.find((item) => item.entityType === 'AUDIT_LOG_ENTRY');
+    const audit = puts.find((item) => item.mutatedEntityType === 'RETENTION_DISPOSAL');
     expect(audit).toMatchObject({
       entityType: 'AUDIT_LOG_ENTRY',
       mutatedEntityType: 'RETENTION_DISPOSAL',

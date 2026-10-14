@@ -207,7 +207,7 @@ describe('create.ts handler (entrypoint)', () => {
     const { handler } = await import('./create.js');
 
     const result = await handler(
-      buildEvent(VALID_BODY, 'MBR-0034', '00-tracefail1000000000000000000-01234567890abcde-01'),
+      buildEvent(VALID_BODY, 'MBR-0034', '00-4bf92f3577b34da6a3ce929d0e0e4731-01234567890abcde-01'),
     );
 
     expect(result).toMatchObject({ statusCode: 500 });
@@ -216,7 +216,7 @@ describe('create.ts handler (entrypoint)', () => {
       traceId: string;
     };
     expect(body.status).toBe(500);
-    expect(body.traceId).toBe('tracefail1000000000000000000');
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4731');
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });

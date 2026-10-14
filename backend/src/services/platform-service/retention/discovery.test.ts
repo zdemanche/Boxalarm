@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GetCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { SECONDS_PER_YEAR } from './disposal.js';
+import { retentionCutoffEpochSeconds } from './disposal.js';
 import { discoverDisposalCandidates } from './discovery.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -44,7 +44,7 @@ describe('discoverDisposalCandidates', () => {
   it('finds an OUT_OF_SERVICE_RECORD past the configured retention window', async () => {
     const nowEpoch = 1_800_000_000;
     const retentionYears = 5;
-    const tooOldEndAt = nowEpoch - retentionYears * SECONDS_PER_YEAR - 1;
+    const tooOldEndAt = retentionCutoffEpochSeconds(nowEpoch, retentionYears) - 1;
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-1');
     const oosSk = `OOS#${tooOldEndAt - 86_400}`;
 
@@ -104,7 +104,7 @@ describe('discoverDisposalCandidates', () => {
 
   it('never surfaces a life-safety entity type, even past any age', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const receiptPk = buildDeptScopedPk(DEPT_ID, 'ALERT', 'RCPT-1');
     const receiptSk = 'RECEIPT#1';
 
@@ -131,7 +131,7 @@ describe('discoverDisposalCandidates', () => {
 
   it('finds an open OOS record with no endAt as never a candidate (age is undefined)', async () => {
     const nowEpoch = 1_800_000_000;
-    const veryOldStartAt = nowEpoch - 50 * SECONDS_PER_YEAR;
+    const veryOldStartAt = retentionCutoffEpochSeconds(nowEpoch, 50);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-3');
     const oosSk = `OOS#${veryOldStartAt}`;
 
@@ -157,7 +157,7 @@ describe('discoverDisposalCandidates', () => {
   it("applies each department's own retentionYears, looked up once per department", async () => {
     const nowEpoch = 1_800_000_000;
     // 6 years old: past a 5-year config (NICHOLS) but inside the 7-year default (TRUMBULL).
-    const age = nowEpoch - 6 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 6);
     const nicholsPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-4');
     const nicholsSk = `OOS#${age}`;
     const trumbullPk = buildDeptScopedPk(OTHER_DEPT, 'APPARATUS', 'APP-5');
@@ -207,7 +207,7 @@ describe('discoverDisposalCandidates', () => {
 
   it('pages through ScanCommand via ExclusiveStartKey/LastEvaluatedKey', async () => {
     const nowEpoch = 1_800_000_000;
-    const tooOldEndAt = nowEpoch - 10 * SECONDS_PER_YEAR;
+    const tooOldEndAt = retentionCutoffEpochSeconds(nowEpoch, 10);
     const pkA = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-A');
     const skA = `OOS#${tooOldEndAt - 1}`;
     const pkB = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-B');

@@ -3,9 +3,9 @@ import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { logger } from './dynamoClient.js';
 
-export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE';
+export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE' | 'ARCHIVE';
 
-const VALID_ACTIONS: readonly AuditAction[] = ['CREATE', 'UPDATE', 'DELETE'];
+const VALID_ACTIONS: readonly AuditAction[] = ['CREATE', 'UPDATE', 'DELETE', 'ARCHIVE'];
 
 export interface ChangedFieldDiff {
   readonly old: unknown;
@@ -64,7 +64,7 @@ export function diffChangedFields(
     const oldValue = before?.[key];
     const newValue = after?.[key];
     if (!deepEqual(oldValue, newValue)) {
-      changed[key] = { old: oldValue, new: newValue };
+      changed[key] = { old: oldValue ?? null, new: newValue ?? null };
     }
   }
   return changed;

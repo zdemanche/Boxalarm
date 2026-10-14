@@ -31,6 +31,9 @@ export class Export extends pulumi.ComponentResource {
   public readonly workerRole: aws.iam.Role;
   public readonly workerRolePolicy: aws.iam.RolePolicy;
   public readonly workerLambda: aws.lambda.Function;
+  public readonly workerFailureQueue: aws.sqs.Queue;
+  public readonly workerInvokeConfig: aws.lambda.FunctionEventInvokeConfig;
+  public readonly workerFailureDepthAlarm: aws.cloudwatch.MetricAlarm;
   public readonly handlerLambda: ServiceLambda;
   public readonly invokedAlarm: aws.cloudwatch.MetricAlarm;
   public readonly workerFailedAlarm: aws.cloudwatch.MetricAlarm;
@@ -96,6 +99,15 @@ export class Export extends pulumi.ComponentResource {
       { parent: this },
     );
 
+    this.workerFailureQueue = new aws.sqs.Queue(
+      `${name}-worker-failures`,
+      {
+        name: `boxalarm-${env}-platform-export-worker-failures`,
+        messageRetentionSeconds: 14 * 86_400,
+      },
+      { parent: this },
+    );
+
     this.workerRole = new aws.iam.Role(
       `${name}-worker-role`,
       {
@@ -127,6 +139,7 @@ export class Export extends pulumi.ComponentResource {
             args.incidentCmkArn,
             this.stagingBucket.arn,
             args.logGroup.logGroup.arn,
+            this.workerFailureQueue.arn,
           ])
           .apply(
             ([
@@ -137,6 +150,7 @@ export class Export extends pulumi.ComponentResource {
               incidentCmk,
               bucketArn,
               logGroupArn,
+              failureQueueArn,
             ]) =>
               JSON.stringify({
                 Version: "2012-10-17",
@@ -167,6 +181,12 @@ export class Export extends pulumi.ComponentResource {
                     Resource: [alertingCmk, incidentCmk],
                   },
                   {
+                    Sid: "ExportWorkerOnFailure",
+                    Effect: "Allow",
+                    Action: ["sqs:SendMessage"],
+                    Resource: failureQueueArn,
+                  },
+                  {
                     Sid: "WriteExportsBucket",
                     Effect: "Allow",
                     Action: [
@@ -193,7 +213,7 @@ export class Export extends pulumi.ComponentResource {
         code: lambdaCode("platform-service", "export-worker"),
         timeout: 900,
         tracingConfig: ACTIVE_TRACING_CONFIG,
-        loggingConfig: { logFormat: "JSON", logGroup: args.logGroup.logGroupName },
+        loggingConfig: { logFormat: "Text", logGroup: args.logGroup.logGroupName },
         environment: {
           variables: {
             SERVICE_NAME: "platform-service",
@@ -210,6 +230,20 @@ export class Export extends pulumi.ComponentResource {
         },
       },
       { parent: this, dependsOn: [args.logGroup.logGroup] },
+    );
+
+    // No automatic retry: handler.ts reports a job FAILED once it is 16 minutes old, and a
+    // retry or a start delayed in Lambda's async queue would finish after that. A dropped or
+    // crashed run goes to the failure queue, which alarms the chief.
+    this.workerInvokeConfig = new aws.lambda.FunctionEventInvokeConfig(
+      `${name}-worker-invoke-config`,
+      {
+        functionName: this.workerLambda.name,
+        maximumRetryAttempts: 0,
+        maximumEventAgeInSeconds: 60,
+        destinationConfig: { onFailure: { destination: this.workerFailureQueue.arn } },
+      },
+      { parent: this },
     );
 
     this.handlerLambda = new ServiceLambda(
@@ -315,6 +349,26 @@ export class Export extends pulumi.ComponentResource {
         namespace,
         metricName: "ExportFailed",
         statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: chiefAlarmAction,
+      },
+      { parent: this },
+    );
+
+    this.workerFailureDepthAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-worker-failure-depth-alarm`,
+      {
+        name: pulumi.interpolate`${this.workerFailureQueue.name}-depth`,
+        alarmDescription:
+          "A department data export run crashed, timed out or was dropped before it started (see the failure queue and GET /platform/export/{jobId}).",
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.workerFailureQueue.name },
+        statistic: "Maximum",
         period: 300,
         evaluationPeriods: 1,
         threshold: 0,

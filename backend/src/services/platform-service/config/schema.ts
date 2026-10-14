@@ -5,8 +5,9 @@ import type { DepartmentConfigType } from './repository.js';
  *
  * Shapes are inferred from how each configType is actually consumed elsewhere
  * in the codebase (see review notes on PR #145 / E8-S4):
- *  - RETENTION mirrors `RetentionConfigValue` in
- *    `platform-service/retention/configRepository.ts` (`{ retentionYears }`).
+ *  - RETENTION is written only by `platform-service/retention/configRepository.ts`, which
+ *    appends the audit row for every change to what disposal may destroy, so this route
+ *    refuses it.
  *  - LOSAP_POINT_RULES is written only by `personnel-service/losap/configRepository.ts`, which
  *    mints the `ruleVersionId` attendance records carry, so this route refuses it.
  *  - ALERT_RULES mirrors the fields actually read back out of this configType,
@@ -335,21 +336,6 @@ function validateRidingPositions(value: Record<string, unknown>): FieldError[] {
   return errors;
 }
 
-function validateRetention(value: Record<string, unknown>): FieldError[] {
-  const errors: FieldError[] = [...unknownFieldErrors(value, ['retentionYears'])];
-  if (
-    typeof value.retentionYears !== 'number' ||
-    !Number.isInteger(value.retentionYears) ||
-    value.retentionYears < 1
-  ) {
-    errors.push({
-      field: 'retentionYears',
-      message: 'is required and must be a positive integer',
-    });
-  }
-  return errors;
-}
-
 const NERIS_KNOWN_FIELDS = [
   'departmentNerisId',
   'autoSubmitOnLock',
@@ -445,7 +431,12 @@ export function validateConfigValue(
     case 'CHECKLIST_DEFAULTS':
       return validateChecklistDefaults(value);
     case 'RETENTION':
-      return validateRetention(value);
+      return [
+        {
+          field: 'value',
+          message: 'is edited through PUT /api/v1/platform/retention, not this route',
+        },
+      ];
     case 'RIDING_POSITIONS':
       return validateRidingPositions(value);
     case 'NERIS':

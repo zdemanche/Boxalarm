@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GetCommand, ScanCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { SECONDS_PER_YEAR } from './disposal.js';
+import { retentionCutoffEpochSeconds } from './disposal.js';
 import { createHandler } from './discoveryHandler.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -65,7 +65,7 @@ describe('retention discovery scheduled handler (#260)', () => {
 
   it('emits the candidate count and logs a capped locator sample when candidates are found', async () => {
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
-    const tooOldEndAt = 1_800_000_000 - 10 * SECONDS_PER_YEAR;
+    const tooOldEndAt = retentionCutoffEpochSeconds(1_800_000_000, 10);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-1');
     const oosSk = `OOS#${tooOldEndAt - 1}`;
 
@@ -98,7 +98,7 @@ describe('retention discovery scheduled handler (#260)', () => {
   });
 
   it('never calls DeleteCommand/UpdateCommand/PutCommand — discovery is read-only', async () => {
-    const tooOldEndAt = 1_800_000_000 - 10 * SECONDS_PER_YEAR;
+    const tooOldEndAt = retentionCutoffEpochSeconds(1_800_000_000, 10);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-2');
     const oosSk = `OOS#${tooOldEndAt - 1}`;
     const { docClient, send } = fakeDocClient([

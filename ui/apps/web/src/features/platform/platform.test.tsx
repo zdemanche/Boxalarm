@@ -310,36 +310,13 @@ test('a 403 saving a config shows a generic message, not the raw server detail',
   expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
 });
 
-test('a 403 running disposal shows a generic message, not the raw server detail', async () => {
-  server.use(
-    ...settingsDefaultHandlers(),
-    http.post('/api/v1/platform/retention/disposal', () =>
-      HttpResponse.json(
-        {
-          type: 'about:blank',
-          title: 'Forbidden',
-          status: 403,
-          detail: SECRET_CEDAR_DETAIL,
-          traceId: 't4',
-        },
-        { status: 403 },
-      ),
-    ),
-  );
+test('does not offer a disposal button, and says disposal candidates are not listed yet', async () => {
+  server.use(...settingsDefaultHandlers());
 
-  const user = userEvent.setup();
   renderRoute(['ADMIN'], '/settings');
-  await user.click(await screen.findByRole('button', { name: 'Run disposal' }));
-  const disposalDialog = await screen.findByRole('dialog', {
-    name: 'Permanently dispose of records older than 7 years?',
-  });
-  await user.click(within(disposalDialog).getByRole('button', { name: 'Run disposal' }));
 
-  await waitFor(() => {
-    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
-  });
-  expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
-  expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
+  expect(await screen.findByText(/cannot be started from this page/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Run disposal' })).toBeNull();
 });
 
 test('a 403 starting an export shows a generic message, not the raw server detail', async () => {
@@ -422,7 +399,7 @@ test('a 403 revoking sessions shows a generic message, not the raw server detail
   expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
 });
 
-test('a failed retention load shows an explicit error and disables Run disposal, instead of a silently-empty input', async () => {
+test('a failed retention load shows an explicit error, instead of a silently-empty input', async () => {
   server.use(
     http.get('/api/v1/platform/config/STATIONS', () =>
       HttpResponse.json(
@@ -476,9 +453,6 @@ test('a failed retention load shows an explicit error and disables Run disposal,
   // The empty/unset-looking retention input must not render — an admin who never sees an
   // error could otherwise save over the real value with an unintentionally low one.
   expect(screen.queryByLabelText('Retention period (years)')).toBeNull();
-  expect((screen.getByRole('button', { name: 'Run disposal' }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
 });
 
 test('resubmitting the same audit lookup refreshes the results table', async () => {

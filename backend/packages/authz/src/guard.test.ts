@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
-import type { GuardEvent } from './guard.js';
+import { extractTraceId, type GuardEvent } from './guard.js';
 import type { CedarPrincipalContext } from './decide.js';
 
 const CHIEF: CedarPrincipalContext = {
@@ -54,6 +54,28 @@ function roleGateClient(allowedTokens: readonly string[]): VerifiedPermissionsCl
     ),
   } as unknown as VerifiedPermissionsClient;
 }
+
+describe('extractTraceId', () => {
+  const VALID = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+  it('returns the trace-id of a well-formed traceparent', () => {
+    expect(
+      extractTraceId(buildEvent({ traceparent: `00-${VALID}-00f067aa0ba902b7-01` }, CHIEF)),
+    ).toBe(VALID);
+  });
+
+  it.each(['a#b', 'trace-1', 'ABCDEF3577B34DA6A3CE929D0E0E4736', `${VALID}0`, '', '0'.repeat(32)])(
+    'replaces the malformed trace-id %j so it cannot break "#"-delimited audit keys',
+    (traceId) => {
+      const result = extractTraceId(
+        buildEvent({ traceparent: `00-${traceId}-00f067aa0ba902b7-01` }, CHIEF),
+      );
+      expect(result).not.toBe(traceId);
+      expect(result).not.toContain('#');
+      expect(result.length).toBeGreaterThan(0);
+    },
+  );
+});
 
 describe('withAuthorization', () => {
   const originalEnv = { ...process.env };

@@ -134,7 +134,7 @@ describe('list.ts handler (entrypoint)', () => {
     const { handler } = await import('./list.js');
 
     const result = await handler(
-      buildEvent('MBR-0034', '00-tracefail2000000000000000000-01234567890abcde-01'),
+      buildEvent('MBR-0034', '00-4bf92f3577b34da6a3ce929d0e0e4732-01234567890abcde-01'),
     );
 
     expect(result).toMatchObject({ statusCode: 500 });
@@ -143,7 +143,7 @@ describe('list.ts handler (entrypoint)', () => {
       traceId: string;
     };
     expect(body.status).toBe(500);
-    expect(body.traceId).toBe('tracefail2000000000000000000');
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4732');
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });
@@ -162,7 +162,7 @@ describe('list.ts handler (entrypoint)', () => {
     const { handler } = await import('./list.js');
 
     const result = await handler(
-      buildEvent('MBR-0034', '00-traceclient00000000000000000-01234567890abcde-01'),
+      buildEvent('MBR-0034', '00-4bf92f3577b34da6a3ce929d0e0e4733-01234567890abcde-01'),
     );
 
     expect(result).toMatchObject({ statusCode: 500 });
@@ -171,7 +171,7 @@ describe('list.ts handler (entrypoint)', () => {
       traceId: string;
     };
     expect(body.status).toBe(500);
-    expect(body.traceId).toBe('traceclient00000000000000000');
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4733');
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
     vi.doUnmock('aws-xray-sdk-core');

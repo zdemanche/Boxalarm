@@ -55,10 +55,15 @@ export function extractBearerToken(event: GuardEvent): string | undefined {
   return token;
 }
 
+const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/;
+const ALL_ZERO_TRACE_ID = '0'.repeat(32);
+
 export function extractTraceId(event: GuardEvent): string {
   const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
   const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
+  return traceId !== undefined && TRACE_ID_PATTERN.test(traceId) && traceId !== ALL_ZERO_TRACE_ID
+    ? traceId
+    : randomUUID();
 }
 
 function isValidPrincipal(

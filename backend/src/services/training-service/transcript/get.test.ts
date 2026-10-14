@@ -178,7 +178,7 @@ describe('transcript/get.ts handler (entrypoint)', () => {
 
     const event = buildEvent();
     (event as unknown as { headers: Record<string, string> }).headers.traceparent =
-      '00-tracefail2000000000000000000-01234567890abcde-01';
+      '00-4bf92f3577b34da6a3ce929d0e0e4734-01234567890abcde-01';
 
     const result = await handler(event);
 
@@ -188,7 +188,7 @@ describe('transcript/get.ts handler (entrypoint)', () => {
       traceId: string;
     };
     expect(body.status).toBe(500);
-    expect(body.traceId).toBe('tracefail2000000000000000000');
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4734');
     expect(errorSpy).toHaveBeenCalled();
     const loggedPayload = errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
     expect(loggedPayload).toContain('DynamoDB throttled');

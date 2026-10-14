@@ -237,44 +237,17 @@ describe('validateConfigValue', () => {
   });
 
   describe('RETENTION', () => {
-    it('accepts a positive integer retentionYears', () => {
-      expect(validateConfigValue('RETENTION', { retentionYears: 7 })).toEqual([]);
-    });
-
-    it('rejects a missing retentionYears', () => {
-      const errors = validateConfigValue('RETENTION', {});
-      expect(errors).toContainEqual({
-        field: 'retentionYears',
-        message: 'is required and must be a positive integer',
-      });
-    });
-
-    it('rejects a non-integer retentionYears', () => {
-      const errors = validateConfigValue('RETENTION', { retentionYears: 2.5 });
-      expect(errors).toContainEqual({
-        field: 'retentionYears',
-        message: 'is required and must be a positive integer',
-      });
-    });
-
-    it('rejects a zero or negative retentionYears', () => {
-      const errors = validateConfigValue('RETENTION', { retentionYears: 0 });
-      expect(errors).toContainEqual({
-        field: 'retentionYears',
-        message: 'is required and must be a positive integer',
-      });
-    });
-
-    it('rejects arbitrary unrecognized fields controlling data-lifecycle behavior', () => {
-      const errors = validateConfigValue('RETENTION', {
-        retentionYears: 7,
-        purgeImmediately: true,
-      });
-      expect(errors).toContainEqual({
-        field: 'purgeImmediately',
-        message: 'is not a recognized field',
-      });
-    });
+    it.each([{ retentionYears: 7 }, { retentionYears: 1 }, {}])(
+      'refuses %j so retention changes only through the audited retention route',
+      (value) => {
+        expect(validateConfigValue('RETENTION', value)).toEqual([
+          {
+            field: 'value',
+            message: 'is edited through PUT /api/v1/platform/retention, not this route',
+          },
+        ]);
+      },
+    );
   });
 
   describe('NERIS', () => {

@@ -246,15 +246,6 @@
   font-family: var(--bx-font-mono);
 }
 
-.dangerRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--bx-space-sm) var(--bx-space-md);
-  margin-top: var(--bx-space-sm);
-}
-
 .feedback {
   display: grid;
   gap: var(--bx-space-sm);

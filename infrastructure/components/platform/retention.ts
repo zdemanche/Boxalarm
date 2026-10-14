@@ -106,6 +106,10 @@ export class Retention extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("platform-service", "retention-disposal"),
         logGroup: args.logGroup,
+        // Bounded by API Gateway's 29 s integration limit: a batch that outlives it would
+        // leave the admin with a 504 while the destruction carried on.
+        timeout: 29,
+        memorySize: 512,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,
           // Granted verifiedpermissions:IsAuthorizedWithToken below — without this,
@@ -170,7 +174,9 @@ export class Retention extends pulumi.ComponentResource {
     );
 
     // retention/configHandler.ts: GET reads the RETENTION config item (GetItem);
-    // putRetentionConfig re-reads it for the version, then does a conditional PutItem.
+    // putRetentionConfig re-reads it for the version, then writes the config item and its
+    // AUDIT_LOG_ENTRY in one transaction. DynamoDB authorizes each item of a transaction as
+    // its own PutItem, so dynamodb:TransactWriteItems is not an IAM action and is not granted.
     this.configLambda = new ServiceLambda(
       `${name}-config`,
       {

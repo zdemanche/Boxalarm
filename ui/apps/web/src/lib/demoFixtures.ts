@@ -27,7 +27,6 @@ import { KNOWN_ROLES } from '../auth/roles';
 import type {
   AuditEntry,
   ConfigResponse,
-  DisposalResult,
   ExportStatus,
   RetentionConfig,
 } from '../features/platform/types';
@@ -1031,16 +1030,6 @@ export async function demoRequest(
       source: 'stored',
     };
     return json(retentionConfig);
-  }
-
-  if (path === 'platform/retention/disposal' && method === 'POST') {
-    const result: DisposalResult = {
-      retentionYearsUsed: retentionConfig.retentionYears,
-      hardDeleted: 0,
-      cryptoShredded: 0,
-      refused: [],
-    };
-    return json(result);
   }
 
   if (parts[0] === 'platform' && parts[1] === 'sessions' && parts[3] === 'devices') {
