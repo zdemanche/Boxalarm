@@ -48,6 +48,9 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
   public readonly consumer: QueueConsumer;
   public readonly scheduleResourcePattern: pulumi.Output<string>;
   public readonly failureAlarms: aws.cloudwatch.MetricAlarm[];
+  public readonly retryFailureQueue: aws.sqs.Queue;
+  public readonly retryInvokeConfig: aws.lambda.FunctionEventInvokeConfig;
+  public readonly retryFailureAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(
     name: string,
@@ -251,6 +254,67 @@ export class NerisSubmissionWorker extends pulumi.ComponentResource {
           },
           { parent: this },
         ),
+    );
+
+    this.retryFailureQueue = new aws.sqs.Queue(
+      `${name}-retry-failures`,
+      {
+        name: `boxalarm-${env}-incident-neris-submission-retry-failures`,
+        messageRetentionSeconds: 14 * 86_400,
+      },
+      { parent: this },
+    );
+
+    const retryOnFailurePolicy = new aws.iam.RolePolicy(
+      `${name}-retry-on-failure`,
+      {
+        role: this.lambda.role.id,
+        policy: this.retryFailureQueue.arn.apply((queueArn) =>
+          JSON.stringify({
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Sid: "NerisSubmissionRetryOnFailure",
+                Effect: "Allow",
+                Action: "sqs:SendMessage",
+                Resource: queueArn,
+              },
+            ],
+          }),
+        ),
+      },
+      { parent: this },
+    );
+
+    this.retryInvokeConfig = new aws.lambda.FunctionEventInvokeConfig(
+      `${name}-retry-invoke-config`,
+      {
+        functionName: this.lambda.function.name,
+        destinationConfig: {
+          onFailure: { destination: this.retryFailureQueue.arn },
+        },
+      },
+      { parent: this, dependsOn: [retryOnFailurePolicy] },
+    );
+
+    this.retryFailureAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-retry-failures-alarm`,
+      {
+        name: pulumi.interpolate`${this.retryFailureQueue.name}-depth`,
+        alarmDescription:
+          "A scheduled NERIS submission retry crashed or timed out and was dropped; the report may be stuck RETRYING (see the failure queue).",
+        namespace: "AWS/SQS",
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: this.retryFailureQueue.name },
+        statistic: "Maximum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
     );
 
     this.registerOutputs({

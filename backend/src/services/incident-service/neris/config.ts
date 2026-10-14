@@ -221,6 +221,20 @@ async function loadNerisConfig(
 let cachedConfigPromise: Promise<NerisConfig> | undefined;
 
 /**
+ * Drops the cached config once NERIS has refused its client secret, so the next
+ * {@link readNerisConfig} re-reads Secrets Manager and picks up a rotated secret. A config
+ * already reloaded by a concurrent caller is kept.
+ */
+export async function invalidateNerisConfig(rejectedConfig: NerisConfig): Promise<void> {
+  const pending = cachedConfigPromise;
+  if (!pending) return;
+  const config = await pending.catch(() => undefined);
+  if (cachedConfigPromise === pending && config === rejectedConfig) {
+    cachedConfigPromise = undefined;
+  }
+}
+
+/**
  * Loads per-environment NERIS config from SSM (base URL, User-Agent) and
  * Secrets Manager (OAuth2 client credentials). Never hardcodes those values.
  * In non-production Boxalarm environments, asserts the resolved base URL is

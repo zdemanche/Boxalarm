@@ -65,6 +65,17 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
     ["apparatus-status", "apparatus-service", ["apparatus.serviceStatus.changed"]],
     ["inventory-reorder", "inventory-service", ["inventory.reorder.due"]],
     ["ppe-expiry", "inventory-service", ["ppe.expiry.due", "inventory.expiry.due"]],
+    [
+      "neris-rejected",
+      "incident-service",
+      [
+        "neris.incident.rejected",
+        "neris.incident.failed",
+        "neris.submission.failed",
+        "neris.incident.missing",
+        "neris.incident.deleted",
+      ],
+    ],
   ])(
     "%s: a platform-bus rule matching its producer's Source and DetailType",
     async (key, source, types) => {

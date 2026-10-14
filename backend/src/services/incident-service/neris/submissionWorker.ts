@@ -11,7 +11,7 @@ import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createLogger } from '@boxalarm/logging';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { getNerisClient, isBoxalarmProductionEnvironment, readNerisConfig } from './index.js';
-import { createNerisApi, type NerisIssue } from './api.js';
+import { createNerisApi, type NerisFailure, type NerisIssue } from './api.js';
 import { buildNerisIncidentPayload, payloadHash, type ResponseUnitRow } from './payload.js';
 import { getDocumentClient, getIncidentRepository, getTableName } from '../repository.js';
 import { getSubmissionRepository, type SubmissionOutcome } from '../submissionRepository.js';
@@ -371,7 +371,7 @@ async function attemptSubmission(
     // Idempotent create (review M2). NERIS ids are deterministic
     // (`dept|incident number|call_create`), so a create that may already have landed — a
     // marker from an earlier attempt, or any retry — is first looked up and adopted.
-    const adopt = async (): Promise<string | undefined> => {
+    const adopt = async (allowDeleted: boolean): Promise<string | NerisFailure | undefined> => {
       // A record being re-created is first looked for under its old id too: if NERIS still
       // (or again) holds it, it is adopted rather than duplicated (round 2c, Q1).
       const candidates = [
@@ -381,17 +381,24 @@ async function attemptSubmission(
           expectedNerisId,
         ]),
       ].filter((id): id is string => typeof id === 'string');
+      let deleted: string | undefined;
       for (const candidate of candidates) {
         const found = await api.getIncidentStatus(entity, candidate);
-        if (found.ok) return candidate;
+        if (!found.ok) {
+          if (allowDeleted && found.httpStatus !== 404 && found.httpStatus !== 410) return found;
+          continue;
+        }
+        if (found.status !== 'DELETED') return candidate;
+        deleted ??= candidate;
       }
-      return undefined;
+      return allowDeleted ? deleted : undefined;
     };
 
     let result;
     if (!nerisIncidentId) {
       const mayExist = recreate || incident.pendingNerisId !== undefined || payload.retryCount > 0;
-      const existing = mayExist ? await adopt() : undefined;
+      const adopted = mayExist ? await adopt(false) : undefined;
+      const existing = typeof adopted === 'string' ? adopted : undefined;
       if (existing) {
         nerisIncidentId = existing;
         operation = 'ADOPT';
@@ -417,11 +424,13 @@ async function attemptSubmission(
           (result.httpStatus === 422 && expectedNerisId !== undefined) ||
           looksLikeDuplicate(result.issues))
       ) {
-        const existing = await adopt();
-        if (existing) {
+        const existing = await adopt(true);
+        if (typeof existing === 'string') {
           nerisIncidentId = existing;
           operation = 'ADOPT';
           result = await api.replaceIncident(entity, existing, nerisPayload);
+        } else if (existing) {
+          result = existing;
         }
       }
     }

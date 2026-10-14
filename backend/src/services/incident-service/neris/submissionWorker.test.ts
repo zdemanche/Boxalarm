@@ -406,6 +406,66 @@ describe('submissionWorker handler (SQS trigger)', () => {
     );
   });
 
+  it('does not adopt a record NERIS holds as DELETED', async () => {
+    const oldId = `${DEPT_NERIS_ID}|4471|1700000000`;
+    const { fetchFn } = mockDeps({
+      nerisIncidentId: oldId,
+      nerisMissingAt: 1_798_100_000,
+    });
+    fetchFn.mockImplementation((_path: string, init?: RequestInit) =>
+      Promise.resolve(
+        init?.method === 'GET'
+          ? new Response(JSON.stringify({ incident_status: { status: 'DELETED' } }), {
+              status: 200,
+            })
+          : new Response(
+              JSON.stringify({
+                neris_id: `${DEPT_NERIS_ID}|4471|1798000000`,
+                incident_status: { status: 'SUBMITTED' },
+              }),
+              { status: 201 },
+            ),
+      ),
+    );
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    const methods = fetchFn.mock.calls.map(([, init]) => (init as RequestInit).method);
+    expect(methods).toContain('POST');
+    expect(methods).not.toContain('PUT');
+  });
+
+  it('adopts a DELETED record of the same id when NERIS refuses the re-create', async () => {
+    const sameId = `${DEPT_NERIS_ID}|4471|1700000000`;
+    const { fetchFn } = mockDeps({ nerisIncidentId: sameId, nerisMissingAt: 1_798_100_000 });
+    fetchFn.mockImplementation((_path: string, init?: RequestInit) =>
+      Promise.resolve(
+        init?.method === 'GET'
+          ? new Response(JSON.stringify({ incident_status: { status: 'DELETED' } }), {
+              status: 200,
+            })
+          : init?.method === 'POST'
+            ? new Response(JSON.stringify({ detail: 'exists' }), { status: 409 })
+            : new Response(
+                JSON.stringify({ neris_id: sameId, incident_status: { status: 'SUBMITTED' } }),
+                { status: 200 },
+              ),
+      ),
+    );
+    const { createHandler } = await import('./submissionWorker.js');
+    await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+      { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+      FAKE_CONTEXT,
+      () => undefined,
+    );
+    const methods = fetchFn.mock.calls.map(([, init]) => (init as RequestInit).method);
+    expect(methods).toContain('POST');
+    expect(methods.at(-1)).toBe('PUT');
+  });
+
   it('does not forget the NERIS id of a record that is not marked missing', async () => {
     const { forgetMissingNerisRecord } = mockDeps({
       httpStatus: 200,
@@ -574,6 +634,37 @@ describe('submissionWorker handler (SQS trigger)', () => {
       expect.any(Number),
     );
   });
+
+  it.each([
+    [422, 503, 'SERVER_ERROR', false],
+    [409, 429, 'RATE_LIMITED', false],
+    [422, 403, 'CLIENT_ERROR', true],
+  ])(
+    'does not reject when a %i create refusal is followed by a failed %i lookup (outcome %s)',
+    async (createStatus, lookupStatus, expectedOutcome, terminal) => {
+      const { fetchFn, appendSubmissionAttempt } = mockDeps({ httpStatus: createStatus });
+      fetchFn.mockImplementation((_path: string, init?: RequestInit) =>
+        Promise.resolve(
+          init?.method === 'GET'
+            ? new Response('{}', { status: lookupStatus })
+            : new Response(JSON.stringify({ detail: 'duplicate' }), { status: createStatus }),
+        ),
+      );
+      const { createHandler } = await import('./submissionWorker.js');
+      await createHandler({ schedulerClient: { send: vi.fn() } as never })(
+        { Records: [sqsRecord(submittedEnvelope('NICHOLS', INCIDENT_ID))] },
+        FAKE_CONTEXT,
+        () => undefined,
+      );
+      expect(appendSubmissionAttempt).toHaveBeenCalledWith(
+        'NICHOLS',
+        INCIDENT_ID,
+        expect.objectContaining({ outcome: expectedOutcome }),
+        terminal,
+        expect.any(Number),
+      );
+    },
+  );
 
   it('looks up and adopts on a plain 422 create when the record exists, whatever the wording (round 2, N1)', async () => {
     const { fetchFn, appendSubmissionAttempt } = mockDeps({ httpStatus: 422 });

@@ -118,6 +118,27 @@ describe('pollRecord', () => {
     expect(items.some((i) => i.Delete)).toBe(true);
   });
 
+  it('on DELETED: flags the report missing so it can be re-created, emits neris.incident.deleted, stops watching', async () => {
+    const { client, sent } = ddb(METADATA);
+    await pollRecord(
+      client,
+      'table',
+      api([{ status: 'DELETED', current: true, lastModified: '2026-09-30T09:00:00Z' }]),
+      DEPT,
+      'FD09190828',
+      OPEN,
+      1_798_100_000,
+    );
+    const items = transactItems(sent);
+    expect(items[0]!.Update!.UpdateExpression).toContain('nerisMissingAt = :now');
+    expect(
+      items.some(
+        (i) => (i.Put?.Item as { eventType?: string })?.eventType === 'neris.incident.deleted',
+      ),
+    ).toBe(true);
+    expect(items.some((i) => i.Delete)).toBe(true);
+  });
+
   it('on APPROVED marks the report accepted and emits neris.incident.approved', async () => {
     const { client, sent } = ddb(METADATA);
     await pollRecord(

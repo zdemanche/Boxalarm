@@ -411,6 +411,23 @@ describe('NERIS report consumers', () => {
     });
   });
 
+  it('neris.incident.deleted tells the owner NERIS deleted the report and to resubmit it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./nerisReportConsumer.js');
+    await handler(
+      sqsEvent('neris.incident.deleted', 'incident-service', {
+        incidentId: 'I-1',
+        deptId: 'NICHOLS',
+        ownerId: 'MBR-0034',
+        statusAt: '2026-10-01T07:15:00.000Z',
+      }),
+    );
+    expect(putsOf(send)[0]!.Item).toMatchObject({
+      item: { detail: expect.stringContaining('deleted in NERIS') as unknown },
+    });
+  });
+
   it('neris.no_activity.due -> one reminder each for the CHIEF and ADMIN roles', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);

@@ -127,7 +127,7 @@ export async function applyStatusChange(
                   ? 'attribute_not_exists(nerisStatus)'
                   : 'nerisStatus = :previous'
               }`,
-              UpdateExpression: `SET nerisStatus = :status, nerisStatusAt = :now${localStatus ? ', #status = :local' : ''}`,
+              UpdateExpression: `SET nerisStatus = :status, nerisStatusAt = :now${localStatus ? ', #status = :local' : ''}${current.status === 'DELETED' ? ', nerisMissingAt = :now' : ''}`,
               ...(localStatus ? { ExpressionAttributeNames: { '#status': 'status' } } : {}),
               ExpressionAttributeValues: {
                 ':status': current.status,

@@ -21,6 +21,7 @@ const REJECTED = 'neris.incident.rejected';
 const FAILED = 'neris.incident.failed';
 const SUBMISSION_FAILED = 'neris.submission.failed';
 const MISSING = 'neris.incident.missing';
+const DELETED = 'neris.incident.deleted';
 const LOG_PREFIX = 'notification.nerisReport';
 
 /**
@@ -29,7 +30,9 @@ const LOG_PREFIX = 'notification.nerisReport';
  *   - neris.submission.failed (the submission worker: a 422 at send time, revoked
  *     credentials, the department not configured, or retries exhausted — review M6);
  *   - neris.incident.missing (the nightly reconciliation: NERIS stopped listing a record it
- *     had accepted, and it was given up on after bounded re-checks — round 2, N6).
+ *     had accepted, and it was given up on after bounded re-checks — round 2, N6);
+ *   - neris.incident.deleted (the status poller or reconciliation: NERIS deleted the record,
+ *     and the report is re-creatable by resubmitting it).
  *
  * The report owner, the officer who locked it, and every active OFFICER get an inbox item
  * right away (not only the next daily digest: the NERIS target is 72 hours), each linking to
@@ -56,8 +59,10 @@ export function toNerisReportReminder({ eventType, payload }: EventEnvelope): Ne
       ? 'was rejected by NERIS: fix it and resubmit'
       : eventType === FAILED
         ? "couldn't be processed by NERIS: check the submission and resubmit"
-        : eventType === MISSING
-          ? 'is no longer listed by NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
+        : eventType === MISSING || eventType === DELETED
+          ? eventType === DELETED
+            ? 'was deleted in NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
+            : 'is no longer listed by NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
           : `didn't reach NERIS${reason ? ` (${reason.slice(0, 200)})` : ''}: fix it and retry`;
   return {
     deptId: requireString(payload, 'deptId', eventType),
@@ -115,7 +120,7 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     try {
       envelope = parseEnvelope(
         record.body,
-        new Set([REJECTED, FAILED, SUBMISSION_FAILED, MISSING]),
+        new Set([REJECTED, FAILED, SUBMISSION_FAILED, MISSING, DELETED]),
         REJECTED,
       );
       reminder = toNerisReportReminder(envelope);
