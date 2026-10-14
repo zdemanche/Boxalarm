@@ -44,7 +44,8 @@ export const LADDER_CONTROL_TIMEOUT_SECONDS = 15;
  *  - advance: GetItem (the ladder precondition) + lambda:InvokeFunction on the Tone
  *    Evaluator. It holds no SNS, scheduler, or write grant: the tone is fanned out by the
  *    evaluator under the evaluator's own role, exactly as a scheduled tone is.
- *  - halt: GetItem + one transaction (UpdateItem on METADATA, PutItem of the audit row).
+ *  - halt: GetItem + one transaction (UpdateItem on METADATA, PutItem of the audit row,
+ *    ConditionCheck of the TONE#n guard).
  *  - mutual-aid trigger: the mutual-aid port's reads and writes plus sns:Publish on the
  *    alerting topic for the officer prompts.
  *  - mutual-aid acknowledge: one conditional UpdateItem, and a GetItem on conflict.
@@ -127,7 +128,8 @@ export class RoutesLadderControls extends pulumi.ComponentResource {
         additionalPolicyStatements: [
           {
             // TransactWriteItems authorizes nothing on its own: each item's action is
-            // checked too (UpdateItem on METADATA, PutItem of the TONE_EVENT audit row).
+            // checked too (UpdateItem on METADATA, PutItem of the TONE_EVENT audit row,
+            // ConditionCheck of the TONE#n guard being suppressed).
             Sid: "AlertingTableHaltTransact",
             Effect: "Allow",
             Action: [
@@ -135,6 +137,7 @@ export class RoutesLadderControls extends pulumi.ComponentResource {
               "dynamodb:TransactWriteItems",
               "dynamodb:UpdateItem",
               "dynamodb:PutItem",
+              "dynamodb:ConditionCheckItem",
             ],
             Resource: tableArn,
           },
@@ -241,7 +244,9 @@ export class RoutesLadderControls extends pulumi.ComponentResource {
 
     // Mutual aid must never fail silently (mutualAidPort.ts / toneEvaluatorHandler.ts):
     //  - MutualAidPromptFailed: an officer prompt could not be sent (the call is retried);
-    //  - MutualAidRequestFailed: the automatic tone-3 request failed (the evaluation retries);
+    //  - MutualAidRequestFailed: a tone-3 mutual-aid request failed; the guard is committed
+    //    with mutualAidPending after every member is paged, and the retry re-runs only the
+    //    mutual-aid pass;
     //  - MutualAidNoOfficerReachable: recorded, but no officer has a push target to prompt.
     this.mutualAidAlarms = [
       ["prompt-failed", "MutualAidPromptFailed"],

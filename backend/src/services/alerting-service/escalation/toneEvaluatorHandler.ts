@@ -28,8 +28,16 @@ import {
   deriveMessageDeduplicationId,
   type FanOutChannel,
 } from '../fanout/idempotencyKey.js';
-import { createEscalationSchedule, getSchedulerClient } from './scheduleEscalation.js';
-import { requestMutualAid } from './mutualAidPort.js';
+import {
+  createEscalationSchedule,
+  getSchedulerClient,
+  readEscalationThresholdSeconds,
+} from './scheduleEscalation.js';
+import {
+  MutualAidPromptIncompleteError,
+  MutualAidRequestIncompleteError,
+  requestMutualAid,
+} from './mutualAidPort.js';
 import {
   isPredicateMet,
   readDepartmentToneConfig,
@@ -40,7 +48,6 @@ import {
 
 const METRIC_NAMESPACE = 'Boxalarm/Alerting';
 const CHANNEL_TIER = 'escalation';
-const VOICE_ESCALATION_DELAY_SECONDS = 75;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
 const MAX_CONCURRENT_TONE_TASKS = 10;
 const GUARD_ITEM_INDEX = 0;
@@ -96,6 +103,7 @@ export type ToneOutcome =
   | 'SKIPPED_ALREADY_FIRED'
   | 'SKIPPED_MANUALLY_HALTED'
   | 'SKIPPED_COMPLETED'
+  | 'SKIPPED_TEST_DISPATCH'
   | 'SKIPPED_NOT_FOUND';
 
 function isToneEvaluatorPayload(value: unknown): value is ToneEvaluatorPayload {
@@ -122,6 +130,32 @@ function isManualOverride(value: unknown): value is ManualOverride {
   }
   const triggeredBy = (value as Record<string, unknown>).triggeredBy;
   return typeof triggeredBy === 'string' && triggeredBy.trim().length > 0;
+}
+
+const ROSTER_SEED_EXPRESSION =
+  'SET entityType = :rosterEntityType, memberId = :rosterMemberId, quals = if_not_exists(quals, :rosterQuals), ackStatus = if_not_exists(ackStatus, :rosterNone), currentChannelTier = if_not_exists(currentChannelTier, :rosterPrimary), escalationLevel = if_not_exists(escalationLevel, :rosterZero)';
+
+async function seedRosterEntry(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  pk: string,
+  member: EligibilitySnapshotItem,
+): Promise<void> {
+  await ddb.send(
+    new UpdateCommand({
+      TableName: tableName,
+      Key: { pk, sk: `ROSTER#${member.memberId}` },
+      UpdateExpression: ROSTER_SEED_EXPRESSION,
+      ExpressionAttributeValues: {
+        ':rosterEntityType': 'DISPATCH_ROSTER_ENTRY',
+        ':rosterMemberId': member.memberId,
+        ':rosterQuals': member.quals,
+        ':rosterNone': 'NONE',
+        ':rosterPrimary': 'primary',
+        ':rosterZero': 0,
+      },
+    }),
+  );
 }
 
 interface DispatchMetadata extends DispatchAlertText {
@@ -372,12 +406,29 @@ async function fireToneForMember(
   dispatchId: string,
   dispatch: DispatchMetadata,
   toneSequence: number,
+  voiceDelaySeconds: number,
   member: EligibilitySnapshotItem,
 ): Promise<void> {
   // Every channel is attempted even if an earlier one fails: a push outage must not also
   // cost the member their SMS page and voice escalation. The first failure is rethrown
   // after the voice schedule, so the evaluation still retries.
   let channelFailure: Error | undefined;
+  try {
+    await seedRosterEntry(
+      ddb,
+      tableName,
+      buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
+      member,
+    );
+  } catch (error) {
+    logError('alerting.toneLadder.rosterSeedFailed', error, {
+      deptId,
+      dispatchId,
+      memberId: member.memberId,
+      toneSequence,
+    });
+    channelFailure = asError(error);
+  }
   for (const channel of FAN_OUT_CHANNELS) {
     if (channel === 'push' && resolvePushTarget(member.contactChannels).skipped) {
       continue;
@@ -410,7 +461,7 @@ async function fireToneForMember(
         dispatchId,
         memberId: member.memberId,
         toneSequence,
-        delaySeconds: VOICE_ESCALATION_DELAY_SECONDS,
+        delaySeconds: voiceDelaySeconds,
       },
       ddb,
       tableName,
@@ -438,6 +489,7 @@ async function fireTone(
   dispatchId: string,
   dispatch: DispatchMetadata,
   toneSequence: number,
+  voiceDelaySeconds: number,
   members: readonly EligibilitySnapshotItem[],
 ): Promise<void> {
   const results = await runWithConcurrencyLimit(members, MAX_CONCURRENT_TONE_TASKS, (member) =>
@@ -451,6 +503,7 @@ async function fireTone(
       dispatchId,
       dispatch,
       toneSequence,
+      voiceDelaySeconds,
       member,
     ),
   );
@@ -685,6 +738,10 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
       typeof metadataItem.toneLadderStatus === 'string' ? metadataItem.toneLadderStatus : 'ACTIVE',
   };
 
+  if (metadataItem.isTest === true || typeof metadataItem.targetMemberId === 'string') {
+    logInfo('alerting.toneLadder.skippedTestDispatch', { correlationId });
+    return { outcome: 'SKIPPED_TEST_DISPATCH' };
+  }
   if (dispatch.toneLadderStatus === 'HALTED_MANUAL') {
     logInfo('alerting.toneLadder.skippedHalted', { correlationId });
     return { outcome: 'SKIPPED_MANUALLY_HALTED' };
@@ -740,6 +797,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
 
   const roster = await queryRoster(ddb, tableName, deptId, dispatchId);
   const toneConfig = await readDepartmentToneConfig(ddb, tableName, deptId);
+  const voiceDelaySeconds = await readEscalationThresholdSeconds(ddb, tableName, deptId);
   const predicateMet = !resumingFire && isPredicateMet(roster, toneConfig);
   const outcome: ToneOutcome = manualOverride
     ? 'FIRED_MANUAL_OVERRIDE'
@@ -747,9 +805,23 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
       ? 'SKIPPED_PREDICATE_MET'
       : 'FIRED';
   const evaluatedAt = Math.floor(Date.now() / 1000);
-  // Tone 3's time was recorded at fan-out (toneLadder.ts recordToneTimes); nothing follows it.
+  // Tone 3's time was recorded at fan-out (toneLadder.ts recordToneTimes); nothing follows it,
+  // and once tone 3 has been evaluated its time is past, not upcoming.
+  const tone3Evaluated =
+    toneSequence === TONE_SEQUENCE_TWO &&
+    (
+      await ddb.send(
+        new GetCommand({
+          TableName: tableName,
+          Key: { pk, sk: `TONE#${TONE_SEQUENCE_THREE}` },
+          ConsistentRead: true,
+        }),
+      )
+    ).Item !== undefined;
   const nextToneAt =
-    toneSequence === TONE_SEQUENCE_TWO && typeof metadataItem.tone3At === 'number'
+    toneSequence === TONE_SEQUENCE_TWO &&
+    !tone3Evaluated &&
+    typeof metadataItem.tone3At === 'number'
       ? metadataItem.tone3At
       : null;
   const respondingCount = roster.filter(
@@ -811,6 +883,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
       dispatchId,
       dispatch,
       toneSequence,
+      voiceDelaySeconds,
       eligibleMembers,
     );
   } catch (error) {
@@ -861,7 +934,9 @@ export const handler = async (payload: unknown): Promise<{ outcome: ToneOutcome 
       // A twin committed the guard first, without knowing this attempt's prompts failed.
       await markMutualAidPending(ddb, tableName, pk, toneSequence);
     }
-    throw mutualAidFailure;
+    throw mutualAidFailure instanceof MutualAidPromptIncompleteError
+      ? mutualAidFailure
+      : new MutualAidRequestIncompleteError(mutualAidFailure);
   }
   if (fireCommit === 'already_exists') {
     logInfo('alerting.toneLadder.alreadyEvaluated', { correlationId });

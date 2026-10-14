@@ -73,6 +73,13 @@ export class MutualAidPromptIncompleteError extends Error {
   }
 }
 
+export class MutualAidRequestIncompleteError extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = 'MutualAidRequestIncompleteError';
+  }
+}
+
 type PromptOutcome = 'SENT' | 'ALREADY_SENT' | 'NO_PUSH_TARGET' | 'FAILED';
 
 const ADAPTER_NAME = 'OFFICER_MANUAL_PROMPT';

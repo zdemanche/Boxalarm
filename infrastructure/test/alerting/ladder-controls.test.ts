@@ -144,9 +144,13 @@ describe("officer ladder-control routes", { timeout: 30_000 }, () => {
       "dynamodb:TransactWriteItems",
       "dynamodb:UpdateItem",
       "dynamodb:PutItem",
+      "dynamodb:ConditionCheckItem",
     ]) {
       expect(isGranted(s, action, TABLE_ARN), action).toBe(true);
     }
+    expect(
+      grantsFor(s, "dynamodb:ConditionCheckItem", () => true).flatMap((g) => g.Resource),
+    ).toEqual([TABLE_ARN]);
     expect(isGranted(s, "sns:Publish", () => true)).toBe(false);
   });
 
