@@ -116,8 +116,11 @@ export class ServiceLambda extends pulumi.ComponentResource {
         memorySize: args.memorySize,
         reservedConcurrentExecutions: args.reservedConcurrentExecutions,
         tracingConfig: ACTIVE_TRACING_CONFIG,
+        // Text, not JSON: CloudWatch does not extract Embedded Metric Format written with
+        // console.log under the JSON log format, so no custom metric (and no alarm on one)
+        // would exist. The application still writes its own JSON lines; Text keeps them intact.
         loggingConfig: {
-          logFormat: "JSON",
+          logFormat: "Text",
           logGroup: args.logGroup.logGroupName,
         },
         environment: { variables: environmentVariables },
