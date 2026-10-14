@@ -183,7 +183,9 @@ describe('eligibility consumer (entrypoint-test obligation)', () => {
     expect(send).toHaveBeenCalledTimes(1);
     const values = (
       send.mock.calls[0]?.[0] as {
-        input: { TransactItems: { Update?: { ExpressionAttributeValues: Record<string, unknown> } }[] };
+        input: {
+          TransactItems: { Update?: { ExpressionAttributeValues: Record<string, unknown> } }[];
+        };
       }
     ).input.TransactItems[1]?.Update?.ExpressionAttributeValues;
     expect(values?.[':state']).toBe('AVAILABLE');
