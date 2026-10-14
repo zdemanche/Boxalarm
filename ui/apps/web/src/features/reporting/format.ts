@@ -1,15 +1,57 @@
-/** YYYY-MM-DD for today (UTC), the value shape a native date input takes. */
+export const REPORT_TIME_ZONE = 'America/New_York';
+
+function localIsoDate(epochMs: number): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: REPORT_TIME_ZONE }).format(new Date(epochMs));
+}
+
+/** YYYY-MM-DD for today in the department time zone, the value shape a native date input takes. */
 export function todayIsoDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localIsoDate(Date.now());
 }
 
 export function isoDateDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  return localIsoDate(Date.now() - days * 86_400_000);
 }
 
-/** Start of the given UTC day, in epoch seconds. */
+/** Midnight UTC of the given calendar date, in epoch seconds - for date arithmetic only. */
 export function isoDateToEpochSeconds(isoDate: string): number {
   return Math.floor(Date.parse(`${isoDate}T00:00:00Z`) / 1000);
+}
+
+function zoneOffsetSeconds(epochSeconds: number): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: REPORT_TIME_ZONE,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+    })
+      .formatToParts(new Date(epochSeconds * 1000))
+      .map((part) => [part.type, Number(part.value)]),
+  ) as Record<string, number>;
+  const wallAsUtc =
+    Date.UTC(parts.year!, parts.month! - 1, parts.day!, parts.hour, parts.minute, parts.second) /
+    1000;
+  return wallAsUtc - epochSeconds;
+}
+
+function localMidnightEpochSeconds(wallAsUtc: number): number {
+  if (!Number.isFinite(wallAsUtc)) return NaN;
+  const firstGuess = wallAsUtc - zoneOffsetSeconds(wallAsUtc);
+  return wallAsUtc - zoneOffsetSeconds(firstGuess);
+}
+
+/** First and last second of the given calendar date in the department time zone. */
+export function dayBounds(isoDate: string): { from: number; to: number } {
+  const wallAsUtc = isoDateToEpochSeconds(isoDate);
+  return {
+    from: localMidnightEpochSeconds(wallAsUtc),
+    to: localMidnightEpochSeconds(wallAsUtc + 86_400) - 1,
+  };
 }
 
 /** m:ss (or h:mm:ss) for a duration in seconds; an em dash when it could not be measured. */

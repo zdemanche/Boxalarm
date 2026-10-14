@@ -442,9 +442,13 @@ function grantsReport(periodStart: number, periodEnd: number): GrantsReport {
   const records = OUT_OF_SERVICE.map((event) => ({
     unitId: event.unitId,
     reason: event.reason,
-    startAt: now - event.startDaysAgo * DAY_MS,
-    endAt: event.endDaysAgo === null ? null : now - event.endDaysAgo * DAY_MS,
-  })).filter((record) => record.startAt <= periodEnd && (record.endAt ?? now) >= periodStart);
+    startAt: Math.floor((now - event.startDaysAgo * DAY_MS) / 1000),
+    endAt: event.endDaysAgo === null ? null : Math.floor((now - event.endDaysAgo * DAY_MS) / 1000),
+  })).filter(
+    (record) =>
+      record.startAt * 1000 <= periodEnd &&
+      (record.endAt === null ? now : record.endAt * 1000) >= periodStart,
+  );
   return {
     periodStart,
     periodEnd,

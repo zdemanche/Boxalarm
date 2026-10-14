@@ -4,6 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Badge, Button, Card, Skeleton, TextInput } from '../../components/ui';
+import { RetryableApiGate } from './RetryableApiGate';
 import { getRetentionConfig, putRetentionConfig } from './api';
 import { LIFE_SAFETY_RECORD_CLASSES } from './types';
 import styles from './Settings.module.css';
@@ -72,9 +73,12 @@ export function RetentionSection() {
       {retentionQuery.isLoading ? (
         <Skeleton lines={2} />
       ) : retentionQuery.error ? (
-        <ApiForbiddenGate error={retentionQuery.error} embedded>
+        <RetryableApiGate
+          error={retentionQuery.error}
+          onRetry={() => void retentionQuery.refetch()}
+        >
           <p role="alert">Unable to load the retention configuration.</p>
-        </ApiForbiddenGate>
+        </RetryableApiGate>
       ) : (
         <form onSubmit={handleSubmit} className={styles.form}>
           <TextInput

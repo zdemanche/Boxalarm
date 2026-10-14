@@ -103,6 +103,7 @@ export interface GrantsReport {
     { available: false; reason: string } | { available: true; totalIncidents: number };
   trainingHoursCompliance: { totalHours: number; memberCount: number; eventCount: number };
   apparatusOutOfServiceHistory: {
+    /** startAt and endAt are epoch seconds; periodStart and periodEnd are epoch milliseconds. */
     records: { unitId: string; reason: string; startAt: number; endAt: number | null }[];
     totalOutOfServiceEvents: number;
   };

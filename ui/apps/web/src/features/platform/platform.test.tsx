@@ -858,3 +858,45 @@ test('an accepted cutover decision never claims tone-out paging is disabled', as
   expect(screen.queryByText(/does not disable, pause, or otherwise change/i)).toBeTruthy();
   expect(screen.queryByText(/tone-out paging is (now )?disabled/i)).toBeNull();
 });
+
+test('a failed export status poll retries in place instead of reloading and losing the job', async () => {
+  let polls = 0;
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.get('/api/v1/platform/config/NERIS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.post('/api/v1/platform/export', () => HttpResponse.json({ jobId: 'job-1' })),
+    http.get('/api/v1/platform/export/job-1', () => {
+      polls += 1;
+      return polls === 1
+        ? HttpResponse.json(
+            { type: 'about:blank', title: 'Unavailable', status: 503, traceId: 't6' },
+            { status: 503 },
+          )
+        : HttpResponse.json({
+            status: 'COMPLETE',
+            files: [{ table: 'members', url: 'https://files.example.org/members.csv' }],
+          });
+    }),
+  );
+  const reload = vi.fn();
+  vi.stubGlobal('location', { ...window.location, reload });
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  await user.click(await screen.findByRole('button', { name: 'Export department data' }));
+  const exportDialog = await screen.findByRole('dialog', {
+    name: "Export all of your department's data?",
+  });
+  await user.click(within(exportDialog).getByRole('button', { name: 'Export department data' }));
+
+  await user.click(await screen.findByRole('button', { name: 'Try again' }));
+
+  expect(await screen.findByRole('link', { name: 'members' })).toBeTruthy();
+  expect(reload).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});

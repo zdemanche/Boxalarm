@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
@@ -17,6 +17,7 @@ import {
   Textarea,
 } from '../../components/ui';
 import { Plus } from '../../components/ui/icons';
+import { RetryableApiGate } from './RetryableApiGate';
 import {
   getCadSources,
   newCadEmailAddress,
@@ -29,6 +30,7 @@ import {
   CAD_FIELDS,
   type CadField,
   type CadParserFields,
+  type CadSourcesResponse,
   type CadSourceInput,
   type CadSourceView,
   type CadTestParseResult,
@@ -164,6 +166,16 @@ function fieldErrorsOf(error: unknown): { field: string; message: string }[] {
   });
 }
 
+function resolvableZone(zone: string | null): string {
+  if (!zone) return DEFAULT_CAD_TIME_ZONE;
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: zone });
+    return zone;
+  } catch {
+    return DEFAULT_CAD_TIME_ZONE;
+  }
+}
+
 export function CadSourcesPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -172,14 +184,49 @@ export function CadSourcesPage() {
   const [saveError, setSaveError] = useState<unknown>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
+  const hasUnsavedEdits = useRef(false);
+  const editGeneration = useRef(0);
+  const baseVersion = useRef<number | null>(null);
+
+  function markEdited() {
+    hasUnsavedEdits.current = true;
+    editGeneration.current += 1;
+  }
+
   useEffect(() => {
-    if (query.data) setDrafts(query.data.sources.map(toDraft));
+    const data = query.data;
+    if (!data) return;
+    if (!hasUnsavedEdits.current) {
+      baseVersion.current = data.version;
+      setDrafts(data.sources.map(toDraft));
+      return;
+    }
+    setDrafts((current) =>
+      current.map((draft) => {
+        const view = draft.saved ? data.sources.find((s) => s.sourceId === draft.sourceId) : null;
+        return view ? { ...draft, view } : draft;
+      }),
+    );
   }, [query.data]);
 
   const save = useMutation({
-    mutationFn: () => putCadSources(auth, drafts.map(toInput), query.data?.version ?? null),
-    onSuccess: (saved) => {
+    mutationFn: () => putCadSources(auth, drafts.map(toInput), baseVersion.current),
+    onMutate: () => editGeneration.current,
+    onSuccess: (saved, _variables, startedAtGeneration) => {
       setSaveError(null);
+      baseVersion.current = saved.version;
+      if (editGeneration.current === startedAtGeneration) {
+        hasUnsavedEdits.current = false;
+      } else {
+        setDrafts((current) =>
+          current.map((draft) => {
+            const view = draft.saved
+              ? null
+              : saved.sources.find((s) => s.sourceId === draft.sourceId.trim());
+            return view ? { ...draft, saved: true, view } : draft;
+          }),
+        );
+      }
       // A removed source's old key left alive is exactly what the chief must know about.
       setSaveMessage(
         saved.secretCleanupFailed
@@ -192,12 +239,20 @@ export function CadSourcesPage() {
       setSaveMessage(null);
       setSaveError(error);
       if (error instanceof ApiError && error.problem.status === 409) {
+        hasUnsavedEdits.current = false;
         await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       }
     },
   });
 
+  function adoptOwnWriteVersion(version: number | null) {
+    if (version !== null && baseVersion.current !== null && version === baseVersion.current + 1) {
+      baseVersion.current = version;
+    }
+  }
+
   function update(index: number, patch: Partial<SourceDraft>) {
+    markEdited();
     setDrafts((current) => current.map((d, i) => (i === index ? { ...d, ...patch } : d)));
   }
 
@@ -241,12 +296,6 @@ export function CadSourcesPage() {
               <p className={styles.muted}>
                 Radio tone-out stays the page of record alongside the app.
               </p>
-              {query.data?.webhookUrl ? (
-                <div className={styles.addressBlock}>
-                  <span className={styles.addressLabel}>Webhook address</span>
-                  <code>{query.data.webhookUrl}</code>
-                </div>
-              ) : null}
               {query.data && !query.data.emailDomain ? (
                 <p className={styles.muted}>
                   Email ingress is not set up for this deployment yet; only the webhook is
@@ -264,9 +313,9 @@ export function CadSourcesPage() {
             </Card>
           ) : query.error ? (
             <Card>
-              <ApiForbiddenGate error={query.error} embedded>
+              <RetryableApiGate error={query.error} onRetry={() => void query.refetch()}>
                 <p role="alert">Unable to load the CAD sources.</p>
-              </ApiForbiddenGate>
+              </RetryableApiGate>
             </Card>
           ) : (
             <form onSubmit={handleSubmit} noValidate className={styles.sources}>
@@ -289,8 +338,12 @@ export function CadSourcesPage() {
                   index={index}
                   errors={errors.filter((e) => e.field.startsWith(`sources[${index}]`))}
                   onChange={(patch) => update(index, patch)}
-                  onRemove={() => setDrafts((current) => current.filter((_, i) => i !== index))}
+                  onRemove={() => {
+                    markEdited();
+                    setDrafts((current) => current.filter((_, i) => i !== index));
+                  }}
                   emailDomainConfigured={Boolean(query.data?.emailDomain)}
+                  onVersionAdopted={adoptOwnWriteVersion}
                 />
               ))}
               <Card>
@@ -298,7 +351,10 @@ export function CadSourcesPage() {
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={() => setDrafts((current) => [...current, newDraft()])}
+                    onClick={() => {
+                      markEdited();
+                      setDrafts((current) => [...current, newDraft()]);
+                    }}
                   >
                     <Plus size={16} aria-hidden="true" />
                     Add CAD source
@@ -363,6 +419,7 @@ function SourceEditor({
   onChange,
   onRemove,
   emailDomainConfigured,
+  onVersionAdopted,
 }: {
   draft: SourceDraft;
   index: number;
@@ -370,6 +427,7 @@ function SourceEditor({
   onChange: (patch: Partial<SourceDraft>) => void;
   onRemove: () => void;
   emailDomainConfigured: boolean;
+  onVersionAdopted: (version: number | null) => void;
 }) {
   const errorFor = (suffix: string) =>
     errors.find((e) => e.field === `sources[${index}].${suffix}`)?.message;
@@ -437,7 +495,11 @@ function SourceEditor({
                 <p>
                   Send dispatches to: <code>{draft.view.emailAddress}</code>
                 </p>
-                <NewEmailAddress sourceId={draft.sourceId} label={draft.label} />
+                <NewEmailAddress
+                  sourceId={draft.sourceId}
+                  label={draft.label}
+                  onVersionAdopted={onVersionAdopted}
+                />
               </>
             ) : draft.emailEnabled ? (
               <p>
@@ -455,7 +517,11 @@ function SourceEditor({
               checked={draft.webhookEnabled}
               onCheckedChange={(checked) => onChange({ webhookEnabled: checked })}
             />
-            {draft.saved ? <WebhookKey draft={draft} /> : <p>Save the source to create its key.</p>}
+            {draft.saved ? (
+              <WebhookKey draft={draft} onVersionAdopted={onVersionAdopted} />
+            ) : (
+              <p>Save the source to create its key.</p>
+            )}
           </fieldset>
         </div>
 
@@ -499,7 +565,15 @@ function SourceEditor({
   );
 }
 
-function NewEmailAddress({ sourceId, label }: { sourceId: string; label: string }) {
+function NewEmailAddress({
+  sourceId,
+  label,
+  onVersionAdopted,
+}: {
+  sourceId: string;
+  label: string;
+  onVersionAdopted: (version: number | null) => void;
+}) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -517,6 +591,7 @@ function NewEmailAddress({ sourceId, label }: { sourceId: string; label: string 
         onConfirm={async () => {
           const saved = await newCadEmailAddress(auth, sourceId);
           queryClient.setQueryData(QUERY_KEY, saved);
+          onVersionAdopted(saved.version);
         }}
         danger
       />
@@ -602,7 +677,13 @@ function vendorInstructions(rotated: RotatedWebhookKey): string {
   ].join('\n');
 }
 
-function WebhookKey({ draft }: { draft: SourceDraft }) {
+function WebhookKey({
+  draft,
+  onVersionAdopted,
+}: {
+  draft: SourceDraft;
+  onVersionAdopted: (version: number | null) => void;
+}) {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -620,6 +701,8 @@ function WebhookKey({ draft }: { draft: SourceDraft }) {
     const key = await rotateCadWebhookKey(auth, draft.sourceId);
     setRotated(key);
     await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+    const refetched = queryClient.getQueryData<CadSourcesResponse>(QUERY_KEY);
+    if (refetched) onVersionAdopted(refetched.version);
   }
 
   return (
@@ -793,6 +876,7 @@ function ParserEditor({
   }
 
   const testErrors = fieldErrorsOf(testError);
+  const displayZone = resolvableZone(testedZone);
 
   return (
     <fieldset className={`${styles.fieldset} ${styles.rules}`}>
@@ -866,8 +950,11 @@ function ParserEditor({
         ) : null}
         {result?.dispatchTimeResolved ? (
           <p>
-            Dispatch time read as {new Date(result.dispatchTimeResolved).toLocaleString()} in{' '}
-            {testedZone ?? DEFAULT_CAD_TIME_ZONE} - CAD updates to a call are ordered by it.
+            Dispatch time read as{' '}
+            {new Date(result.dispatchTimeResolved).toLocaleString(undefined, {
+              timeZone: displayZone,
+            })}{' '}
+            in {displayZone} - CAD updates to a call are ordered by it.
           </p>
         ) : result?.dispatchTimeUnordered ? (
           <p>
