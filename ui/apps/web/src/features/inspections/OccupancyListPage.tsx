@@ -14,6 +14,7 @@ import {
 } from '../../components/ui';
 import { createOccupancy, listOccupancies } from './api';
 import type { CreateOccupancyInput, Occupancy } from './types';
+import { hasInspectionsWrite } from './writeRoles';
 import styles from './Inspections.module.css';
 
 function coordinatesProblem(latitude: string, longitude: string): string | null {
@@ -40,7 +41,7 @@ function splitLines(value: string): string[] {
 export function OccupancyListPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = hasInspectionsWrite(auth.roles);
   const [address, setAddress] = useState('');
   const [occupancyType, setOccupancyType] = useState('');
   const [hazardsText, setHazardsText] = useState('');

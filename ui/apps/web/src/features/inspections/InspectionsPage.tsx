@@ -18,6 +18,7 @@ import { conductInspection, listDueInspections, listOccupancies, scheduleInspect
 import type { Inspection, Violation, ViolationStatus } from './types';
 import { daysUntil, dueLabel, formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import { listMembers } from '../personnel/api';
 import styles from './Inspections.module.css';
 
 const emptyViolation: Violation = { code: '', description: '', status: 'open' };
@@ -73,6 +74,14 @@ export function InspectionsPage() {
     queryKey: ['inspections', 'occupancies'],
     queryFn: () => listOccupancies(auth),
   });
+  const membersQuery = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+  });
+  const memberName = (memberId: string) => {
+    const member = membersQuery.data?.find((m) => m.memberId === memberId);
+    return member ? `${member.firstName} ${member.lastName}` : 'a member';
+  };
   const occupancyLabel = (id: string) => {
     const occupancy = occupanciesQuery.data?.find((o) => o.occupancyId === id);
     return occupancy ? `${occupancy.address} (${occupancy.occupancyType})` : id;
@@ -147,7 +156,7 @@ export function InspectionsPage() {
         i.conductedDate ? (
           <span style={{ ...WRAPPING_CELL, minWidth: '8rem' }}>
             <span style={MONO_DATE}>{formatCalendarDate(i.conductedDate)}</span>
-            {i.conductedBy ? ` by ${i.conductedBy}` : null}
+            {i.conductedBy ? ` by ${memberName(i.conductedBy)}` : null}
           </span>
         ) : (
           <span style={{ ...WRAPPING_CELL, minWidth: '8rem', color: 'var(--bx-fg-muted)' }}>
@@ -172,20 +181,21 @@ export function InspectionsPage() {
           {
             key: 'actions',
             header: 'Actions',
-            render: (i: Inspection) => (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  conductMutation.reset();
-                  setConducting(i);
-                  setViolations(i.violations.length > 0 ? i.violations : []);
-                }}
-              >
-                Conduct
-              </Button>
-            ),
+            render: (i: Inspection) =>
+              i.conductedDate ? null : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    conductMutation.reset();
+                    setConducting(i);
+                    setViolations(i.violations.length > 0 ? i.violations : []);
+                  }}
+                >
+                  Conduct
+                </Button>
+              ),
           } satisfies DataTableColumn<Inspection>,
         ]
       : []),

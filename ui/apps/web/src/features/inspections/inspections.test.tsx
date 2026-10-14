@@ -98,11 +98,24 @@ test('occupancy detail shows address, type, contacts, hazards after create (AC1,
   expect(screen.getByText('Propane tank', { selector: 'dd' })).toBeTruthy();
 });
 
-test('a member without write permission sees no create controls (AC4)', async () => {
-  server.use(http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: [] })));
+test('an officer gets the create controls the Cedar policy grants (AC4)', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: [] })),
+    http.get('/api/v1/inspections/hydrants', () => HttpResponse.json({ items: [] })),
+  );
 
-  renderApp(['OFFICER'], '/inspections/occupancies');
+  const { unmount } = renderApp(['OFFICER'], '/inspections/occupancies');
   await screen.findByRole('heading', { name: 'Occupancies' });
+  expect(screen.getByRole('form', { name: 'Register occupancy' })).toBeTruthy();
+  unmount();
+
+  renderApp(['OFFICER'], '/inspections/hydrants');
+  expect(await screen.findByRole('form', { name: 'Register hydrant' })).toBeTruthy();
+});
+
+test('a member cannot open the occupancy page at all (AC4)', async () => {
+  renderApp(['MEMBER'], '/inspections/occupancies');
+  expect(await screen.findByRole('heading', { name: /forbidden|access/i })).toBeTruthy();
   expect(screen.queryByRole('form', { name: 'Register occupancy' })).toBeNull();
 });
 

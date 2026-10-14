@@ -15,7 +15,9 @@ import {
   TextInput,
 } from '../../components/ui';
 import { getOccupancy, getPrePlan, putPrePlan, updateOccupancy, uploadPrePlanFile } from './api';
+import { ApiError } from '../../lib/apiClient';
 import type { UtilityShutoff } from './types';
+import { hasInspectionsWrite } from './writeRoles';
 import styles from './Inspections.module.css';
 
 type Tab = 'details' | 'preplan';
@@ -45,11 +47,31 @@ function splitLines(value: string): string[] {
     .filter(Boolean);
 }
 
+function SaveError({ error, subject }: { error: Error | null; subject: string }) {
+  if (!error) return null;
+  if (error instanceof ApiError && error.problem.status === 403) {
+    return (
+      <ApiForbiddenGate error={error} embedded>
+        {null}
+      </ApiForbiddenGate>
+    );
+  }
+  const reason =
+    error instanceof ApiError
+      ? (error.problem.detail ?? `HTTP ${error.problem.status}`)
+      : error.message;
+  return (
+    <p role="alert" className={styles.error}>
+      {subject} was not saved: {reason}. Your edits are still here - save again to retry.
+    </p>
+  );
+}
+
 export function OccupancyDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = hasInspectionsWrite(auth.roles);
   const [tab, setTab] = useState<Tab>('details');
   // Both saves replace whole lists, so each editor shows what is on file until it is edited
   // (null = untouched). An editor that opened empty deleted every existing hazard and shutoff
@@ -220,11 +242,7 @@ export function OccupancyDetailPage() {
             </Card>
           ) : null}
 
-          {hazardsMutation.error ? (
-            <ApiForbiddenGate error={hazardsMutation.error} embedded>
-              <p role="alert">Unable to save changes</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <SaveError error={hazardsMutation.error} subject="The hazards" />
         </div>
       ) : null}
     </div>
@@ -517,11 +535,7 @@ export function OccupancyDetailPage() {
             </Card>
           ) : null}
 
-          {prePlanMutation.error ? (
-            <ApiForbiddenGate error={prePlanMutation.error} embedded>
-              <p role="alert">Unable to save pre-plan</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <SaveError error={prePlanMutation.error} subject="The pre-plan" />
         </div>
       ) : null}
     </div>

@@ -95,6 +95,11 @@ test('inspections render as a table, soonest due first, with overdue/due-soon/co
   const conductedOn = isoDaysFromToday(-20);
   server.use(
     http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: OCCUPANCIES })),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [{ memberId: 'member-7', firstName: 'Luis', lastName: 'Ortega' }],
+      }),
+    ),
     http.get('/api/v1/inspections', () =>
       HttpResponse.json({
         items: [
@@ -102,7 +107,7 @@ test('inspections render as a table, soonest due first, with overdue/due-soon/co
           // Conducted: the service leaves nextDueDate at the (past) scheduled date.
           inspection('insp-done', 'occ-3', conductedOn, {
             conductedDate: `${conductedOn}T15:00:00.000Z`,
-            conductedBy: 'Luis Ortega',
+            conductedBy: 'member-7',
             violations: [{ code: 'NFPA 58 8.4.1', description: 'Tank', status: 'open' }],
           }),
           inspection('insp-late', 'occ-1', isoDaysFromToday(-35)),
@@ -126,6 +131,9 @@ test('inspections render as a table, soonest due first, with overdue/due-soon/co
   ).toBeTruthy();
   expect(within(rows[1]!).getByText('Conducted').closest('[data-status="ok"]')).toBeTruthy();
   expect(rows[1]!.textContent).toContain('by Luis Ortega');
+  expect(rows[1]!.textContent).not.toContain('member-7');
+  expect(within(rows[1]!).queryByRole('button', { name: 'Conduct' })).toBeNull();
+  expect(within(rows[0]!).getByRole('button', { name: 'Conduct' })).toBeTruthy();
   expect(rows[1]!.textContent).toContain('NFPA 58 8.4.1 (Open)');
   expect(
     within(rows[2]!).getByText('Due in 6 days').closest('[data-status="warning"]'),
@@ -200,7 +208,7 @@ test('an inspection conducted before its scheduled date reads Conducted, not due
         items: [
           inspection('insp-early', 'occ-2', isoDaysFromToday(5), {
             conductedDate: `${doneOn}T15:00:00.000Z`,
-            conductedBy: 'Luis Ortega',
+            conductedBy: 'member-7',
           }),
         ],
       }),
@@ -231,4 +239,29 @@ test('B2-054: the page asks for a year-long horizon and shows an inspection 60 d
   expect(requestedUrl?.searchParams.get('leadDays')).toBe('365');
   expect(requestedUrl?.searchParams.has('month')).toBe(false);
   expect(within(table).getByText('Scheduled')).toBeTruthy();
+});
+
+test('B2-192: a conducted-by id that matches no member reads "by a member", never the raw id', async () => {
+  const doneOn = isoDaysFromToday(-1);
+  server.use(
+    http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: OCCUPANCIES })),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+    http.get('/api/v1/inspections', () =>
+      HttpResponse.json({
+        items: [
+          inspection('insp-x', 'occ-2', doneOn, {
+            conductedDate: `${doneOn}T15:00:00.000Z`,
+            conductedBy: 'member-9',
+          }),
+        ],
+      }),
+    ),
+  );
+  renderPage();
+
+  const table = await screen.findByRole('table', { name: 'Inspections due' });
+  const row = (await within(table).findByRole('rowheader', { name: '9 Elm St (Residential)' }))
+    .parentElement!;
+  await waitFor(() => expect(row.textContent).toContain('by a member'));
+  expect(row.textContent).not.toContain('member-9');
 });
