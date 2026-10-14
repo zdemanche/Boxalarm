@@ -417,3 +417,60 @@ test('the page links to the occupancy change history by the id audit entries are
     '/audit-log?entityType=OCCUPANCY&entityId=occ-1',
   );
 });
+
+test('B2-050: file names with spaces or parentheses are sent and uploaded under their safe names', async () => {
+  const uploaded: string[] = [];
+  const puts: SavedPrePlan[] = [];
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(PRE_PLAN)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', async ({ request }) => {
+      const body = (await request.json()) as SavedPrePlan;
+      puts.push(body);
+      return HttpResponse.json({
+        prePlanId: 'pp-1',
+        attachmentUploadUrls: body.attachmentFilenames
+          .filter((name) => name.startsWith('Floor_'))
+          .map((filename) => ({
+            filename,
+            uploadUrl: `${window.location.origin}/uploads/${filename}`,
+            contentType: 'application/pdf',
+          })),
+        utilityShutoffs: body.utilityShutoffs,
+        hazards: body.hazards,
+      });
+    }),
+  );
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (!url.includes('/uploads/')) return realFetch(input, init);
+    uploaded.push(url.split('/uploads/')[1]!);
+    return new Response(null, { status: 200 });
+  });
+
+  const user = await openPrePlanEditor();
+  await user.upload(
+    screen.getByLabelText('Attachments'),
+    new File(['x'], 'Floor Plan (1).pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]!.attachmentFilenames).toEqual(['floor-1.pdf', 'Floor_Plan__1_.pdf']);
+  await waitFor(() => expect(uploaded).toEqual(['Floor_Plan__1_.pdf']));
+  vi.restoreAllMocks();
+});
+
+test('B2-050: two new files that sanitize to the same name are refused before the save', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+  await user.upload(screen.getByLabelText('Attachments'), [
+    new File(['x'], 'a b.pdf', { type: 'application/pdf' }),
+    new File(['y'], 'a_b.pdf', { type: 'application/pdf' }),
+  ]);
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  expect(await screen.findByText(/same name/)).toBeTruthy();
+  expect(puts).toHaveLength(0);
+});

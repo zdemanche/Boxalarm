@@ -18,7 +18,7 @@ export interface MapProvider {
 
 export const PAN_STEP_DEGREES = 0.01;
 export const MIN_SPAN_DEGREES = 0.005;
-export const MAX_SPAN_DEGREES = 2;
+export const MAX_SPAN_DEGREES = 0.25;
 
 export function panBoundingBox(bbox: BoundingBox, dLat: number, dLng: number): BoundingBox {
   return {

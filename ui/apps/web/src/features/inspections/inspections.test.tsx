@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -242,4 +242,60 @@ test('round-3 minor 4: the occupancy address field tells inspectors to include a
   const address = await screen.findByLabelText(/^Address/);
   const help = document.getElementById(address.getAttribute('aria-describedby') ?? '');
   expect(help?.textContent).toContain('Include the town');
+});
+
+async function fillRegisterForm(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(await screen.findByLabelText(/^Address/), '12 Oak St');
+  await user.type(screen.getByLabelText(/^Occupancy type/), 'Mercantile');
+}
+
+function serveCreate() {
+  const posted: Record<string, unknown>[] = [];
+  server.use(
+    http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: [] })),
+    http.post('/api/v1/inspections/occupancies', async ({ request }) => {
+      posted.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({ occupancyId: 'occ-9' }, { status: 201 });
+    }),
+  );
+  return posted;
+}
+
+test('X-020: a registered occupancy carries the coordinates typed into the form', async () => {
+  const posted = serveCreate();
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/inspections/occupancies');
+  await fillRegisterForm(user);
+  await user.type(screen.getByLabelText(/^Latitude/), '41.2');
+  await user.type(screen.getByLabelText(/^Longitude/), '-73.19');
+  await user.click(screen.getByRole('button', { name: 'Save occupancy' }));
+
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).toMatchObject({ latitude: 41.2, longitude: -73.19 });
+});
+
+test('X-020: leaving both coordinates empty omits them from the create body', async () => {
+  const posted = serveCreate();
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/inspections/occupancies');
+  await fillRegisterForm(user);
+  await user.click(screen.getByRole('button', { name: 'Save occupancy' }));
+
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).not.toHaveProperty('latitude');
+  expect(posted[0]).not.toHaveProperty('longitude');
+});
+
+test('X-020: one coordinate without the other, or one out of range, is refused before any request', async () => {
+  const posted = serveCreate();
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/inspections/occupancies');
+  await fillRegisterForm(user);
+  await user.type(screen.getByLabelText(/^Latitude/), '41.2');
+  await user.click(screen.getByRole('button', { name: 'Save occupancy' }));
+  expect(await screen.findByText(/both latitude and longitude/i)).toBeTruthy();
+
+  await user.type(screen.getByLabelText(/^Longitude/), '-273');
+  await user.click(screen.getByRole('button', { name: 'Save occupancy' }));
+  expect(posted).toHaveLength(0);
 });

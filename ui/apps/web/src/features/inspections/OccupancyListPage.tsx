@@ -16,6 +16,20 @@ import { createOccupancy, listOccupancies } from './api';
 import type { CreateOccupancyInput, Occupancy } from './types';
 import styles from './Inspections.module.css';
 
+function coordinatesProblem(latitude: string, longitude: string): string | null {
+  if (!latitude && !longitude) return null;
+  if (!latitude || !longitude) return 'Enter both latitude and longitude, or leave both empty.';
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    return 'Latitude must be between -90 and 90.';
+  }
+  if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+    return 'Longitude must be between -180 and 180.';
+  }
+  return null;
+}
+
 function splitLines(value: string): string[] {
   return value
     .split('\n')
@@ -30,6 +44,8 @@ export function OccupancyListPage() {
   const [address, setAddress] = useState('');
   const [occupancyType, setOccupancyType] = useState('');
   const [hazardsText, setHazardsText] = useState('');
+  const [latitude, setLatitude] = useState('');
+  const [longitude, setLongitude] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
   const listQuery = useQuery({
@@ -43,6 +59,8 @@ export function OccupancyListPage() {
       setAddress('');
       setOccupancyType('');
       setHazardsText('');
+      setLatitude('');
+      setLongitude('');
       setFormError(null);
       await queryClient.invalidateQueries({ queryKey: ['inspections', 'occupancies'] });
     },
@@ -107,11 +125,17 @@ export function OccupancyListPage() {
               aria-label="Register occupancy"
               onSubmit={(event: FormEvent) => {
                 event.preventDefault();
+                const problem = coordinatesProblem(latitude, longitude);
+                if (problem) {
+                  setFormError(problem);
+                  return;
+                }
                 createMutation.mutate({
                   address,
                   occupancyType,
                   contacts: [],
                   hazards: splitLines(hazardsText),
+                  ...(latitude ? { latitude: Number(latitude), longitude: Number(longitude) } : {}),
                 });
               }}
               className={styles.formStack}
@@ -128,6 +152,30 @@ export function OccupancyListPage() {
                 value={occupancyType}
                 required
                 onChange={(e) => setOccupancyType(e.target.value)}
+              />
+              <TextInput
+                label="Latitude"
+                optional
+                type="number"
+                step="any"
+                min={-90}
+                max={90}
+                inputMode="decimal"
+                help="Decimal degrees, e.g. 41.2429. Sets where the building shows on the map and cannot be changed later."
+                value={latitude}
+                onChange={(e) => setLatitude(e.target.value)}
+              />
+              <TextInput
+                label="Longitude"
+                optional
+                type="number"
+                step="any"
+                min={-180}
+                max={180}
+                inputMode="decimal"
+                help="Decimal degrees, e.g. -73.2007 (west is negative)"
+                value={longitude}
+                onChange={(e) => setLongitude(e.target.value)}
               />
               <Textarea
                 label="Hazards (one per line)"

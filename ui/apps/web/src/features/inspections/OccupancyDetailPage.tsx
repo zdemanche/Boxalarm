@@ -31,6 +31,8 @@ function oversizedFileNames(files: File[]): string[] {
 /** putPrePlanHandler's MAX_LIST_LENGTH for attachmentFilenames. */
 const MAX_PREPLAN_ATTACHMENTS = 50;
 
+const safeFileName = (file: File) => file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+
 /** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('/') + 1);
@@ -99,7 +101,7 @@ export function OccupancyDetailPage() {
   // A new attachment with an on-file name replaces that file.
   function plannedFiles() {
     const onFile = prePlanQuery.data;
-    const newNames = attachmentFiles.map((file) => file.name);
+    const newNames = attachmentFiles.map(safeFileName);
     const keptAttachments = (onFile?.attachmentS3Keys ?? [])
       .filter((key) => !removedKeys.includes(key))
       .map(fileNameOf)
@@ -108,7 +110,11 @@ export function OccupancyDetailPage() {
       onFile?.siteDiagramS3Key && !removedKeys.includes(onFile.siteDiagramS3Key)
         ? fileNameOf(onFile.siteDiagramS3Key)
         : null;
-    return { siteDiagramFilename: diagramFile?.name ?? keptDiagram, keptAttachments, newNames };
+    return {
+      siteDiagramFilename: diagramFile ? safeFileName(diagramFile) : keptDiagram,
+      keptAttachments,
+      newNames,
+    };
   }
 
   const hazardsMutation = useMutation({
@@ -137,7 +143,7 @@ export function OccupancyDetailPage() {
         );
       }
       for (const attachment of result.attachmentUploadUrls) {
-        const file = attachmentFiles.find((f) => f.name === attachment.filename);
+        const file = attachmentFiles.find((f) => safeFileName(f) === attachment.filename);
         if (file) await uploadPrePlanFile(attachment.uploadUrl, file, attachment.contentType);
       }
       return result;
@@ -229,12 +235,18 @@ export function OccupancyDetailPage() {
   // removal don't count, so removing one frees its name and its place.
   function prePlanFileProblem(): string | null {
     const { siteDiagramFilename, keptAttachments, newNames } = plannedFiles();
-    const clash = attachmentFiles.find((file) => file.name === siteDiagramFilename);
+    const clash = attachmentFiles.find((file) => safeFileName(file) === siteDiagramFilename);
     if (clash) {
       return `${clash.name} has the same name as the site diagram. Rename one of them before saving.`;
     }
-    if (diagramFile && keptAttachments.includes(diagramFile.name)) {
+    if (diagramFile && keptAttachments.includes(safeFileName(diagramFile))) {
       return `${diagramFile.name} has the same name as an attachment on file. Rename one of them before saving.`;
+    }
+    const repeated = attachmentFiles.find(
+      (file, index) => newNames.indexOf(safeFileName(file)) !== index,
+    );
+    if (repeated) {
+      return `${repeated.name} has the same name as another new attachment. Rename one of them before saving.`;
     }
     const total = keptAttachments.length + newNames.length;
     if (total > MAX_PREPLAN_ATTACHMENTS) {

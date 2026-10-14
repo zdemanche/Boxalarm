@@ -214,3 +214,21 @@ test('an inspection conducted before its scheduled date reads Conducted, not due
   expect(within(row).getByText('Conducted').closest('[data-status="ok"]')).toBeTruthy();
   expect(within(row).queryByText(/Due in/)).toBeNull();
 });
+
+test('B2-054: the page asks for a year-long horizon and shows an inspection 60 days out as Scheduled', async () => {
+  let requestedUrl: URL | undefined;
+  server.use(
+    http.get('/api/v1/inspections/occupancies', () => HttpResponse.json({ items: OCCUPANCIES })),
+    http.get('/api/v1/inspections', ({ request }) => {
+      requestedUrl = new URL(request.url);
+      return HttpResponse.json({ items: [inspection('insp-far', 'occ-1', isoDaysFromToday(60))] });
+    }),
+  );
+  renderPage();
+
+  const table = await screen.findByRole('table', { name: 'Inspections due' });
+  await within(table).findByRole('rowheader', { name: '12 Main St (Mercantile)' });
+  expect(requestedUrl?.searchParams.get('leadDays')).toBe('365');
+  expect(requestedUrl?.searchParams.has('month')).toBe(false);
+  expect(within(table).getByText('Scheduled')).toBeTruthy();
+});

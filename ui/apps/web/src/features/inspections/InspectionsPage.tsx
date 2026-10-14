@@ -25,6 +25,8 @@ const emptyViolation: Violation = { code: '', description: '', status: 'open' };
 /** Inside this many days an inspection reads as due soon. */
 const DUE_SOON_DAYS = 30;
 
+const DUE_HORIZON_DAYS = 365;
+
 /** Dates are compared character by character down a column, so they read in mono (§2.4). */
 const MONO_DATE = { fontFamily: 'var(--bx-font-mono)', whiteSpace: 'nowrap' } as const;
 
@@ -62,8 +64,8 @@ export function InspectionsPage() {
   const [violations, setViolations] = useState<Violation[]>([]);
 
   const listQuery = useQuery({
-    queryKey: ['inspections', 'due'],
-    queryFn: () => listDueInspections(auth),
+    queryKey: ['inspections', 'due', DUE_HORIZON_DAYS],
+    queryFn: () => listDueInspections(auth, { leadDays: DUE_HORIZON_DAYS }),
   });
   // Occupancies are picked by address, never typed as an internal id (docs/design.md §4.8). The
   // same list names each inspection row.
