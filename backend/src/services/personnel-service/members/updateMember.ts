@@ -438,22 +438,19 @@ async function updateMemberProfile(
           {
             Put: {
               TableName: config.tableName,
-              Item: {
-                ...buildAuditLogEntryItem({
-                  deptId,
-                  actorId: principal.sub,
-                  mutatedEntityType: 'MEMBER',
-                  mutatedEntityId: memberId,
-                  action: 'UPDATE',
-                  before: Object.fromEntries(
-                    Object.keys(updates).map((field) => [field, storedRow[field] ?? null]),
-                  ),
-                  after: updates,
-                  ts: now,
-                  traceId,
-                }),
-                gsi3sk: new Date(now).toISOString(),
-              },
+              Item: buildAuditLogEntryItem({
+                deptId,
+                actorId: principal.sub,
+                mutatedEntityType: 'MEMBER',
+                mutatedEntityId: memberId,
+                action: 'UPDATE',
+                before: Object.fromEntries(
+                  Object.keys(updates).map((field) => [field, storedRow[field] ?? null]),
+                ),
+                after: updates,
+                ts: now,
+                traceId,
+              }),
               ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
             },
           },

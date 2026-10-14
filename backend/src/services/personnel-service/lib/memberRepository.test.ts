@@ -110,6 +110,7 @@ describe('memberRepository', () => {
       expect(auditPut?.Item.mutatedEntityId).toBe(member.memberId);
       expect(auditPut?.Item.actorId).toBe('actor-1');
       expect(auditPut?.Item.pk).toMatch(/^DEPT#NICHOLS#AUDIT#\d{4}-\d{2}-\d{2}$/);
+      expect(auditPut?.Item.gsi3sk).toBe(String(auditPut?.Item.ts));
     });
 
     // Design review C2: the alerting plane projects `phone` into the member's SMS and VOICE
@@ -246,7 +247,7 @@ describe('memberRepository', () => {
       expect(auditPut?.Put?.Item.changedFields).toEqual({
         status: { old: 'PROBATIONARY', new: 'ACTIVE' },
       });
-      expect(typeof auditPut?.Put?.Item.gsi3sk).toBe('string');
+      expect(auditPut?.Put?.Item.gsi3sk).toBe(String(auditPut?.Put?.Item.ts));
 
       expect(outboxPut?.Put?.Item.pk).toBe('DEPT#NICHOLS#OUTBOX#m1');
       expect(outboxPut?.Put?.Item.eventType).toBe('personnel.member.updated');
@@ -303,6 +304,7 @@ describe('memberRepository', () => {
         roles: { old: ['MEMBER'], new: ['MEMBER', 'OFFICER'] },
       });
       expect(auditPut?.Put?.Item.actorId).toBe('actor-1');
+      expect(auditPut?.Put?.Item.gsi3sk).toBe(String(auditPut?.Put?.Item.ts));
 
       const outbox = outboxPut?.Put?.Item;
       expect(outbox).toMatchObject({

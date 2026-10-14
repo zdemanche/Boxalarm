@@ -211,6 +211,7 @@ export async function completeShiftAttendance(
     const attendanceItem = {
       ...keys,
       entityType: 'ATTENDANCE_RECORD',
+      deptId,
       activityType,
       refId: shiftId,
       occurredAt: occurredAtSeconds,

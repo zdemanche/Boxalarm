@@ -487,7 +487,7 @@ describe('updateMember handler', () => {
       changedFields: { phone: { old: '+12705550100', new: null } },
       gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#MEMBER#mbr-1',
     });
-    expect(audit?.Item.gsi3sk).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(audit?.Item.gsi3sk).toBe(String(audit?.Item.ts));
     expect(audit?.Item.changedFields).not.toHaveProperty('firstName');
   });
 

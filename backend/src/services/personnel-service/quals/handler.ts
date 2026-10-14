@@ -76,7 +76,7 @@ function parsePutQualsBody(body: string | undefined): PutQualsBody | undefined {
   }
   const record = parsed as Record<string, unknown>;
   const qualCode = record.qualCode;
-  if (typeof qualCode !== 'string' || qualCode.length === 0) {
+  if (typeof qualCode !== 'string' || qualCode.length === 0 || /[#,]/.test(qualCode)) {
     return undefined;
   }
   const grantedByCertId = record.grantedByCertId;
@@ -126,7 +126,7 @@ async function innerPutQualsHandler(
   if (!parsedBody) {
     return unprocessableEntityProblem(
       traceId,
-      'qualCode is required and must be a non-empty string; grantedByCertId, if present, must be a string or null',
+      'qualCode is required and must be a non-empty string without # or ,; grantedByCertId, if present, must be a string or null',
     );
   }
 

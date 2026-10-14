@@ -48,6 +48,7 @@ describe('completeShiftAttendance', () => {
     );
     expect(attendance).toMatchObject({
       entityType: 'ATTENDANCE_RECORD',
+      deptId: DEPT_ID,
       activityType: 'STANDBY',
       refId: SHIFT_ID,
       occurredAt: END_AT_SECONDS,

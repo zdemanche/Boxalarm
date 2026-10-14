@@ -196,6 +196,17 @@ describe('putQualsHandler', () => {
     expect(result.statusCode).toBe(422);
   });
 
+  it.each(['A#B', 'A,B'])(
+    'returns 422 when qualCode %s would write an audit id the audit endpoint cannot look up',
+    async (qualCode) => {
+      const result = (await putQualsHandler(
+        buildEvent({ body: JSON.stringify({ qualCode }) }),
+      )) as { statusCode: number };
+      expect(result.statusCode).toBe(422);
+      expect(putQual).not.toHaveBeenCalled();
+    },
+  );
+
   it('returns 404 when the member does not exist', async () => {
     vi.mocked(memberExists).mockResolvedValue(false);
     const result = (await putQualsHandler(
