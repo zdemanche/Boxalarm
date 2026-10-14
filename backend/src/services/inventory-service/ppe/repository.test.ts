@@ -12,7 +12,8 @@ import {
   derivePpeStatus,
   issuePpeAssignment,
   listPpeAssignmentsForMember,
-  ppeItemIdForType,
+  buildPpeItemId,
+  normalizePpeItemType,
   queryPpeAssignmentsDueInMonth,
 } from './repository.js';
 
@@ -37,9 +38,19 @@ describe('computeNfpaExpiryDate (AC1 — 10-year NFPA service life)', () => {
   });
 });
 
-describe('ppeItemIdForType', () => {
-  it('replaces underscores with hyphens', () => {
-    expect(ppeItemIdForType('TURNOUT_COAT')).toBe('TURNOUT-COAT');
+describe('normalizePpeItemType', () => {
+  it('upper-cases and joins words with underscores so spelling variants share one type', () => {
+    expect(normalizePpeItemType('turnout coat')).toBe('TURNOUT_COAT');
+    expect(normalizePpeItemType(' Turnout-Coat ')).toBe('TURNOUT_COAT');
+    expect(normalizePpeItemType('TURNOUT_COAT')).toBe('TURNOUT_COAT');
+    expect(normalizePpeItemType('S.C.B.A. #2 mask')).toBe('S_C_B_A_2_MASK');
+  });
+});
+
+describe('buildPpeItemId', () => {
+  it('keys by type and issue date so a replacement item does not collide with the old one', () => {
+    expect(buildPpeItemId('TURNOUT_COAT', '2016-11-10')).toBe('TURNOUT-COAT-2016-11-10');
+    expect(buildPpeItemId('TURNOUT_COAT', '2026-10-01')).toBe('TURNOUT-COAT-2026-10-01');
   });
 });
 
@@ -82,7 +93,7 @@ describe('issuePpeAssignment (AC1)', () => {
     const record = await issuePpeAssignment(client, config, params);
 
     expect(record).toEqual({
-      ppeItemId: 'TURNOUT-COAT',
+      ppeItemId: 'TURNOUT-COAT-2026-01-10',
       memberId: 'MBR-1',
       itemType: 'TURNOUT_COAT',
       size: '44R',
@@ -98,20 +109,46 @@ describe('issuePpeAssignment (AC1)', () => {
     const assignmentPut = items[0]?.Put;
     expect(assignmentPut?.Item).toMatchObject({
       pk: 'DEPT#NICHOLS#MEMBER#MBR-1',
-      sk: 'PPE#TURNOUT-COAT',
+      sk: 'PPE#TURNOUT-COAT-2026-01-10',
       gsi1pk: 'MEMBER#MBR-1',
       gsi1sk: 'PPE_ASSIGNMENT#2036-01-10',
       gsi2pk: 'DEPT#NICHOLS#DUE#PPE_ASSIGNMENT#2036-01',
-      gsi2sk: '2036-01-10#TURNOUT-COAT',
+      gsi2sk: '2036-01-10#TURNOUT-COAT-2026-01-10',
       status: 'ISSUED',
     });
     expect(assignmentPut?.ConditionExpression).toBe('attribute_not_exists(pk)');
     expect(items[1]?.Put?.Item).toMatchObject({
       mutatedEntityType: 'PPE_ASSIGNMENT',
       action: 'CREATE',
-      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#PPE_ASSIGNMENT#TURNOUT-COAT',
+      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#PPE_ASSIGNMENT#TURNOUT-COAT-2026-01-10',
       gsi3sk: '1768003200',
     });
+  });
+
+  it('stores the normalised itemType so "turnout coat" and TURNOUT_COAT are one type', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    const record = await issuePpeAssignment(client, config, {
+      ...params,
+      itemType: 'turnout coat',
+    });
+
+    expect(record.itemType).toBe('TURNOUT_COAT');
+    expect(record.ppeItemId).toBe('TURNOUT-COAT-2026-01-10');
+  });
+
+  it('issues a replacement of the same type on a later date under a distinct key', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    await issuePpeAssignment(client, config, params);
+    await issuePpeAssignment(client, config, { ...params, issueDate: '2026-10-01' });
+
+    const sks = send.mock.calls.map(
+      (call) => (call[0] as TransactWriteCommand).input.TransactItems?.[0]?.Put?.Item?.sk as string,
+    );
+    expect(sks).toEqual(['PPE#TURNOUT-COAT-2026-01-10', 'PPE#TURNOUT-COAT-2026-10-01']);
   });
 
   it('throws PpeAssignmentConflictError, not a raw exception, on a re-issue conflict (409 path)', async () => {

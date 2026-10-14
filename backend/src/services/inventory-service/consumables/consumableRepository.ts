@@ -1,5 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  PutCommand,
+  QueryCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -131,35 +137,98 @@ function consumableKey(deptId: VerifiedDeptId, itemId: string) {
 
 type AuditChangedFields = Record<string, { readonly old?: unknown; readonly new: unknown }>;
 
+function buildAuditItem(
+  deptId: VerifiedDeptId,
+  actorId: string,
+  itemId: string,
+  action: 'CREATE' | 'UPDATE',
+  changedFields: AuditChangedFields,
+) {
+  const ts = Date.now();
+  const date = new Date(ts).toISOString().slice(0, 10);
+  return {
+    pk: buildDeptScopedPk(deptId, 'AUDIT', date),
+    sk: `${ts}#CONSUMABLE_STOCK#${itemId}#${actorId}`,
+    entityType: 'AUDIT_LOG_ENTRY',
+    mutatedEntityType: 'CONSUMABLE_STOCK',
+    mutatedEntityId: itemId,
+    action,
+    actorId,
+    changedFields,
+    ts,
+    gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'CONSUMABLE_STOCK', itemId),
+    gsi3sk: String(ts),
+  };
+}
+
 async function writeAuditLogEntry(
   docClient: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   actorId: string,
   itemId: string,
+  action: 'CREATE' | 'UPDATE',
   changedFields: AuditChangedFields,
 ): Promise<void> {
-  const ts = Date.now();
-  const date = new Date(ts).toISOString().slice(0, 10);
   await docClient.send(
     new PutCommand({
       TableName: tableName,
-      Item: {
-        pk: buildDeptScopedPk(deptId, 'AUDIT', date),
-        sk: `${ts}#CONSUMABLE_STOCK#${itemId}#${actorId}`,
-        entityType: 'AUDIT_LOG_ENTRY',
-        mutatedEntityType: 'CONSUMABLE_STOCK',
-        mutatedEntityId: itemId,
-        action: 'UPDATE' as const,
-        actorId,
-        changedFields,
-        ts,
-        gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'CONSUMABLE_STOCK', itemId),
-        gsi3sk: String(ts),
-      },
+      Item: buildAuditItem(deptId, actorId, itemId, action, changedFields),
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
     }),
   );
+}
+
+export interface CreateConsumableInput {
+  readonly itemName: string;
+  readonly stockLevel: number;
+  readonly reorderThreshold: number;
+  readonly location?: string;
+}
+
+export async function createConsumable(
+  docClient: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  actorId: string,
+  input: CreateConsumableInput,
+): Promise<ConsumableStock> {
+  const itemId = randomUUID();
+  const item = {
+    ...consumableKey(deptId, itemId),
+    entityType: 'CONSUMABLE_STOCK' as const,
+    itemName: input.itemName,
+    stockLevel: input.stockLevel,
+    reorderThreshold: input.reorderThreshold,
+    ...(input.location ? { location: input.location } : {}),
+    gsi3pk: buildDeptScopedPk(deptId, 'CONSUMABLE'),
+    gsi3sk: itemId,
+  };
+  await docClient.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: tableName,
+            Item: item,
+            ConditionExpression: 'attribute_not_exists(pk)',
+          },
+        },
+        {
+          Put: {
+            TableName: tableName,
+            Item: buildAuditItem(deptId, actorId, itemId, 'CREATE', {
+              itemName: { new: input.itemName },
+              stockLevel: { new: input.stockLevel },
+              reorderThreshold: { new: input.reorderThreshold },
+            }),
+            ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+          },
+        },
+      ],
+    }),
+  );
+  return toConsumableStock(item) as ConsumableStock;
 }
 
 export interface RestockConsumableInput {
@@ -217,6 +286,6 @@ export async function restockConsumable(
     return undefined;
   }
 
-  await writeAuditLogEntry(docClient, tableName, deptId, actorId, itemId, changedFields);
+  await writeAuditLogEntry(docClient, tableName, deptId, actorId, itemId, 'UPDATE', changedFields);
   return toConsumableStock(attributes as unknown as ConsumableStockItem);
 }

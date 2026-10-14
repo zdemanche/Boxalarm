@@ -123,8 +123,11 @@ describe('listEquipmentAssets', () => {
       const input = (command as QueryCommand).input;
       expect(input.IndexName).toBe('GSI1');
       expect(input.ExpressionAttributeValues?.[':gsi1Pk']).toBe('MEMBER#MBR-1');
-      expect(input.FilterExpression).toBe('deptId = :deptId');
+      expect(input.FilterExpression).toBe(
+        'deptId = :deptId AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired)',
+      );
       expect(input.ExpressionAttributeValues?.[':deptId']).toBe('NICHOLS');
+      expect(input.ExpressionAttributeValues?.[':retired']).toBe('RETIRED');
       return { Items: [] };
     });
     await listEquipmentAssets(client, TABLE, DEPT_ID, {
@@ -167,10 +170,13 @@ describe('listEquipmentAssets', () => {
     const client = fakeDocClient((command) => {
       const input = (command as QueryCommand).input;
       expect(input.IndexName).toBe('GSI3');
-      expect(input.FilterExpression).toBe('assignedToType = :type AND assignedToId = :id');
+      expect(input.FilterExpression).toBe(
+        'assignedToType = :type AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired) AND assignedToId = :id',
+      );
       expect(input.ExpressionAttributeValues).toMatchObject({
         ':type': 'APPARATUS',
         ':id': 'APP-1',
+        ':retired': 'RETIRED',
       });
       return { Items: [] };
     });
@@ -274,6 +280,39 @@ describe('setAssignment', () => {
     expect(
       await setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'missing', 'MEMBER', 'MBR-1'),
     ).toBeUndefined();
+    expect(commands).toHaveLength(1);
+  });
+});
+
+describe('setAssignment retired guard', () => {
+  it('conditions the update on the asset not being RETIRED', async () => {
+    let updateInput: UpdateCommand['input'] | undefined;
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        updateInput = command.input;
+        return { Attributes: { assetId: 'AS-1' } };
+      }
+      return {};
+    });
+    await setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'AS-1', 'MEMBER', 'MBR-1');
+    expect(updateInput?.ConditionExpression).toContain('lifecycleStatus <> :retired');
+    expect(updateInput?.ExpressionAttributeValues?.[':retired']).toBe('RETIRED');
+    expect(updateInput?.ReturnValuesOnConditionCheckFailure).toBe('ALL_OLD');
+  });
+
+  it('throws ConflictError (409), not undefined, when the existing asset is RETIRED and writes no audit entry', async () => {
+    const commands: unknown[] = [];
+    const client = fakeDocClient((command) => {
+      commands.push(command);
+      throw new ConditionalCheckFailedException({
+        message: 'condition failed',
+        $metadata: {},
+        Item: { lifecycleStatus: { S: 'RETIRED' } },
+      });
+    });
+    await expect(
+      setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'AS-1', 'MEMBER', 'MBR-1'),
+    ).rejects.toMatchObject({ status: 409 });
     expect(commands).toHaveLength(1);
   });
 });

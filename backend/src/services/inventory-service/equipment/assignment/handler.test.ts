@@ -116,6 +116,22 @@ describe('handler (PUT /api/v1/inventory/equipment/{assetId}/assignment)', () =>
     expect(result.statusCode).toBe(404);
   });
 
+  it('409 problem+json when the asset is RETIRED', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const client = fakeDocClient(() => {
+      throw new ConditionalCheckFailedException({
+        message: 'condition failed',
+        $metadata: {},
+        Item: { lifecycleStatus: { S: 'RETIRED' } },
+      });
+    });
+    const result = await invoke(
+      event('AS-1', { assignedToType: 'MEMBER', assignedToId: 'MBR-1' }),
+      client,
+    );
+    expect(result.statusCode).toBe(409);
+  });
+
   it('403 and no write when Cedar denies (caller lacks chief/admin/officer)', async () => {
     authzSend.mockResolvedValue({ decision: 'DENY' });
     const client = fakeDocClient(() => ({}));

@@ -4,6 +4,7 @@ import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/li
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import { ConflictError } from '../lib/problemDetails.js';
 
 // ponytail (P4, file count over the new-service lean cap): inventory-service had no real
 // implementation before this ticket, only its index.ts stub, so this changeset is genuine
@@ -172,11 +173,13 @@ export async function listEquipmentAssets(
       TableName: tableName,
       IndexName: 'GSI1',
       KeyConditionExpression: 'gsi1pk = :gsi1Pk AND begins_with(gsi1sk, :prefix)',
-      FilterExpression: 'deptId = :deptId',
+      FilterExpression:
+        'deptId = :deptId AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired)',
       ExpressionAttributeValues: {
         ':gsi1Pk': `MEMBER#${filter.assignedToId}`,
         ':prefix': 'EQUIPMENT_ASSET#',
         ':deptId': deptId,
+        ':retired': 'RETIRED',
       },
     });
     return items
@@ -190,7 +193,9 @@ export async function listEquipmentAssets(
   let filterExpression: string | undefined;
   if (filter.assignedToType) {
     expressionValues[':type'] = filter.assignedToType;
-    filterExpression = 'assignedToType = :type';
+    expressionValues[':retired'] = 'RETIRED';
+    filterExpression =
+      'assignedToType = :type AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired)';
     if (filter.assignedToId) {
       expressionValues[':id'] = filter.assignedToId;
       filterExpression += ' AND assignedToId = :id';
@@ -215,15 +220,21 @@ async function conditionalUpdate(
   updateExpression: string,
   expressionValues: Record<string, string>,
   expressionNames?: Record<string, string>,
+  rejectRetired = false,
 ): Promise<EquipmentAsset | undefined> {
   try {
     const result = await docClient.send(
       new UpdateCommand({
         TableName: tableName,
         Key: assetKey(deptId, assetId),
-        ConditionExpression: 'attribute_exists(pk)',
+        ConditionExpression: rejectRetired
+          ? 'attribute_exists(pk) AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired)'
+          : 'attribute_exists(pk)',
+        ...(rejectRetired ? { ReturnValuesOnConditionCheckFailure: 'ALL_OLD' as const } : {}),
         UpdateExpression: updateExpression,
-        ExpressionAttributeValues: expressionValues,
+        ExpressionAttributeValues: rejectRetired
+          ? { ...expressionValues, ':retired': 'RETIRED' }
+          : expressionValues,
         ...(expressionNames ? { ExpressionAttributeNames: expressionNames } : {}),
         ReturnValues: 'ALL_NEW',
       }),
@@ -233,6 +244,9 @@ async function conditionalUpdate(
       : undefined;
   } catch (error) {
     if (error instanceof ConditionalCheckFailedException) {
+      if (rejectRetired && error.Item?.lifecycleStatus?.S === 'RETIRED') {
+        throw new ConflictError(`equipment asset ${assetId} is retired and cannot be assigned`);
+      }
       return undefined;
     }
     throw error;
@@ -267,6 +281,8 @@ export async function setAssignment(
     assetId,
     updateExpression,
     expressionValues,
+    undefined,
+    true,
   );
   if (asset) {
     await writeAuditLogEntry(docClient, tableName, deptId, actorId, 'UPDATE', assetId, {

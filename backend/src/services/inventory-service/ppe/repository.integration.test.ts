@@ -73,7 +73,7 @@ describe('issuePpeAssignment against real DynamoDB (LocalStack)', () => {
     });
 
     expect(assignments).toHaveLength(1);
-    expect(assignments[0]?.ppeItemId).toBe('TURNOUT-COAT');
+    expect(assignments[0]?.ppeItemId).toBe('TURNOUT-COAT-2026-01-10');
   });
 
   it('rejects a real conditional-put conflict on re-issue with PpeAssignmentConflictError', async () => {

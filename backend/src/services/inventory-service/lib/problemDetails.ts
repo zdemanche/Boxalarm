@@ -23,6 +23,12 @@ export class NotFoundError extends ProblemError {
   }
 }
 
+export class ConflictError extends ProblemError {
+  constructor(detail: string) {
+    super(409, 'Conflict', detail);
+  }
+}
+
 export class DependencyUnavailableError extends ProblemError {
   constructor(detail: string) {
     super(500, 'Dependency Unavailable', detail);

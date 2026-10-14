@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { CedarPrincipalContext, GuardEvent, WithAuthorizationOptions } from '@boxalarm/authz';
 
@@ -51,7 +51,7 @@ function fakeDynamoClient(handlers: {
       if (command.constructor.name === 'GetCommand') {
         return (handlers.get ?? (() => Promise.resolve({})))();
       }
-      if (command.constructor.name === 'UpdateCommand') {
+      if (command.constructor.name === 'TransactWriteCommand') {
         return (handlers.update ?? (() => Promise.resolve({})))();
       }
       throw new Error(`unexpected command ${command.constructor.name}`);
@@ -227,13 +227,46 @@ describe('inventory lifecycle handler', () => {
     expect(body.lifecycleStatus).toBe('RETIRED');
   });
 
+  it('audits the transition with the caller as actor (F9.4)', async () => {
+    const { createLifecycleHandler } = await import('./handler.js');
+    const client = fakeDynamoClient({
+      get: () => Promise.resolve({ Item: { lifecycleStatus: 'IN_SERVICE' } }),
+    });
+    const inner = createLifecycleHandler(client);
+
+    await inner(
+      buildEvent(
+        { authorization: 'Bearer token' },
+        ADMIN,
+        { assetId: 'AS-0055' },
+        JSON.stringify({ lifecycleStatus: 'RETIRED' }),
+      ),
+      ADMIN,
+    );
+
+    const transact = (client.send as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[0] as { constructor: { name: string }; input: unknown })
+      .find((command) => command.constructor.name === 'TransactWriteCommand');
+    const auditPut = (
+      transact?.input as {
+        TransactItems: { Put?: { Item: { actorId: string; sk: string } } }[];
+      }
+    ).TransactItems[1]?.Put?.Item;
+    expect(auditPut?.actorId).toBe('admin-1');
+    expect(auditPut?.sk.endsWith('#admin-1')).toBe(true);
+  });
+
   it('returns 409, not a silent write, when the transition loses a concurrent-update race', async () => {
     const { createLifecycleHandler } = await import('./handler.js');
     const inner = createLifecycleHandler(
       fakeDynamoClient({
         get: () => Promise.resolve({ Item: { lifecycleStatus: 'IN_SERVICE' } }),
         update: () => {
-          throw new ConditionalCheckFailedException({ message: 'conflict', $metadata: {} });
+          throw new TransactionCanceledException({
+            message: 'conflict',
+            $metadata: {},
+            CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+          });
         },
       }),
     );

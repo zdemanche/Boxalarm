@@ -44,7 +44,7 @@ function parseIssueRequest(
     return 'Request body must be a JSON object';
   }
   const { itemType, size, issueDate } = parsed as Record<string, unknown>;
-  if (typeof itemType !== 'string' || !itemType.trim()) {
+  if (typeof itemType !== 'string' || !/[A-Za-z0-9]/.test(itemType)) {
     return 'itemType is required and must be a non-empty string';
   }
   if (typeof size !== 'string' || !size.trim()) {
