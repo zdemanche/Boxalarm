@@ -9,7 +9,6 @@ import {
   EMPTY_HYDRANTS,
   EMPTY_TRAINING,
   epochToIsoDate,
-  monthBuckets,
   summarizeApparatusTests,
   summarizeHydrants,
   summarizeTrainingHours,
@@ -19,6 +18,7 @@ import {
 } from './summarize.js';
 
 const EPOCH_SORT_WIDTH = 13;
+const HYDRANT_READ_CONCURRENCY = 25;
 
 function padEpoch(value: number): string {
   return String(value).padStart(EPOCH_SORT_WIDTH, '0');
@@ -46,8 +46,8 @@ async function loadTrainingHours(
     KeyConditionExpression: 'gsi3pk = :pk AND gsi3sk BETWEEN :from AND :to',
     ExpressionAttributeValues: {
       ':pk': buildDeptScopedPk(deptId, 'TRAINING_EVENT'),
-      ':from': padEpoch(from),
-      ':to': padEpoch(to),
+      ':from': padEpoch(Math.floor(from) * 1000),
+      ':to': padEpoch(Math.floor(to) * 1000 + 999),
     },
   });
   const records: { category: string; hours: number }[] = [];
@@ -123,21 +123,37 @@ export async function loadHydrantFlowTests(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  from: number,
   to: number,
 ): Promise<HydrantFlowSection> {
+  const listed = await queryAllPages(client, {
+    TableName: tableName,
+    IndexName: 'GSI3',
+    KeyConditionExpression: 'gsi3pk = :pk',
+    ExpressionAttributeValues: { ':pk': buildDeptScopedPk(deptId, 'HYDRANT') },
+  });
+  const hydrantIds = listed.flatMap((entry) =>
+    typeof entry.hydrantId === 'string' ? [entry.hydrantId] : [],
+  );
   const records: { hydrantId: string; nextFlowTestDue: string }[] = [];
-  for (const bucket of monthBuckets(from, to)) {
-    const items = await queryAllPages(client, {
-      TableName: tableName,
-      IndexName: 'GSI2',
-      KeyConditionExpression: 'gsi2pk = :pk',
-      ExpressionAttributeValues: {
-        ':pk': buildDeptScopedPk(deptId, 'DUE', 'HYDRANT', bucket),
-      },
-    });
-    for (const item of items) {
-      if (typeof item.hydrantId === 'string' && typeof item.nextFlowTestDue === 'string') {
+  for (let start = 0; start < hydrantIds.length; start += HYDRANT_READ_CONCURRENCY) {
+    const rows = await Promise.all(
+      hydrantIds.slice(start, start + HYDRANT_READ_CONCURRENCY).map((hydrantId) =>
+        queryAllPages(client, {
+          TableName: tableName,
+          KeyConditionExpression: 'pk = :pk AND sk = :sk',
+          ExpressionAttributeValues: {
+            ':pk': buildDeptScopedPk(deptId, 'HYDRANT', hydrantId),
+            ':sk': 'METADATA',
+          },
+        }),
+      ),
+    );
+    for (const item of rows.flat()) {
+      if (
+        item.archivedAt === undefined &&
+        typeof item.hydrantId === 'string' &&
+        typeof item.nextFlowTestDue === 'string'
+      ) {
         records.push({ hydrantId: item.hydrantId, nextFlowTestDue: item.nextFlowTestDue });
       }
     }
@@ -180,7 +196,7 @@ export async function loadIsoReport(
       loadApparatusTests(platform, platformTable, deptId, fromDate, toDate),
     ),
     sectionOrEmpty('hydrantFlowTests', EMPTY_HYDRANTS, () =>
-      loadHydrantFlowTests(platform, platformTable, deptId, from, to),
+      loadHydrantFlowTests(platform, platformTable, deptId, to),
     ),
     sectionOrEmpty('responseTimes', EMPTY_RESPONSE, () =>
       loadResponseTimeAnalytics(incident, incidentTable, deptId, from, to),

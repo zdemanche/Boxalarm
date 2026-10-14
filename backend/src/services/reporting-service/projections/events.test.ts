@@ -21,19 +21,33 @@ describe('projection event parsing', () => {
       }),
     );
     expect(parsed.deptId).toBe('NICHOLS');
-    expect(projectionWrites(parsed, now)).toEqual([
-      {
-        kind: 'update',
-        sk: 'ATTENDANCE#drill-1#m-1',
-        values: {
-          entityType: 'REPORTING_ATTENDANCE',
-          memberId: 'm-1',
-          activityId: 'drill-1',
-          activityType: 'UNKNOWN',
-          losapPoints: 2,
+    expect(projectionWrites(parsed, now)).toEqual([]);
+  });
+
+  it('still rejects an attendance event that is missing its activityId', () => {
+    const parsed = parseDomainEvent(
+      JSON.stringify({
+        eventId: 'evt-1',
+        eventType: 'personnel.attendance.recorded',
+        payload: { deptId: 'NICHOLS', memberId: 'm-1' },
+      }),
+    );
+    expect(() => projectionWrites(parsed, now)).toThrow(MalformedEventError);
+  });
+
+  it('carries the envelope eventTime as epoch milliseconds', () => {
+    const iso = '2026-03-01T12:00:00.000Z';
+    const parsed = parseDomainEvent(
+      JSON.stringify({
+        detail: {
+          eventId: 'evt-1',
+          eventType: 'personnel.availability.changed',
+          eventTime: iso,
+          payload: { deptId: 'NICHOLS', memberId: 'm-1' },
         },
-      },
-    ]);
+      }),
+    );
+    expect(parsed.eventTimeMs).toBe(Date.parse(iso));
   });
 
   it('rejects a body that is not JSON', () => {

@@ -9,6 +9,7 @@ export interface DomainEvent {
   readonly eventId: string;
   readonly eventType: string;
   readonly deptId: string;
+  readonly eventTimeMs?: number;
   readonly payload: Readonly<Record<string, unknown>>;
 }
 
@@ -16,6 +17,7 @@ export type ProjectionWrite =
   | {
       readonly kind: 'update';
       readonly sk: string;
+      readonly clock?: 'statusAt' | 'availabilityAt';
       readonly values: Readonly<Record<string, unknown>>;
     }
   | { readonly kind: 'delete'; readonly sk: string };
@@ -70,6 +72,14 @@ function epochMs(value: unknown, fallback: number): number {
   return value < 1_000_000_000_000 ? Math.round(value * 1000) : Math.round(value);
 }
 
+function eventTimeMs(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? epochMs(value, 0) : undefined;
+  }
+  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
 export function parseDomainEvent(body: string): DomainEvent {
   let raw: unknown;
   try {
@@ -103,7 +113,14 @@ export function parseDomainEvent(body: string): DomainEvent {
   if (!eventId || !eventType || !deptId) {
     throw new MalformedEventError('event is missing eventId, eventType, or deptId');
   }
-  return { eventId, eventType, deptId, payload };
+  const parsedEventTimeMs = eventTimeMs(source.eventTime ?? root.time);
+  return {
+    eventId,
+    eventType,
+    deptId,
+    payload,
+    ...(parsedEventTimeMs === undefined ? {} : { eventTimeMs: parsedEventTimeMs }),
+  };
 }
 
 function memberStatusWrite(payload: Readonly<Record<string, unknown>>): ProjectionWrite {
@@ -115,6 +132,7 @@ function memberStatusWrite(payload: Readonly<Record<string, unknown>>): Projecti
   return {
     kind: 'update',
     sk: `MEMBER#${memberId}`,
+    clock: 'statusAt',
     values: { entityType: 'REPORTING_MEMBER', memberId, status },
   };
 }
@@ -154,21 +172,9 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
   const payload = event.payload;
   switch (event.eventType) {
     case 'personnel.attendance.recorded': {
-      const memberId = requireString(payload, 'memberId');
-      const activityId = requireString(payload, 'activityId');
-      return [
-        {
-          kind: 'update',
-          sk: `ATTENDANCE#${activityId}#${memberId}`,
-          values: {
-            entityType: 'REPORTING_ATTENDANCE',
-            memberId,
-            activityId,
-            activityType: stringField(payload, 'activityType') ?? 'UNKNOWN',
-            losapPoints: typeof payload.losapPoints === 'number' ? payload.losapPoints : 0,
-          },
-        },
-      ];
+      requireString(payload, 'memberId');
+      requireString(payload, 'activityId');
+      return [];
     }
     case 'personnel.member.updated':
       // member.updated also carries profile, push-token and role changes, which hold no
@@ -187,6 +193,7 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         {
           kind: 'update',
           sk: `MEMBER#${memberId}`,
+          clock: 'availabilityAt',
           values: {
             entityType: 'REPORTING_MEMBER',
             memberId,

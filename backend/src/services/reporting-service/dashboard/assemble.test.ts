@@ -53,4 +53,16 @@ describe('assembleDashboard', () => {
     ]);
     expect(view.expiringCertifications.count).toBe(2);
   });
+
+  it('ignores tombstoned rollup rows', () => {
+    const view = assembleDashboard(
+      [
+        { sk: 'OOS#E1', removed: true, ttl: 1 },
+        { sk: 'NERIS#inc-1', removed: true, ttl: 1 },
+      ],
+      now,
+    );
+    expect(view.outOfServiceApparatus).toEqual([]);
+    expect(view.nerisCompliance.submissions).toEqual([]);
+  });
 });

@@ -85,6 +85,9 @@ export function assembleDashboard(
   const today = new Date(nowMs).toISOString().slice(0, 10);
 
   for (const item of items) {
+    if (item.removed === true) {
+      continue;
+    }
     const sk = text(item, 'sk');
     if (sk === 'META') {
       const updatedAt = epochMs(item.updatedAt);

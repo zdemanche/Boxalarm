@@ -23,8 +23,11 @@ export async function handleProjectionBatch(
         continue;
       }
       const deptId = toVerifiedDeptId({ deptId: parsed.deptId });
-      await applyProjection(client, tableName, deptId, parsed, nowMs());
-      emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingProjectionApplied');
+      const outcome = await applyProjection(client, tableName, deptId, parsed, nowMs());
+      emitOutcomeMetric(
+        METRICS_NAMESPACE,
+        outcome === 'stale' ? 'ReportingProjectionStale' : 'ReportingProjectionApplied',
+      );
     } catch (error) {
       logError('reporting.projections.apply_failed', error, {
         messageId: record.messageId,
