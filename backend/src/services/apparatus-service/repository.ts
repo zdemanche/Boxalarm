@@ -239,6 +239,29 @@ async function findOpenOutOfServiceRecord(
     : undefined;
 }
 
+export async function hasOutOfServiceRecordSince(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  apparatusId: string,
+  since: number,
+): Promise<boolean> {
+  const output = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: 'pk = :apparatusPk AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: {
+        ':apparatusPk': buildDeptScopedPk(deptId, 'APPARATUS', apparatusId),
+        ':prefix': 'OOS#',
+      },
+      ScanIndexForward: false,
+      Limit: 1,
+    }),
+  );
+  const startAt: unknown = output.Items?.[0]?.startAt;
+  return typeof startAt === 'number' && startAt >= since;
+}
+
 function epochSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
