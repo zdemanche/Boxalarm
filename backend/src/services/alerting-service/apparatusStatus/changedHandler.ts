@@ -87,8 +87,9 @@ function logError(
 
 /**
  * #235: a read-only alerting-owned copy of each unit's in/out-of-service status, kept
- * dept-wide (not per-dispatch) so the dispatch-detail route can annotate a responding
- * apparatus without a platform-table grant (alerting-plane IAM boundary). Only the fields
+ * dept-wide (not per-dispatch) for a future dispatch-detail annotation of a responding
+ * apparatus without a platform-table grant (alerting-plane IAM boundary). Nothing reads it
+ * yet, and a defect-driven out-of-service flip emits no event, so it misses those. Only the fields
  * this event carries are set, so a redelivery with the same eventId is a no-op.
  */
 export const handler = async (event: SQSEvent): Promise<void> => {

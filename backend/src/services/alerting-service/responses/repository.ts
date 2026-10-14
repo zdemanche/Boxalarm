@@ -267,7 +267,7 @@ async function applyToRoster(
         UpdateExpression:
           'SET entityType = :entityType, memberId = :memberId, ackStatus = :ackStatus, ackAt = :ackAt, ackAtMs = :ackAtMs, ackReceivedAtMs = :receivedAtMs, eta = :eta, assignedApparatusId = :assignedApparatusId, lastAnsweredTone = :toneSequence, quals = :quals, currentChannelTier = if_not_exists(currentChannelTier, :primary), escalationLevel = if_not_exists(escalationLevel, :zero)',
         ConditionExpression:
-          '(attribute_not_exists(ackAtMs) AND (attribute_not_exists(ackAt) OR :ackAt >= ackAt)) OR :ackAtMs > ackAtMs OR (:ackAtMs = ackAtMs AND :receivedAtMs > ackReceivedAtMs)',
+          '(attribute_not_exists(ackAtMs) AND (attribute_not_exists(ackAt) OR :ackAt >= ackAt)) OR :ackAtMs > ackAtMs OR (:ackAtMs = ackAtMs AND :receivedAtMs >= ackReceivedAtMs)',
         ExpressionAttributeValues: {
           ':entityType': 'DISPATCH_ROSTER_ENTRY',
           ':memberId': memberId,
@@ -314,7 +314,7 @@ async function recordGuardOutcome(
       }),
     );
   } catch (error) {
-    // A replay without it re-applies the stored answer, which gives the same outcome.
+    // A replay without it re-applies the stored answer; an answer already on the roster re-applies as APPLIED.
     logError('responses.record.guard_outcome_write_failed', error, { memberId });
   }
 }
