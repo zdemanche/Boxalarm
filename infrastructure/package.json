@@ -15,7 +15,7 @@
     "@pulumi/pulumi": "3.263.0"
   },
   "devDependencies": {
-    "@aws-sdk/client-cloudtrail": "3.1136.0",
+    "@aws-sdk/client-cloudtrail": "3.1149.0",
     "@aws-sdk/client-lambda": "3.1136.0",
     "@aws-sdk/client-sns": "3.1136.0",
     "@aws-sdk/client-sts": "3.1146.0",
