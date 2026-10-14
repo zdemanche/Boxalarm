@@ -162,6 +162,10 @@ function buildAuditItem(
   };
 }
 
+export function addressIndexSegment(normalizedAddress: string): string {
+  return normalizedAddress.replace(/%/g, '%25').replace(/#/g, '%23');
+}
+
 export async function createOccupancy(
   config: OccupancyServiceConfig,
   principal: VerifiedPrincipal,
@@ -204,7 +208,12 @@ export async function createOccupancy(
     sk: `ADDR#${input.normalizedAddress}`,
     entityType: 'OCCUPANCY_ADDRESS_INDEX',
     occupancyId,
-    gsi3pk: buildDeptScopedPk(deptId, 'OCCUPANCY', 'ADDR', input.normalizedAddress),
+    gsi3pk: buildDeptScopedPk(
+      deptId,
+      'OCCUPANCY',
+      'ADDR',
+      addressIndexSegment(input.normalizedAddress),
+    ),
     gsi3sk: occupancyId,
   };
 

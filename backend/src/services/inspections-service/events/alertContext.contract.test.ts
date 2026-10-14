@@ -165,15 +165,19 @@ describe('inspections -> alerting dispatch-context contract', () => {
       send: producerSend,
     } as unknown as DynamoDBDocumentClient);
     const { createHydrant } = await import('../hydrant/hydrantRepository.js');
-    await createHydrant(DEPT_ID, {
-      hydrantId: 'HYD-0231',
-      latitude: 41.2417,
-      longitude: -73.2004,
-      size: '6-inch',
-      flowRatingGpm: 1000,
-      nextFlowTestDue: '2027-01-10',
-      status: 'IN_SERVICE',
-    });
+    await createHydrant(
+      DEPT_ID,
+      {
+        hydrantId: 'HYD-0231',
+        latitude: 41.2417,
+        longitude: -73.2004,
+        size: '6-inch',
+        flowRatingGpm: 1000,
+        nextFlowTestDue: '2027-01-10',
+        status: 'IN_SERVICE',
+      },
+      'mbr-102',
+    );
     const body = await drainToSqsBody(outboxItemFrom(producerSend));
 
     const alertingSend = mockAlertingTable();
@@ -215,7 +219,7 @@ describe('inspections -> alerting dispatch-context contract', () => {
       send: producerSend,
     } as unknown as DynamoDBDocumentClient);
     const { updateHydrant } = await import('../hydrant/hydrantRepository.js');
-    await updateHydrant(DEPT_ID, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+    await updateHydrant(DEPT_ID, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'mbr-102');
     const body = await drainToSqsBody(outboxItemFrom(producerSend));
 
     const alertingSend = mockAlertingTable();

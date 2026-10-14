@@ -126,7 +126,7 @@ export async function createHydrantInner(
   const deptId = toVerifiedDeptId(principal);
 
   try {
-    const hydrant = await createHydrant(deptId, validated);
+    const hydrant = await createHydrant(deptId, validated, principal.sub);
     emitMetric('HydrantCreated');
     return {
       statusCode: 201,

@@ -8,6 +8,7 @@ import {
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
+import { buildAuditLogEntryTransactItem } from '../../platform-service/audit/auditEntry.js';
 import { getDocumentClient, readHydrantTableConfig } from './dynamoClient.js';
 import { logError } from './logger.js';
 import {
@@ -88,6 +89,15 @@ export function buildHydrantEventPayload(
   };
 }
 
+function pickPatchedFields(
+  existing: Partial<HydrantRecord>,
+  patch: UpdateHydrantInput,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.keys(patch).map((field) => [field, existing[field as keyof UpdateHydrantInput]]),
+  );
+}
+
 export class HydrantAlreadyExistsError extends Error {
   constructor(hydrantId: string) {
     super(`hydrant "${hydrantId}" already exists`);
@@ -112,6 +122,7 @@ export class HydrantNotFoundError extends Error {
 export async function createHydrant(
   deptId: VerifiedDeptId,
   input: CreateHydrantInput,
+  actorId: string,
 ): Promise<HydrantRecord> {
   const { tableName } = readHydrantTableConfig(process.env);
   const now = Date.now();
@@ -167,6 +178,21 @@ export async function createHydrant(
           },
           { Put: { TableName: tableName, Item: listIndexItem } },
           { Put: { TableName: tableName, Item: outboxRecord } },
+          buildAuditLogEntryTransactItem(tableName, {
+            deptId,
+            actorId,
+            mutatedEntityType: 'HYDRANT',
+            mutatedEntityId: input.hydrantId,
+            action: 'CREATE',
+            after: {
+              latitude: item.latitude,
+              longitude: item.longitude,
+              size: item.size,
+              flowRatingGpm: item.flowRatingGpm,
+              nextFlowTestDue: item.nextFlowTestDue,
+              status: item.status,
+            },
+          }),
         ],
       }),
     );
@@ -245,6 +271,7 @@ export async function updateHydrant(
   hydrantId: string,
   patch: UpdateHydrantInput,
   correlationId: string,
+  actorId: string,
 ): Promise<HydrantRecord> {
   const { tableName } = readHydrantTableConfig(process.env);
   const pk = buildDeptScopedPk(deptId, 'HYDRANT', hydrantId);
@@ -327,6 +354,16 @@ export async function updateHydrant(
                 Item: outboxRecord,
               },
             },
+            buildAuditLogEntryTransactItem(tableName, {
+              deptId,
+              actorId,
+              mutatedEntityType: 'HYDRANT',
+              mutatedEntityId: hydrantId,
+              action: 'UPDATE',
+              before: pickPatchedFields(existing, effectivePatch),
+              after: { ...effectivePatch },
+              traceId: correlationId,
+            }),
           ],
         }),
       );

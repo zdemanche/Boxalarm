@@ -85,6 +85,14 @@ describe('createHydrantInner (business logic, AC1)', () => {
     expect(persisted.gsi3pk).toMatch(/^DEPT#NICHOLS#HYDRANT#GEO#/);
   });
 
+  it('records the authenticated member as the audit actor', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await createHydrantInner(buildEvent({ body: validBody }), validPrincipal);
+    const audit =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[3]?.Put?.Item;
+    expect(audit?.actorId).toBe('mbr-102');
+  });
+
   it('rejects an absent body with 400 RFC7807', async () => {
     const result = (await createHydrantInner(buildEvent({}), validPrincipal)) as {
       statusCode: number;

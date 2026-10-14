@@ -163,6 +163,25 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     });
   });
 
+  it('creates an occupancy whose address contains # with an encoded ADDR index partition', async () => {
+    const occupancyId = `OCC-${Date.now()}-hash`;
+    await createOccupancy(
+      config,
+      PRINCIPAL,
+      occupancyId,
+      { ...sampleCreateInput(), address: '12 Oak St #3', normalizedAddress: '12 OAK ST #3' },
+      'MBR-0001',
+      'trace-hash',
+    );
+    const addrIndex = await documentClientForTest().send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${DEPT_ID}#OCCUPANCY#${occupancyId}`, sk: 'ADDR#12 OAK ST #3' },
+      }),
+    );
+    expect(addrIndex.Item?.gsi3pk).toBe(`DEPT#${DEPT_ID}#OCCUPANCY#ADDR#12 OAK ST %233`);
+  });
+
   it('creates an occupancy without coordinates and omits the GEO gsi3pk/gsi3sk pair', async () => {
     const occupancyId = `OCC-${Date.now()}-nogeo`;
     const { latitude, longitude, ...noCoords } = sampleCreateInput();
