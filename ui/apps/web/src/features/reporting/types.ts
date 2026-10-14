@@ -100,8 +100,7 @@ export interface GrantsReport {
   memberCountTrend: { joinedInPeriod: number; trendMethod: 'joinDateApproximation' };
   /** Incident volume is `available: false` until the incident rollup is wired (E6-S1). */
   totalIncidentVolume:
-    | { available: false; reason: string }
-    | { available: true; total: number; byType: { incidentType: string; count: number }[] };
+    { available: false; reason: string } | { available: true; totalIncidents: number };
   trainingHoursCompliance: { totalHours: number; memberCount: number; eventCount: number };
   apparatusOutOfServiceHistory: {
     records: { unitId: string; reason: string; startAt: number; endAt: number | null }[];

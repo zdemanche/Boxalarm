@@ -230,20 +230,10 @@ function responseTimes(fromSeconds: number, toSeconds: number): ResponseTimeAnal
   };
 }
 
-/** The two Trumbull incident types a grant reviewer cares about most are already labelled. */
 function incidentVolume(fromSeconds: number, toSeconds: number) {
-  const counts = new Map<string, number>();
-  const inRange = incidentsBetween(fromSeconds, toSeconds);
-  for (const incident of inRange) {
-    const type = incident.incidentType ?? 'Unclassified';
-    counts.set(type, (counts.get(type) ?? 0) + 1);
-  }
   return {
     available: true as const,
-    total: inRange.length,
-    byType: [...counts.entries()]
-      .map(([incidentType, count]) => ({ incidentType, count }))
-      .sort((a, b) => b.count - a.count || a.incidentType.localeCompare(b.incidentType)),
+    totalIncidents: incidentsBetween(fromSeconds, toSeconds).length,
   };
 }
 

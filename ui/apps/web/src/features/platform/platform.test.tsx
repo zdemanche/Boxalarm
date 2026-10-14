@@ -598,6 +598,23 @@ test('Settings links LOSAP point rules to its change history', async () => {
   expect(screen.getAllByRole('link', { name: /^Change history/ })).toHaveLength(1);
 });
 
+test('Settings has no generic editor for LOSAP point rules', async () => {
+  const losapReads = vi.fn();
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.get('/api/v1/platform/config/LOSAP_POINT_RULES', () => {
+      losapReads();
+      return HttpResponse.json({}, { status: 404 });
+    }),
+  );
+  renderRoute(['ADMIN'], '/settings');
+
+  await screen.findByRole('link', { name: 'LOSAP point rules' });
+  await screen.findByText('Alert rule timing');
+  expect(screen.getAllByText('LOSAP point rules')).toHaveLength(1);
+  expect(losapReads).not.toHaveBeenCalled();
+});
+
 test('a 400 saving a config lists the RFC 7807 field-level errors (m1)', async () => {
   server.use(
     ...settingsDefaultHandlers(),

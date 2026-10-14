@@ -15,8 +15,8 @@ import type {
 
 export async function getConfig(
   tokens: AuthTokenSource,
-  // RIDING_POSITIONS is read here (schedule position picker) but edited elsewhere.
-  configType: EditableConfigType | 'RIDING_POSITIONS',
+  // RIDING_POSITIONS and LOSAP_POINT_RULES are read here but edited elsewhere.
+  configType: EditableConfigType | 'LOSAP_POINT_RULES' | 'RIDING_POSITIONS',
 ): Promise<ConfigResponse> {
   const response = await apiRequest(`platform/config/${configType}`, tokens);
   return (await response.json()) as ConfigResponse;

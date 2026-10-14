@@ -96,6 +96,27 @@ test('a preset posts epoch seconds to the signed-in member and confirms', async 
   expect(body?.reason).toBe('Travel');
 });
 
+test('a new mark-off appears in the list with an End now button', async () => {
+  const markOffs: { markoffId: string; startAt: number; endAt: number }[] = [];
+  server.use(
+    http.get('/api/v1/personnel/members/:memberId/availability', () =>
+      HttpResponse.json({ markOffs }),
+    ),
+    http.post('/api/v1/personnel/members/:memberId/availability', async ({ request }) => {
+      const body = (await request.json()) as { startAt: number; endAt: number };
+      markOffs.push({ markoffId: String(body.startAt), ...body });
+      return HttpResponse.json({ affectsAlerting: true, ...body }, { status: 201 });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+
+  await user.click(await screen.findByRole('radio', { name: '24 hours' }));
+  await user.click(screen.getByRole('button', { name: 'Mark unavailable' }));
+
+  expect(await screen.findByRole('button', { name: /^End the mark-off until/ })).toBeTruthy();
+});
+
 test('custom dates use labelled date-time pickers', async () => {
   const user = userEvent.setup();
   renderPage();

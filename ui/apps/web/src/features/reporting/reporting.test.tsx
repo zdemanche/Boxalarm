@@ -306,7 +306,7 @@ test('grants shows incident volume as unavailable rather than a number', async (
   expect(Number(seen?.get('periodEnd'))).toBeGreaterThan(Number(seen?.get('periodStart')));
 });
 
-test('grants shows incident volume and the by-type table once the report carries it', async () => {
+test('grants shows incident volume once the report carries it', async () => {
   server.use(
     dashboardHandler(DASHBOARD),
     http.get('/api/v1/reporting/grants', () =>
@@ -319,11 +319,7 @@ test('grants shows incident volume and the by-type table once the report carries
         memberCountTrend: { joinedInPeriod: 2, trendMethod: 'joinDateApproximation' },
         totalIncidentVolume: {
           available: true,
-          total: 53,
-          byType: [
-            { incidentType: 'Fire alarm activation', count: 20 },
-            { incidentType: 'Motor vehicle accident', count: 13 },
-          ],
+          totalIncidents: 53,
         },
         trainingHoursCompliance: { totalHours: 120, memberCount: 15, eventCount: 9 },
         apparatusOutOfServiceHistory: { records: [], totalOutOfServiceEvents: 0 },
@@ -335,9 +331,7 @@ test('grants shows incident volume and the by-type table once the report carries
 
   expect(await screen.findByText('53')).toBeTruthy();
   expect(screen.queryByText('Not available')).toBeNull();
-  const table = screen.getByRole('table', { name: 'Incident volume by type' });
-  expect(within(table).getByRole('rowheader', { name: 'Fire alarm activation' })).toBeTruthy();
-  expect(within(table).getByRole('cell', { name: '13' })).toBeTruthy();
+  expect(screen.queryByRole('table', { name: 'Incident volume by type' })).toBeNull();
 });
 
 test('membership trends refuses a range over 731 days without calling the API', async () => {

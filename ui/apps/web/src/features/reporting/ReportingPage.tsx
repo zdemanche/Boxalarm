@@ -670,7 +670,7 @@ function GrantsPanel() {
                 {report.totalIncidentVolume.available ? (
                   <Stat
                     label="Incident volume"
-                    value={report.totalIncidentVolume.total}
+                    value={report.totalIncidentVolume.totalIncidents}
                     hint="Incidents with an alarm time in the period"
                   />
                 ) : (
@@ -682,31 +682,6 @@ function GrantsPanel() {
                 )}
               </div>
               <div className={styles.sectionGrid}>
-                {report.totalIncidentVolume.available ? (
-                  <Card title="Incident volume by type">
-                    <DataTable
-                      caption="Incident volume by type"
-                      rowKey={(r) => r.incidentType}
-                      rows={report.totalIncidentVolume.byType}
-                      emptyMessage="No incidents in this period."
-                      columns={[
-                        {
-                          key: 'type',
-                          header: 'Type',
-                          isRowHeader: true,
-                          render: (r) => r.incidentType,
-                        },
-                        {
-                          key: 'count',
-                          header: 'Incidents',
-                          align: 'right',
-                          sortValue: (r) => r.count,
-                          render: (r) => r.count,
-                        },
-                      ]}
-                    />
-                  </Card>
-                ) : null}
                 <Card title="Apparatus out-of-service history">
                   <DataTable
                     caption="Apparatus out-of-service history"
