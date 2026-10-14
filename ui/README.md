@@ -57,8 +57,8 @@ npx react-native run-ios --simulator "iPhone 17 Pro"
 DEMO_MODE is refused whenever `API_BASE_URL` is set, so a demo session never reaches a real API.
 
 Without `VITE_DEMO`, the web app needs `COGNITO_ISSUER`, `COGNITO_WEB_CLIENT_ID` and
-`COGNITO_HOSTED_UI_ORIGIN` (see `apps/web/src/auth/config.ts`). The GitHub Pages demo is built by
-`.github/workflows/pages.yml` on every push to `main` that touches `ui/`.
+`COGNITO_HOSTED_UI_ORIGIN` (see `apps/web/src/auth/config.ts`). The GitHub Pages demo is built and deployed by the `pages-build` and
+`pages-deploy` jobs in `.github/workflows/ui.yml` on every push to `main`, after `ui-verify` passes.
 
 Demo data lives in `apps/web/src/lib/demoRoster.ts` (the shared roster and fleet) and the
 per-feature `demoFixtures.ts` files; it is deterministic and dated relative to today.

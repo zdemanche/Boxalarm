@@ -7,7 +7,7 @@ Product context, architecture, and the backlog live at the monorepo root — rea
 
 ## Where things stand (2026-10-04)
 
-Both surfaces are built: `apps/web` (React SPA, ~30 role-gated routes) and `apps/mobile` (React Native). The web app ships a **demo mode** (`VITE_DEMO=true`: in-memory fake API, auto sign-in, live role switcher) that `.github/workflows/pages.yml` publishes to <https://zdemanche.github.io/Boxalarm/> on every push to `main`. The shared demo roster and fleet are in `apps/web/src/lib/demoRoster.ts`; every per-feature `demoFixtures.ts` keys on it. The build-phase gate was passed on 2026-09-04 (see `../CLAUDE.md`).
+Both surfaces are built: `apps/web` (React SPA, ~30 role-gated routes) and `apps/mobile` (React Native). The web app ships a **demo mode** (`VITE_DEMO=true`: in-memory fake API, auto sign-in, live role switcher) that the `pages-build` and `pages-deploy` jobs in `.github/workflows/ui.yml` publish to <https://zdemanche.github.io/Boxalarm/> on every push to `main`, after `ui-verify` passes. The shared demo roster and fleet are in `apps/web/src/lib/demoRoster.ts`; every per-feature `demoFixtures.ts` keys on it. The build-phase gate was passed on 2026-09-04 (see `../CLAUDE.md`).
 
 Work is tracked as `<KEY>-UI` monorepo issues labelled `area:ui`, each a sub-issue of its backend story.
 

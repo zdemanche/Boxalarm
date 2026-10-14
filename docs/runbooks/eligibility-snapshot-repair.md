@@ -6,7 +6,7 @@ The alerting plane pages from `MEMBER_ELIGIBILITY_SNAPSHOT` (`DEPT#{deptId}#ELIG
 
 Before fix/page-chain, every `personnel.member.updated` event failed with a DynamoDB ValidationException (the reserved word `roles`), so that DLQ can hold weeks of stale member changes. Do not redrive them.
 
-- A redriven event is an old snapshot of the member, delivered now. Each field is guarded by its own clock (`activeUpdatedAt`, `availabilityUpdatedAt`, `qualsUpdatedAt`, `rolesUpdatedAt`, `pushContactsUpdatedAt`, `phoneUpdatedAt`), so an old event cannot overwrite a newer one.
+- A redriven event is an old snapshot of the member, delivered now. Each field is guarded by its own clock (`activeUpdatedAt`, `availabilityUpdatedAt`, `rolesUpdatedAt`, `pushContactsUpdatedAt`, `phoneUpdatedAt`, and one clock per qualification in `qualClocks`), so an old event cannot overwrite a newer one. `qualsUpdatedAt` is only the newest of the qualification clocks, and `qualClocksFloor` holds the legacy member-wide clock of a snapshot written before `qualClocks` existed. Qualifications are written only by the eligibility-changed consumer; `personnel.member.updated` does not touch them.
 - It can still re-apply an old value to any field that has not changed since. For example, a push-device list from before a device was replaced.
 - The authoritative state is the personnel member row. Re-emit that instead.
 

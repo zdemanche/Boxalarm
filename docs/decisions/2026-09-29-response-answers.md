@@ -23,6 +23,7 @@ The live roster keeps the member's latest answer. "Latest" is decided by `answer
 - `answeredAtMs` is capped at the server clock. It may be at most 24 hours old.
 - Every answer is also kept in the append-only record, one item per answer.
 - If the roster did not take an answer because a later one is already there, the response is **409 with `code: "SUPERSEDED"`**, not 200. The member must not be told an answer is showing when it is not.
+- **Exception (amended 2026-10-14).** A replay or concurrent duplicate of the answer that is already on the roster (an identical `(ackAt, receivedAt)` pair) answers 200 `APPLIED` with `replayed: true`. Only a strictly older answer is superseded.
 
 ## Replays
 
