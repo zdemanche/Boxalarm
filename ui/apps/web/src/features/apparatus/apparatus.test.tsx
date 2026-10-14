@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -11,6 +11,7 @@ import { formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { RequireRole } from '../../routing/RequireRole';
 import { ApparatusDetailPage, defectPhotoSrc } from './ApparatusDetailPage';
 import { ApparatusListPage } from './ApparatusListPage';
+import { CompliancePage } from './CompliancePage';
 import type { Apparatus } from './types';
 
 const server = setupServer();
@@ -52,6 +53,14 @@ function renderApp(groups: string[], path = '/apparatus') {
               element={
                 <RequireRole>
                   <ApparatusListPage />
+                </RequireRole>
+              }
+            />
+            <Route
+              path="/apparatus/compliance"
+              element={
+                <RequireRole>
+                  <CompliancePage />
                 </RequireRole>
               }
             />
@@ -651,4 +660,240 @@ test('resolving requires a note before anything is sent', async () => {
 
   expect(await screen.findByText('A note saying how it was fixed is required.')).toBeTruthy();
   expect(posts).toBe(0);
+});
+
+function inventoryHandlers(getQuantity: () => number, puts: number[]) {
+  return [
+    mockDetail(),
+    http.get('/api/v1/apparatus/a1/inventory', () =>
+      HttpResponse.json({
+        compartments: [
+          {
+            compartmentCode: 'C1',
+            items: [{ itemId: 'i1', itemName: 'Halligan', quantity: getQuantity() }],
+          },
+        ],
+      }),
+    ),
+    http.put('/api/v1/apparatus/a1/inventory/:itemId', async ({ request }) => {
+      puts.push(((await request.json()) as { quantity: number }).quantity);
+      return new HttpResponse(null, { status: 204 });
+    }),
+  ];
+}
+
+test('clearing a quantity field and tabbing away saves nothing and restores the value (B2-180)', async () => {
+  const puts: number[] = [];
+  server.use(...inventoryHandlers(() => 2, puts));
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Inventory' }));
+  const input = await screen.findByLabelText('Quantity for Halligan');
+  await user.clear(input);
+  await user.tab();
+
+  await waitFor(() =>
+    expect((screen.getByLabelText('Quantity for Halligan') as HTMLInputElement).value).toBe('2'),
+  );
+  expect(puts).toEqual([]);
+});
+
+test('a refetched quantity replaces the stale number so a blur never writes it back (B2-180)', async () => {
+  const puts: number[] = [];
+  let serverQuantity = 2;
+  server.use(...inventoryHandlers(() => serverQuantity, puts));
+
+  const user = userEvent.setup();
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  await user.click(screen.getByRole('tab', { name: 'Inventory' }));
+  await screen.findByLabelText('Quantity for Halligan');
+
+  serverQuantity = 1;
+  window.dispatchEvent(new Event('visibilitychange'));
+  await waitFor(() =>
+    expect((screen.getByLabelText('Quantity for Halligan') as HTMLInputElement).value).toBe('1'),
+  );
+  await user.click(screen.getByLabelText('Quantity for Halligan'));
+  await user.tab();
+
+  expect(puts).toEqual([]);
+});
+
+test('the still-out-of-service warning goes away once the unit is returned to service (B2-185)', async () => {
+  let status: 'IN_SERVICE' | 'OUT_OF_SERVICE' = 'OUT_OF_SERVICE';
+  let resolved = false;
+  server.use(
+    http.get('/api/v1/apparatus/L1', () =>
+      HttpResponse.json({
+        apparatusId: 'a1',
+        unitId: 'L1',
+        type: 'Engine',
+        status,
+        outOfService:
+          status === 'OUT_OF_SERVICE'
+            ? { reason: 'Pump failure', startAt: 1, elapsedSeconds: 7200 }
+            : undefined,
+        openDefects: resolved
+          ? []
+          : [
+              {
+                defectId: 'DEF-9',
+                description: 'Pump will not engage',
+                severity: 'OUT_OF_SERVICE',
+                reportedAt: 1700000000,
+                photoS3Key: null,
+              },
+            ],
+        failedTests: [],
+      }),
+    ),
+    http.post('/api/v1/apparatus/L1/defects/DEF-9/resolve', () => {
+      resolved = true;
+      return HttpResponse.json({
+        defectId: 'DEF-9',
+        status: 'RESOLVED',
+        resolvedAt: 1700005000,
+        severity: 'OUT_OF_SERVICE',
+        unitStillOutOfService: true,
+      });
+    }),
+    http.put('/api/v1/apparatus/L1/service-status', () => {
+      status = 'IN_SERVICE';
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  renderApp(['OFFICER'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole('button', { name: 'Resolve defect: Pump will not engage' }),
+  );
+  await user.type(screen.getByLabelText('How was it fixed?'), 'Replaced the pump seal');
+  await user.click(screen.getByRole('button', { name: 'Confirm resolve' }));
+  const warning = 'L1 is still out of service — return it to service when it is ready.';
+  await screen.findByText(warning);
+
+  await user.click(screen.getByRole('button', { name: 'Return to service' }));
+  await screen.findByText('In service');
+  await waitFor(() => expect(screen.queryByText(warning)).toBeNull());
+});
+
+test('the default compliance range ends on the local calendar day, not the UTC one (B2-181)', async () => {
+  const originalTz = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-14T01:30:00Z') });
+  let query: URLSearchParams | undefined;
+  server.use(
+    http.get('/api/v1/apparatus/compliance', ({ request }) => {
+      query = new URL(request.url).searchParams;
+      return HttpResponse.json({ report: [] });
+    }),
+  );
+
+  try {
+    renderApp(['CHIEF'], '/apparatus/compliance');
+    expect(((await screen.findByLabelText('To')) as HTMLInputElement).value).toBe('2026-10-13');
+    expect((screen.getByLabelText('From') as HTMLInputElement).value).toBe('2026-10-06');
+    await waitFor(() => expect(query).toBeDefined());
+    expect(query?.get('to')).toBe(String(Date.UTC(2026, 9, 13) / 1000 + 86399));
+  } finally {
+    vi.useRealTimers();
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  }
+});
+
+test('an inverted compliance range shows a field error, keeps the pickers and sends no request (B2-186)', async () => {
+  let calls = 0;
+  server.use(
+    http.get('/api/v1/apparatus/compliance', () => {
+      calls += 1;
+      return HttpResponse.json({ report: [] });
+    }),
+  );
+
+  renderApp(['CHIEF'], '/apparatus/compliance');
+  const to = (await screen.findByLabelText('To')) as HTMLInputElement;
+  await waitFor(() => expect(calls).toBe(1));
+  fireEvent.change(to, { target: { value: '2000-01-01' } });
+
+  expect(await screen.findByText('Must be on or after From.')).toBeTruthy();
+  expect(screen.getByLabelText('From')).toBeTruthy();
+  expect(screen.getByLabelText('To')).toBeTruthy();
+  expect(calls).toBe(1);
+});
+
+test('a failed compliance read keeps the date pickers on screen (B2-186)', async () => {
+  server.use(
+    http.get('/api/v1/apparatus/compliance', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  renderApp(['CHIEF'], '/apparatus/compliance');
+  expect(await screen.findByText('Something went wrong loading this page')).toBeTruthy();
+  expect(screen.getByLabelText('From')).toBeTruthy();
+  expect(screen.getByLabelText('To')).toBeTruthy();
+});
+
+test('a failed maintenance read is not reported as nothing due (B2-188)', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/apparatus', () =>
+      HttpResponse.json({
+        apparatus: [
+          { apparatusId: 'a1', unitId: 'Engine 301', type: 'Engine', status: 'IN_SERVICE' },
+          { apparatusId: 'a2', unitId: 'Truck 304', type: 'Ladder', status: 'IN_SERVICE' },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/a1/maintenance', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+    http.get('/api/v1/apparatus/a2/maintenance', () =>
+      HttpResponse.json({ records: [], nextScheduled: now + 200 * 86400 }),
+    ),
+  );
+
+  renderApp(['CHIEF']);
+  const panel = (await screen.findByRole('heading', { name: 'Maintenance due soon' }))
+    .parentElement!;
+  expect(await within(panel).findByText(/Maintenance for 1 unit couldn.t load/)).toBeTruthy();
+  expect(within(panel).queryByText('No maintenance due within 30 days.')).toBeNull();
+});
+
+test('the roster still loading is not reported as nothing due (B2-188)', async () => {
+  server.use(http.get('/api/v1/apparatus', () => new Promise<never>(() => {})));
+
+  renderApp(['CHIEF']);
+  const panel = (await screen.findByRole('heading', { name: 'Maintenance due soon' }))
+    .parentElement!;
+  expect(within(panel).queryByText('No maintenance due within 30 days.')).toBeNull();
+});
+
+test('a failed equipment read is not reported as no equipment assigned (B2-188)', async () => {
+  server.use(
+    mockDetail(),
+    http.get('/api/v1/inventory/equipment', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  renderApp(['CHIEF'], '/apparatus/L1');
+  await screen.findByRole('heading', { name: 'L1' });
+  expect(await screen.findByText(/Assigned equipment couldn.t load/)).toBeTruthy();
+  expect(screen.queryByText('No equipment assigned.')).toBeNull();
 });

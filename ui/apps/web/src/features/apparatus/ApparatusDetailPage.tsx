@@ -105,7 +105,7 @@ export function ApparatusDetailPage() {
       ) : (
         <div className={styles.detailGrid}>
           <Card title="Open defects">
-            {resolveWarning ? (
+            {resolveWarning && unit.status === 'OUT_OF_SERVICE' ? (
               <p role="status" className={styles.notice}>
                 {resolveWarning}
               </p>
@@ -172,6 +172,10 @@ export function ApparatusDetailPage() {
             <Card title="Assigned equipment">
               {equipmentQuery.isLoading ? (
                 <Skeleton lines={2} />
+              ) : equipmentQuery.error ? (
+                <p role="status" className={styles.message}>
+                  Assigned equipment couldn&rsquo;t load. This is not an empty list.
+                </p>
               ) : equipment.length === 0 ? (
                 <p className={styles.message}>No equipment assigned.</p>
               ) : (
