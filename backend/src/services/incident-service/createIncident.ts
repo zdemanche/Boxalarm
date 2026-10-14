@@ -187,6 +187,7 @@ async function buildInputFromDispatch(
     throw new DispatchNotFoundError(dispatchId);
   }
   const activeSchema = await activeSchemaPromise;
+  const address = copy.verifyRequired ? undefined : copy.address;
 
   return {
     incidentId: dispatchId,
@@ -195,12 +196,12 @@ async function buildInputFromDispatch(
     nerisSchemaVersion: activeSchema?.version ?? UNVALIDATED_SCHEMA_VERSION,
     corePayload: {
       incident_type: copy.incidentType,
-      address: copy.address,
+      ...(address !== undefined ? { address } : {}),
       cross_streets: copy.crossStreets,
       narrative: copy.narrative,
     },
     incidentType: copy.incidentType,
-    address: copy.address,
+    ...(address !== undefined ? { address } : {}),
     narrative: copy.narrative,
     alarmAt: copy.dispatchedAt,
     dispatchAt: copy.dispatchedAt,
@@ -281,12 +282,24 @@ async function inner(
     let respondingUnits: readonly Record<string, unknown>[] = [];
     let respondingMembers: readonly unknown[] = [];
     if (dispatchId) {
-      const client = getDocumentClient();
-      const tableName = getTableName(process.env);
-      [respondingUnits, respondingMembers] = await Promise.all([
-        queryIncidentResponseUnits(client, tableName, deptId, incident.incidentId),
-        queryRosterCopy(client, tableName, deptId, incident.incidentId),
-      ]);
+      try {
+        const client = getDocumentClient();
+        const tableName = getTableName(process.env);
+        [respondingUnits, respondingMembers] = await Promise.all([
+          queryIncidentResponseUnits(client, tableName, deptId, incident.incidentId),
+          queryRosterCopy(client, tableName, deptId, incident.incidentId),
+        ]);
+      } catch (error) {
+        console.warn(
+          JSON.stringify({
+            event: 'incident.create.enrichment_failed',
+            correlationId: traceId,
+            deptId,
+            incidentId: incident.incidentId,
+            message: error instanceof Error ? error.message : undefined,
+          }),
+        );
+      }
     }
     return {
       statusCode: 201,

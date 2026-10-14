@@ -51,7 +51,7 @@ export interface IncidentRepository {
   updateCorePayload(
     deptId: VerifiedDeptId,
     incidentId: string,
-    corePayload: Readonly<Record<string, unknown>>,
+    fields: Readonly<Record<string, unknown>>,
     status: IncidentStatus,
     nowEpochSeconds: number,
     traceId: string,
@@ -402,17 +402,18 @@ export function createIncidentRepository(
       );
     },
 
-    async updateCorePayload(deptId, incidentId, corePayload, status, nowEpochSeconds, traceId) {
-      const setClauses = [
-        'corePayload = :corePayload',
-        '#status = :status',
-        'updatedAt = :updatedAt',
-      ];
+    async updateCorePayload(deptId, incidentId, fields, status, nowEpochSeconds, traceId) {
+      const names: Record<string, string> = { '#status': 'status' };
       const values: Record<string, unknown> = {
-        ':corePayload': corePayload,
         ':status': status,
         ':updatedAt': nowEpochSeconds,
       };
+      const setClauses = Object.entries(fields).map(([field, value], index) => {
+        names[`#f${index}`] = field;
+        values[`:f${index}`] = value;
+        return `corePayload.#f${index} = :f${index}`;
+      });
+      setClauses.push('#status = :status', 'updatedAt = :updatedAt');
 
       // Keep the denormalized top-level fields createIncident also stores (and that
       // searchIncidents.ts/GSI1 summaries and getIncident read directly, never corePayload)
@@ -420,12 +421,12 @@ export function createIncidentRepository(
       // completion is the common path that finalizes incident_type, since it's optional at
       // create and one of the two requiredFields this flow exists to fill in — leaving the
       // top-level field unsynced would make search summaries go stale relative to corePayload.
-      const incidentType = corePayload.incident_type;
+      const incidentType = fields.incident_type;
       if (typeof incidentType === 'string') {
         setClauses.push('incidentType = :incidentType');
         values[':incidentType'] = incidentType;
       }
-      const address = corePayload.address;
+      const address = fields.address;
       if (typeof address === 'string') {
         setClauses.push('address = :address');
         values[':address'] = address;
@@ -449,7 +450,7 @@ export function createIncidentRepository(
         incidentId,
         {
           UpdateExpression: `SET ${setClauses.join(', ')}`,
-          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeNames: names,
           ExpressionAttributeValues: values,
         },
         outboxRecord,
@@ -457,19 +458,26 @@ export function createIncidentRepository(
     },
 
     async searchIncidents(deptId, input) {
-      const result = await client.send(
-        new QueryCommand({
-          TableName: tableName,
-          IndexName: 'GSI1',
-          KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
-          ExpressionAttributeValues: {
-            ':pk': buildDeptScopedPk(deptId),
-            ':from': `INCIDENT#${input.fromAlarmAt}`,
-            ':to': `INCIDENT#${input.toAlarmAt}`,
-          },
-        }),
-      );
-      return (result.Items ?? []).map((item) => toIncident(item as Record<string, unknown>));
+      const items: Record<string, unknown>[] = [];
+      let exclusiveStartKey: Record<string, unknown> | undefined;
+      do {
+        const page = await client.send(
+          new QueryCommand({
+            TableName: tableName,
+            IndexName: 'GSI1',
+            KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
+            ExpressionAttributeValues: {
+              ':pk': buildDeptScopedPk(deptId),
+              ':from': `INCIDENT#${input.fromAlarmAt}`,
+              ':to': `INCIDENT#${input.toAlarmAt}`,
+            },
+            ExclusiveStartKey: exclusiveStartKey,
+          }),
+        );
+        items.push(...((page.Items ?? []) as Record<string, unknown>[]));
+        exclusiveStartKey = page.LastEvaluatedKey;
+      } while (exclusiveStartKey);
+      return items.map((item) => toIncident(item));
     },
   };
 }
