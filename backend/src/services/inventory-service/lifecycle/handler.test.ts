@@ -329,10 +329,15 @@ describe('inventory lifecycle handler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
-  it('returns 503, not a 403, on the exported handler when no assetId path parameter is present and the authz client rejects the empty resourceId (fail-closed, matches guard.ts AuthzUnavailableError handling)', async () => {
+  // withAuthorization refuses an empty resource id with a 400 before Verified Permissions is
+  // called, so the authz client is never asked.
+  it('returns 400 on the exported handler when no assetId path parameter is present, without calling the authz client', async () => {
     const { createHandler } = await import('./handler.js');
+    const authzSend = vi
+      .fn()
+      .mockRejectedValue(new Error('ValidationException: entityId must not be empty'));
     const rejectingAuthzClient = {
-      send: vi.fn().mockRejectedValue(new Error('ValidationException: entityId must not be empty')),
+      send: authzSend,
     } as unknown as NonNullable<WithAuthorizationOptions['client']>;
     const testHandler = createHandler({
       authzClient: rejectingAuthzClient,
@@ -348,6 +353,7 @@ describe('inventory lifecycle handler', () => {
       ),
     );
 
-    expect(result).toMatchObject({ statusCode: 503 });
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(authzSend).not.toHaveBeenCalled();
   });
 });
