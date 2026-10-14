@@ -398,6 +398,7 @@ describe('reportDefect handler', () => {
         unitId: 'E1',
         status: 'OUT_OF_SERVICE',
         reason: 'Pump failure',
+        origin: 'DEFECT',
       }),
     );
     const body = JSON.parse((result as { body: string }).body) as { outOfService: boolean };

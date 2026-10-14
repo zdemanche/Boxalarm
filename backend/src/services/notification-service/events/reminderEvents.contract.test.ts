@@ -204,6 +204,7 @@ describe('cert.expiry.due producer -> certExpiryConsumer', () => {
       deptId,
       memberId: 'MBR-0034',
       certId: 'CERT-0091',
+      certType: 'EMT-B',
       expiryDate: '2026-10-14',
       leadDays: 30,
       correlationId: 'trace-5',
@@ -217,6 +218,11 @@ describe('cert.expiry.due producer -> certExpiryConsumer', () => {
       'DEPT#NICHOLS#ROLE#TRAINING',
     ]);
     expect(rows[0]).toMatchObject({ certId: 'CERT-0091', expiryDate: '2026-10-14' });
+    expect(rows[0]?.item).toMatchObject({ title: 'EMT-B' });
+    expect(rows[1]?.item).toMatchObject({
+      title: 'EMT-B',
+      detail: 'held by MBR-0034, expires 2026-10-14',
+    });
   });
 });
 
@@ -338,7 +344,7 @@ describe('apparatus.serviceStatus.changed (outbox) -> apparatusStatusConsumer', 
   /** setServiceStatus's outbox row, drained by the real platform outbox publisher. */
   async function changedStatus(
     status: 'OUT_OF_SERVICE' | 'IN_SERVICE',
-    suppressEvent = false,
+    origin?: 'DEFECT',
   ): Promise<{ event: SQSEvent | null; outbox: Record<string, unknown> | undefined }> {
     const ddbSend = vi.fn().mockImplementation((command: SentCommand) => {
       if (command.constructor.name === 'QueryCommand') {
@@ -373,7 +379,7 @@ describe('apparatus.serviceStatus.changed (outbox) -> apparatusStatusConsumer', 
         ...(status === 'OUT_OF_SERVICE' ? { reason: 'Pump failure' } : {}),
         changedBy: 'OFF-9',
         correlationId: 'trace-7',
-        ...(suppressEvent ? { suppressEvent: true } : {}),
+        ...(origin ? { origin } : {}),
       },
     );
     const transact = ddbSend.mock.calls
@@ -507,9 +513,27 @@ describe('apparatus.serviceStatus.changed (outbox) -> apparatusStatusConsumer', 
     expect(email).toHaveBeenCalledTimes(1);
   });
 
-  it('the defect-driven OOS flip suppresses the status event (the defect event already notifies)', async () => {
-    const { outbox } = await changedStatus('OUT_OF_SERVICE', true);
-    expect(outbox).toBeUndefined();
+  it('a defect-driven OOS flip emits the status event with origin DEFECT but delivers nothing (the defect event already notifies)', async () => {
+    const { event, outbox } = await changedStatus('OUT_OF_SERVICE', 'DEFECT');
+    expect(outbox?.eventType).toBe('apparatus.serviceStatus.changed');
+    expect(outbox?.payload).toMatchObject({ origin: 'DEFECT', status: 'OUT_OF_SERVICE' });
+    expect(event).not.toBeNull();
+
+    const writes: Array<Record<string, unknown>> = [];
+    consumerDdb(writes);
+    const push = vi.fn().mockResolvedValue(undefined);
+    const email = vi.fn().mockResolvedValue(undefined);
+    vi.doMock('../channelSender.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../channelSender.js')>();
+      return { ...actual, sendPushDigest: push, sendEmailDigest: email };
+    });
+    const { handler } = await import('./apparatusStatusConsumer.js');
+
+    await handler(event!);
+
+    expect(writes).toEqual([]);
+    expect(push).not.toHaveBeenCalled();
+    expect(email).not.toHaveBeenCalled();
   });
 
   it('a redelivery is a no-op for an inbox already written and a channel already sent', async () => {

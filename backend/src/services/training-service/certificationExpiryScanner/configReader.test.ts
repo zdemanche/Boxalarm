@@ -3,6 +3,7 @@ import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   DEFAULT_CERT_EXPIRY_LEAD_DAYS,
+  MAX_CERT_EXPIRY_LEAD_DAYS,
   monthPartitionsForScan,
   readCertExpiryLeadDays,
   selectWithinLeadTime,
@@ -27,6 +28,14 @@ describe('readCertExpiryLeadDays', () => {
     expect(command).toBeInstanceOf(GetCommand);
     expect(command.input.Key).toEqual({ pk: 'DEPT#NICHOLS', sk: 'CONFIG#ALERT_RULES' });
     expect(leadDays).toBe(45);
+  });
+
+  it('clamps an oversized stored certExpiryLeadDays to the 365-day maximum', async () => {
+    const send = vi.fn().mockResolvedValue({ Item: { value: { certExpiryLeadDays: 1e9 } } });
+
+    const leadDays = await readCertExpiryLeadDays(fakeClient(send), env, deptId, 'trace-max');
+
+    expect(leadDays).toBe(MAX_CERT_EXPIRY_LEAD_DAYS);
   });
 
   it('falls back to the documented default when the config item is absent (AC4)', async () => {

@@ -15,6 +15,7 @@ import {
 
 const LABEL = 'apparatus.serviceStatus.changed';
 const LOG_PREFIX = 'notification.apparatusStatus';
+const DEFECT_ORIGIN = 'DEFECT';
 
 /**
  * The same immediate pipeline as the out-of-service defect: idempotent inbox record keyed on
@@ -65,7 +66,8 @@ function toStatusChange({ payload, eventTime }: EventEnvelope): StatusChange {
  * non-critical push and email through the same pipeline as the out-of-service defect, under
  * the 'apparatus-status' mute category. Idempotent on eventId end to end: the inbox Put is
  * conditional, each channel send is claim-guarded, so a redelivery is a no-op for anyone
- * already delivered. No digest row — a status change is news now, not tomorrow.
+ * already delivered. An origin 'DEFECT' event is acked undelivered: apparatus.defect.reported
+ * already notifies the same roles. No digest row — a status change is news now, not tomorrow.
  */
 export const handler = async (event: SQSEvent): Promise<void> => {
   const { tableName } = readNotificationConfig(process.env);
@@ -80,6 +82,9 @@ export const handler = async (event: SQSEvent): Promise<void> => {
     } catch (error) {
       logError(`${LOG_PREFIX}.malformed_event`, error, record.messageId);
       throw error;
+    }
+    if (envelope.payload.origin === DEFECT_ORIGIN) {
+      continue;
     }
     const deptId = toVerifiedDeptId({ deptId: change.deptId });
 

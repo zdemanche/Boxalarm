@@ -2,6 +2,7 @@ import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
 export const DEFAULT_CERT_EXPIRY_LEAD_DAYS = 30;
+export const MAX_CERT_EXPIRY_LEAD_DAYS = 365;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -35,7 +36,7 @@ export async function readCertExpiryLeadDays(
     const value = output.Item?.value as Record<string, unknown> | undefined;
     const leadDays = value?.certExpiryLeadDays;
     return typeof leadDays === 'number' && Number.isFinite(leadDays) && leadDays > 0
-      ? leadDays
+      ? Math.min(leadDays, MAX_CERT_EXPIRY_LEAD_DAYS)
       : DEFAULT_CERT_EXPIRY_LEAD_DAYS;
   } catch (error) {
     console.error(

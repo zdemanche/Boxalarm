@@ -23,6 +23,7 @@ const baseParams = {
   deptId,
   memberId: 'MBR-0034',
   certId: 'CERT-0091',
+  certType: 'EMT-B',
   expiryDate: '2026-10-14',
   leadDays: 30,
   correlationId: 'trace-1',
@@ -74,6 +75,7 @@ describe('publishDueEvent', () => {
       deptId: 'NICHOLS',
       memberId: 'MBR-0034',
       certId: 'CERT-0091',
+      certType: 'EMT-B',
       expiryDate: '2026-10-14',
       leadDays: 30,
     });

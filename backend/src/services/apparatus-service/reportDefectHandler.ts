@@ -399,9 +399,7 @@ async function reportDefect(
         reason: value.description,
         changedBy: principal.sub,
         correlationId: traceId,
-        // apparatus.defect.reported (outOfService: true) already notifies the same roles
-        // about this change; a serviceStatus.changed event too would double-notify.
-        suppressEvent: true,
+        origin: 'DEFECT',
       });
     } catch (error) {
       if (!(error instanceof ServiceStatusConflictError)) {

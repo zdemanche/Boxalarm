@@ -37,6 +37,7 @@ export interface PublishDueEventParams {
   readonly deptId: VerifiedDeptId;
   readonly memberId: string;
   readonly certId: string;
+  readonly certType: string;
   readonly expiryDate: string;
   readonly leadDays: number;
   readonly correlationId: string;
@@ -131,6 +132,7 @@ export async function publishDueEvent(
                 deptId: params.deptId,
                 memberId: params.memberId,
                 certId: params.certId,
+                certType: params.certType,
                 expiryDate: params.expiryDate,
                 leadDays: params.leadDays,
               },
