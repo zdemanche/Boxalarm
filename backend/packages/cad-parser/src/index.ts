@@ -63,7 +63,7 @@ export interface TemplateError {
 export const MAX_PARSE_CHARS = 16_384;
 export const MAX_PATTERN_LENGTH = 200;
 export const MAX_LABEL_LENGTH = 40;
-const MAX_FIELD_CHARS = 500;
+export const MAX_FIELD_CHARS = 500;
 export const MAX_NARRATIVE_CHARS = 4_000;
 
 /**

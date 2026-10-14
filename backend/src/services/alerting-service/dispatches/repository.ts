@@ -3,8 +3,14 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildBridgeOutboxRecord } from '../platformBusBridge.js';
+import { TEST_AUDIT_TTL_SECONDS } from '../channels/channelEnvelope.js';
 import type { DispatchReceived, SourceSystem } from './dispatchIngressPort.js';
 import { logError, logInfo } from './logger.js';
+
+export type ReplayMarkerItem = Record<string, unknown> & {
+  readonly pk: string;
+  readonly sk: string;
+};
 
 export interface CreateManualDispatchInput {
   readonly deptId: VerifiedDeptId;
@@ -19,11 +25,12 @@ export interface CreateManualDispatchInput {
   /** CAD ingress only (cadIngress/ingest.ts): which authenticated source and how it parsed. */
   readonly cad?: CadDispatchTags;
   /**
-   * CAD ingress only: the replay marker (cadIngress/replayGuard.ts), written as a conditional
-   * item of THIS transaction so marker and dispatch commit together or not at all - a failed
-   * write can never leave a marker behind that refuses the sender's retry (chain review M3).
+   * CAD ingress only: the replay markers (cadIngress/replayGuard.ts), each written as a
+   * conditional item of THIS transaction so markers and dispatch commit together or not at all -
+   * a failed write can never leave a marker behind that refuses the sender's retry (chain review
+   * M3), and two copies of one message racing each other cannot both commit.
    */
-  readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
+  readonly replayMarkers?: readonly ReplayMarkerItem[];
   /**
    * CAD ingress only: when the idempotency lock stops counting (epoch seconds). A later message
    * with the same identity after this time is a NEW dispatch (chain review C1: a text-only
@@ -62,7 +69,6 @@ export type CreateManualDispatchResult =
   | { readonly outcome: 'replay' };
 
 const LOCK_ITEM_INDEX = 0;
-const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 function mintDispatchId(
   deptId: VerifiedDeptId,
@@ -82,6 +88,7 @@ export async function createManualDispatch(
   const { deptId, dispatch, idempotencyKey, dispatchedAt } = input;
   const dispatchId = mintDispatchId(deptId, dispatchedAt, dispatch.sourceSystem);
   const isTest = dispatch.sourceSystem === 'SELF_TEST';
+  const replayMarkers = input.replayMarkers ?? [];
 
   const command = new TransactWriteCommand({
     TransactItems: [
@@ -225,23 +232,19 @@ export async function createManualDispatch(
             },
           ]
         : []),
-      ...(input.replayMarker
-        ? [
-            {
-              Put: {
-                TableName: tableName,
-                Item: input.replayMarker,
-                // An expired marker the TTL sweeper has not deleted yet is no marker.
-                ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
-                ExpressionAttributeNames: { '#ttl': 'ttl' },
-                ExpressionAttributeValues: { ':replayNow': input.replayMarker.createdAt },
-              },
-            },
-          ]
-        : []),
+      ...replayMarkers.map((marker) => ({
+        Put: {
+          TableName: tableName,
+          Item: marker,
+          // An expired marker the TTL sweeper has not deleted yet is no marker.
+          ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
+          ExpressionAttributeNames: { '#ttl': 'ttl' },
+          ExpressionAttributeValues: { ':replayNow': marker.createdAt },
+        },
+      })),
     ],
   });
-  const replayIndex = (command.input.TransactItems?.length ?? 0) - 1;
+  const firstReplayIndex = (command.input.TransactItems?.length ?? 0) - replayMarkers.length;
 
   try {
     await client.send(command);
@@ -249,8 +252,10 @@ export async function createManualDispatch(
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
       if (
-        input.replayMarker &&
-        error.CancellationReasons?.[replayIndex]?.Code === 'ConditionalCheckFailed'
+        replayMarkers.length > 0 &&
+        error.CancellationReasons?.slice(firstReplayIndex).some(
+          (reason) => reason.Code === 'ConditionalCheckFailed',
+        )
       ) {
         return { outcome: 'replay' };
       }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SESReceipt } from 'aws-lambda';
 import { isAligned } from './address.js';
-import type { ParsedEmail } from './mime.js';
+import type { HeaderCoverage, ParsedEmail } from './mime.js';
 
 /**
  * Email sender authentication (docs/decisions/2026-09-29-cad-ingress-auth.md, "Email path",
@@ -164,32 +164,61 @@ export function emailBodyReplayTtlSeconds(email: ParsedEmail, nowSeconds: number
   return Math.max(0, freshUntil - nowSeconds) + EMAIL_REPLAY_MARGIN_SECONDS;
 }
 
+export interface EmailReplayKey {
+  readonly token: string;
+  readonly ttlSeconds: number;
+}
+
+const NO_MESSAGE_ID = 'NOMSGID';
+
+function sha256(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function headerChoice(
+  coverage: HeaderCoverage,
+  strong: string | undefined,
+  weak: string,
+): { readonly primary: string; readonly others: readonly string[] } {
+  if (strong === undefined || coverage === 'none') return { primary: weak, others: [] };
+  return coverage === 'all' ? { primary: strong, others: [] } : { primary: weak, others: [strong] };
+}
+
 /**
- * Replay key. With a SIGNED Message-ID: that id + a hash of the signed Subject and the body
- * (held 24 h). Without one: a hash of the decoded body alone - the part DKIM protects that a
- * replayer cannot change. Never the b= or bh= values: a replayer can append signatures of
- * their own, and each would change the key (security review R3-M1). SES's own messageId is
- * never used either (a re-sent copy gets a new one).
+ * Replay keys. A key is the Message-ID (or NOMSGID) plus a hash of the Subject (or nothing) and
+ * the decoded body. A replayer can append DKIM signatures or delete the ones that do not cover a
+ * header, which flips that header between "signed" and "unsigned" without touching the message;
+ * so each of Message-ID and Subject has a strong value (the header as received) and a weak one
+ * (NOMSGID, no Subject):
+ *  - every signature covers it: only the strong value - a distinct call must never be mistaken
+ *    for a replay because some other message once had the weak key;
+ *  - none covers it: only the weak value;
+ *  - some cover it: the weak value is the key, and the strong value is written and checked too,
+ *    so a copy with the non-covering signatures stripped (now "all") finds it, and a copy of an
+ *    "all" original with one appended (now "some") finds that.
+ * Every combination is a marker in the dispatch transaction and every one is checked, so two
+ * toggled copies arriving together cannot both commit. Never the b= or bh= values: each appended
+ * signature would change the key (security review R3-M1). SES's own messageId is never used
+ * either (a re-sent copy gets a new one). Message-ID keys are held 24 h; NOMSGID keys until the
+ * message could no longer pass freshness.
  */
 export function emailReplayToken(
   email: ParsedEmail,
   nowSeconds: number,
-): {
-  readonly token: string;
-  readonly ttlSeconds: number;
-} {
-  if (email.messageId) {
-    const content = createHash('sha256')
-      .update(`${email.subject ?? ''}\n${email.text}`, 'utf8')
-      .digest('hex');
-    return {
-      token: createHash('sha256').update(`${email.messageId}|${content}`, 'utf8').digest('hex'),
-      ttlSeconds: EMAIL_REPLAY_TTL_SECONDS,
-    };
+): EmailReplayKey & { readonly also: readonly EmailReplayKey[] } {
+  const bodyTtl = emailBodyReplayTtlSeconds(email, nowSeconds);
+  const ids = headerChoice(email.messageIdCoverage, email.rawMessageId, NO_MESSAGE_ID);
+  const subjects = headerChoice(email.subjectCoverage, email.rawSubject ?? '', '');
+  const keys = new Map<string, EmailReplayKey>();
+  for (const id of [ids.primary, ...ids.others]) {
+    for (const subject of [subjects.primary, ...subjects.others]) {
+      const token = sha256(`${id}|${sha256(`${subject}\n${email.text}`)}`);
+      keys.set(token, {
+        token,
+        ttlSeconds: id === NO_MESSAGE_ID ? bodyTtl : EMAIL_REPLAY_TTL_SECONDS,
+      });
+    }
   }
-  const body = createHash('sha256').update(email.text, 'utf8').digest('hex');
-  return {
-    token: createHash('sha256').update(`NOMSGID|${body}`, 'utf8').digest('hex'),
-    ttlSeconds: emailBodyReplayTtlSeconds(email, nowSeconds),
-  };
+  const [primary, ...also] = keys.values();
+  return { ...primary!, also };
 }

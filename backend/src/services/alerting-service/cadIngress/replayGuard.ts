@@ -27,6 +27,7 @@ export function replayMarkerItem(
   ref: ReplayRef,
   nowSeconds: number,
   ttlSeconds: number,
+  origin?: string,
 ): Record<string, unknown> & { readonly pk: string; readonly sk: string } {
   return {
     ...replayKey(ref),
@@ -34,7 +35,22 @@ export function replayMarkerItem(
     deptId: ref.deptId,
     createdAt: nowSeconds,
     ttl: nowSeconds + ttlSeconds,
+    ...(origin ? { origin } : {}),
   };
+}
+
+export async function replayMarkerOrigin(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  ref: ReplayRef,
+  nowSeconds: number,
+): Promise<{ readonly marked: boolean; readonly origin?: string }> {
+  const { Item } = await client.send(
+    new GetCommand({ TableName: tableName, Key: replayKey(ref), ConsistentRead: true }),
+  );
+  // DynamoDB TTL deletion lags; an expired marker is no marker.
+  const marked = Item !== undefined && typeof Item.ttl === 'number' && Item.ttl > nowSeconds;
+  return marked && typeof Item?.origin === 'string' ? { marked, origin: Item.origin } : { marked };
 }
 
 export async function isReplayMarked(
@@ -43,9 +59,5 @@ export async function isReplayMarked(
   ref: ReplayRef,
   nowSeconds: number,
 ): Promise<boolean> {
-  const { Item } = await client.send(
-    new GetCommand({ TableName: tableName, Key: replayKey(ref), ConsistentRead: true }),
-  );
-  // DynamoDB TTL deletion lags; an expired marker is no marker.
-  return Item !== undefined && typeof Item.ttl === 'number' && Item.ttl > nowSeconds;
+  return (await replayMarkerOrigin(client, tableName, ref, nowSeconds)).marked;
 }

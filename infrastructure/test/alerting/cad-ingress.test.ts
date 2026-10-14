@@ -123,6 +123,37 @@ describe("CadIngress IAM: alerting boundary, never a LOB table", { timeout: 30_0
     }
   });
 
+  it.each([
+    ["webhook", WEBHOOK_FN, undefined],
+    ["email", EMAIL_FN, "ingress.nichols.example.org"],
+  ])(
+    "the %s role can read and write a concrete replay marker key (the handlers GetItem it before ingest)",
+    async (_name, fn, emailDomain) => {
+      await build(emailDomain);
+      const key = "DEPT#nichols-fd#CAD_REPLAY#src#abc";
+      const globToRegExp = (glob: string) =>
+        new RegExp(
+          `^${glob
+            .split("*")
+            .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+            .join(".*")}$`,
+        );
+      const allows = (action: string) =>
+        statementsForRole(fn).some(
+          (s) =>
+            s.Effect === "Allow" &&
+            asArray(s.Resource).includes(TABLE_ARN) &&
+            asArray(s.Action).includes(action) &&
+            asArray(s.Condition?.["ForAllValues:StringLike"]?.["dynamodb:LeadingKeys"] ?? []).some(
+              (glob) => globToRegExp(glob).test(key),
+            ),
+        );
+      expect(allows("dynamodb:GetItem")).toBe(true);
+      expect(allows("dynamodb:PutItem")).toBe(true);
+      expect(allows("dynamodb:DeleteItem")).toBe(false);
+    },
+  );
+
   it("the copy consumer writes only the CAD_INGRESS partition and consumes only its queue", async () => {
     await build();
     const statements = statementsForRole(COPY_FN);
@@ -231,6 +262,7 @@ describe(
       expect(settings?.inputs.settings).toEqual({ metricsEnabled: true });
       expect(lambdaByName(WEBHOOK_FN).inputs.reservedConcurrentExecutions).toBe(10);
       expect(lambdaByName(WEBHOOK_FN).inputs.timeout).toBe(10);
+      expect(lambdaByName(WEBHOOK_FN).inputs.memorySize).toBe(512);
     });
 
     it("one key's burst can take at most half the webhook's reserved concurrency", () => {

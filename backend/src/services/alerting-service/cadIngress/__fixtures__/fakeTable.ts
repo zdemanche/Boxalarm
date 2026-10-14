@@ -13,10 +13,16 @@ import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 export interface FakeTable {
   items: Map<string, Record<string, unknown>>;
   failTransact?: boolean;
+  failTransactFor?: string;
+  failGetFor?: string;
 }
 
 interface TransactEntry {
-  Put?: { Item: Record<string, unknown>; ConditionExpression?: string };
+  Put?: {
+    Item: Record<string, unknown>;
+    ConditionExpression?: string;
+    ExpressionAttributeValues?: Record<string, unknown>;
+  };
   Update?: {
     Key: Record<string, unknown>;
     UpdateExpression: string;
@@ -45,6 +51,12 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
     const name = command.constructor.name;
     const input = command.input;
     if (name === 'GetCommand') {
+      if (
+        table.failGetFor &&
+        String(table.items && (input.Key as { pk: string }).pk).includes(table.failGetFor)
+      ) {
+        return Promise.reject(new Error('dynamo down'));
+      }
       return Promise.resolve({
         Item: table.items.get(keyOf(input.Key as Record<string, unknown>)),
       });
@@ -64,6 +76,12 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
     if (name === 'TransactWriteCommand') {
       if (table.failTransact) return Promise.reject(new Error('dynamo down'));
       const entries = input.TransactItems as TransactEntry[];
+      if (
+        table.failTransactFor &&
+        entries.some((entry) => String(entry.Put?.Item.pk).includes(table.failTransactFor!))
+      ) {
+        return Promise.reject(new Error('dynamo down'));
+      }
       // Every conditional Put here is attribute_not_exists on its key (an expired lock or
       // marker, per its own expiry field, counts as absent - as the real conditions say).
       const reasons = entries.map((entry) => {
@@ -77,18 +95,30 @@ export function fakeDynamo(table: FakeTable): DynamoDBDocumentClient {
               existing.cadContentHash !== values[':hash']) &&
             (!condition.includes('cadMessageTime <= :mt') ||
               typeof existing.cadMessageTime !== 'number' ||
-              existing.cadMessageTime <= Number(values[':mt']));
+              existing.cadMessageTime <= Number(values[':mt'])) &&
+            (!condition.includes('updateCount = :revisionRead') ||
+              existing.updateCount === values[':revisionRead']) &&
+            (!condition.includes('attribute_not_exists(updateCount)') ||
+              existing.updateCount === undefined);
           return ok ? { Code: 'None' } : { Code: 'ConditionalCheckFailed' };
         }
         const put = entry.Put!;
         const existing = table.items.get(keyOf(put.Item));
-        const expired =
+        const cutoff = put.ExpressionAttributeValues?.[':cutoff'];
+        const legacyExpired =
           existing !== undefined &&
-          ((typeof existing.ttl === 'number' &&
-            put.Item.entityType === 'CAD_REPLAY_MARKER' &&
-            existing.ttl <= Number(put.Item.createdAt)) ||
-            (typeof existing.expiresAt === 'number' &&
-              existing.expiresAt <= Number(put.Item.createdAt)));
+          existing.expiresAt === undefined &&
+          typeof existing.createdAt === 'number' &&
+          typeof cutoff === 'number' &&
+          existing.createdAt <= cutoff;
+        const expired =
+          legacyExpired ||
+          (existing !== undefined &&
+            ((typeof existing.ttl === 'number' &&
+              put.Item.entityType === 'CAD_REPLAY_MARKER' &&
+              existing.ttl <= Number(put.Item.createdAt)) ||
+              (typeof existing.expiresAt === 'number' &&
+                existing.expiresAt <= Number(put.Item.createdAt))));
         return put.ConditionExpression && existing && !expired
           ? { Code: 'ConditionalCheckFailed' }
           : { Code: 'None' };

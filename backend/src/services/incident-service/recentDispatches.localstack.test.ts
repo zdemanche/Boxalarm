@@ -115,4 +115,31 @@ describe('recent dispatches (LocalStack)', () => {
     expect(reports.get('d-mid')).toEqual({ incidentId: 'd-mid', status: 'DRAFT' });
     expect(reports.has('d-new')).toBe(false);
   });
+
+  it('an older revision of a dispatch copy is ignored; a newer one replaces it', async () => {
+    const copy = (revision: number, address: string) =>
+      putDispatchAlertCopy(client, TABLE_NAME, {
+        dispatchId: 'd-rev',
+        deptId: DEPT,
+        incidentType: 'MVA',
+        address,
+        crossStreets: '',
+        narrative: 'two cars',
+        dispatchedAt: NOW - 300,
+        revision,
+      });
+    expect(await copy(2, '9 Corrected Ave')).toBe('updated');
+    expect(await copy(1, '5 Original St')).toBe('stale');
+    const listed = async () =>
+      (
+        await queryRecentDispatchCopies(client, TABLE_NAME, DEPT, {
+          fromSeconds: NOW - 3600,
+          toSeconds: NOW,
+          limit: 50,
+        })
+      ).dispatches.find((d) => d.dispatchId === 'd-rev');
+    expect(await listed()).toMatchObject({ address: '9 Corrected Ave' });
+    expect(await copy(3, '9 Corrected Ave Unit 2')).toBe('updated');
+    expect(await listed()).toMatchObject({ address: '9 Corrected Ave Unit 2' });
+  });
 });
