@@ -49,6 +49,9 @@ describe('publishDueEvent', () => {
     expect(putCommand.input.Item?.pk).toBe('DEPT#NICHOLS#CERT_EXPIRY_FLAG#2026-09-14');
     expect(putCommand.input.Item?.sk).toBe('CERT#CERT-0091');
     expect(putCommand.input.Item?.publishedAt).toBeUndefined();
+    expect(putCommand.input.Item?.ttl).toBe(
+      Math.floor(baseParams.now.getTime() / 1000) + 7 * 86400,
+    );
 
     const updateCommand = ddbSend.mock.calls[1]?.[0] as UpdateCommand;
     expect(updateCommand).toBeInstanceOf(UpdateCommand);

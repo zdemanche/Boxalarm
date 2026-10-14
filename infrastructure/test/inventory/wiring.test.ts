@@ -230,6 +230,18 @@ describe("inventory Lambdas: routes, env and IAM match their handlers", { timeou
     });
   });
 
+  it.each(["ppe-expiry-scanner", "consumable-reorder-scanner"])(
+    "the %s runs with an explicit timeout and memory above the AWS defaults",
+    async (suffix) => {
+      await build();
+      const lambda = resourcesOfType("aws:lambda/function:Function").find(
+        (r) => r.inputs.name === fn(suffix),
+      );
+      expect(lambda?.inputs.timeout).toBeGreaterThanOrEqual(60);
+      expect(lambda?.inputs.memorySize).toBeGreaterThanOrEqual(512);
+    },
+  );
+
   it("every role holding UpdateItem/DeleteItem on the platform table carries the audit-row deny", async () => {
     await build();
     const roles = resourcesOfType("aws:iam/role:Role").map((r) => r.inputs.name as string);
