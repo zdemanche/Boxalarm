@@ -159,6 +159,22 @@ describe('queryReceiptsForDispatch (AC2)', () => {
     });
   });
 
+  it('omits sentAt when no row carries one', async () => {
+    ddbMock.on(QueryCommand).resolves({
+      Items: [{ memberId: 'MBR-0012', channel: 'sms', toneSequence: 2 }],
+    });
+
+    const receipts = await queryReceiptsForDispatch(
+      ddbMock as unknown as DynamoDBDocumentClient,
+      'alerting-table',
+      deptId,
+      'NICHOLS-4471-1798000000',
+    );
+
+    expect(receipts).toEqual([{ memberId: 'MBR-0012', channel: 'sms', toneSequence: 2 }]);
+    expect(receipts[0]).not.toHaveProperty('sentAt');
+  });
+
   it('merges the fan-out receipt and the worker send guard into one lowercase-channel record carrying the guard failure', async () => {
     ddbMock.on(QueryCommand).resolves({
       Items: [

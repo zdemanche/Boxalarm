@@ -3,6 +3,7 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DeliverChannelMessageParams } from './deliverChannelMessage.js';
+import { TEST_AUDIT_TTL_SECONDS } from './channelEnvelope.js';
 
 const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
@@ -82,6 +83,35 @@ describe('deliverChannelMessage', () => {
     expect(putInput.Item.sentAt).toBeLessThan(10_000_000_000);
     expect(putInput.Item.gsi1sk).toBe(`RECEIPT#${putInput.Item.sentAt as number}#dispatch-1`);
     expect(sendPush).toHaveBeenCalledWith(...expectedPushCall());
+  });
+
+  it('keeps a self-test or canary send guard out of the member delivery history and expires it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockAdapter(vi.fn().mockResolvedValue({ outcome: 'sent' }));
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', { ...baseParams, isTest: true });
+
+    const { Item } = (send.mock.calls[0]?.[0] as { input: { Item: Record<string, unknown> } })
+      .input;
+    expect(Item).not.toHaveProperty('gsi1pk');
+    expect(Item).not.toHaveProperty('gsi1sk');
+    expect(Item.isTest).toBe(true);
+    expect(Item.ttl).toBe((Item.sentAt as number) + TEST_AUDIT_TTL_SECONDS);
+  });
+
+  it('indexes a real page guard by member and never expires it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockAdapter(vi.fn().mockResolvedValue({ outcome: 'sent' }));
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', baseParams);
+
+    const { Item } = (send.mock.calls[0]?.[0] as { input: { Item: Record<string, unknown> } })
+      .input;
+    expect(Item.gsi1pk).toBe('MEMBER#mbr-1');
+    expect(Item).not.toHaveProperty('ttl');
+    expect(Item).not.toHaveProperty('isTest');
   });
 
   it('no-ops without calling the provider when the idempotency key already exists for a prior successful attempt (duplicate skip)', async () => {

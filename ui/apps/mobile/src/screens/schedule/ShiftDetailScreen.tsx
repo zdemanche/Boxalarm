@@ -11,7 +11,7 @@ import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
-import type { DutyShift } from '../../features/schedule/types';
+import { SHIFT_PROBLEM_MESSAGE, type DutyShift } from '../../features/schedule/types';
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { NoCachedDataError } from '../../sync/readThrough';
@@ -21,7 +21,11 @@ import { formatShiftWindow } from './ShiftBoardScreen';
 // else (offline, 409, 500) gets a generic retry prompt, shown on screen and announced for a
 // screen-reader user who isn't focused on this row when the result lands.
 function describeError(e: unknown, forbiddenMessage: string, fallbackMessage: string): string {
-  return e instanceof ApiError && e.problem.status === 403 ? forbiddenMessage : fallbackMessage;
+  if (!(e instanceof ApiError)) return fallbackMessage;
+  return (
+    SHIFT_PROBLEM_MESSAGE[e.problem.type] ??
+    (e.problem.status === 403 ? forbiddenMessage : fallbackMessage)
+  );
 }
 
 // F2.9: a claim made offline (or, here, mid-flight) is queued as PENDING in the UI, never shown

@@ -46,7 +46,7 @@ const auth = {
 
 let postOutcome: (body: Record<string, unknown>) => Promise<unknown>;
 let posted: Record<string, unknown>[];
-let roster: { memberId: string; ackStatus: string; eta: number | null }[];
+let roster: { memberId: string; ackStatus: string; eta: number | null; quals?: string[] }[];
 
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -216,6 +216,16 @@ test('when the roster disagrees with an answer given here earlier, both are show
   await act(flush);
   expect(await screen.findByText(/your response: responding/i)).toBeTruthy();
   expect(screen.getByText('Sent')).toBeTruthy();
+});
+
+test('a roster row nobody has answered yet (server ackStatus NONE) is not shown as a sent answer', async () => {
+  roster = [{ memberId: 'MBR-1', ackStatus: 'NONE', eta: null, quals: [] }];
+
+  await renderScreen();
+  await act(flush);
+
+  expect(screen.queryByText('Sent')).toBeNull();
+  expect(screen.queryByText(/your response/i)).toBeNull();
 });
 
 test('after an answer is delivered the roster is read back; a change the roster did not take is flagged (review CR-3)', async () => {

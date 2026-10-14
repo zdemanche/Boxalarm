@@ -12,6 +12,7 @@ import {
   MarkOffBeingSentError,
   MarkOffNeedsConnectionError,
   NotSignedInError,
+  SHIFT_CLOSED_PROBLEM,
   type ClaimResult,
   type DutyShift,
   type MarkOff,
@@ -148,7 +149,11 @@ export function useScheduleRepository(): ScheduleRepository {
           // else holds the position. This is the only claim-failure status this codebase defines
           // for this route; a 412 check previously lived here too, but nothing anywhere in the
           // backend ever returns 412 for a shift claim, so it could never actually fire.
-          if (error instanceof ApiError && error.problem.status === 409) {
+          if (
+            error instanceof ApiError &&
+            error.problem.status === 409 &&
+            error.problem.type !== SHIFT_CLOSED_PROBLEM
+          ) {
             return 'ALREADY_TAKEN';
           }
           throw error;

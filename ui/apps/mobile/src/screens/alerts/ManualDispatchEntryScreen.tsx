@@ -99,7 +99,9 @@ export function ManualDispatchEntryScreen() {
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.problem.status === 409) {
-          setFormError('This dispatch was already entered. It has not been resubmitted.');
+          setFormError(
+            'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+          );
         } else if (Array.isArray((error.problem as { errors?: FieldError[] }).errors)) {
           setFieldErrors((error.problem as unknown as { errors: FieldError[] }).errors);
         } else {

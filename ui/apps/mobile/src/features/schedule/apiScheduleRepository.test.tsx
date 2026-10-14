@@ -216,6 +216,35 @@ test('claimPosition resolves ALREADY_TAKEN on a 409 (CONFLICT)', async () => {
   await expect(result.current.claimPosition('SHIFT-1', 'DRIVER')).resolves.toBe('ALREADY_TAKEN');
 });
 
+test('claimPosition resolves ALREADY_TAKEN on a shift-position-conflict 409', async () => {
+  mockApiRequest.mockRejectedValue(
+    new ApiError({
+      type: 'https://boxalarm.dev/problems/shift-position-conflict',
+      title: 'Conflict',
+      status: 409,
+      traceId: 'trace-409',
+    }),
+  );
+
+  const { result } = await renderHook(() => useScheduleRepository());
+
+  await expect(result.current.claimPosition('SHIFT-1', 'DRIVER')).resolves.toBe('ALREADY_TAKEN');
+});
+
+test('claimPosition re-throws a shift-closed 409 instead of reporting the position as taken', async () => {
+  const closed = new ApiError({
+    type: 'https://boxalarm.dev/problems/shift-closed',
+    title: 'Conflict',
+    status: 409,
+    traceId: 'trace-409',
+  });
+  mockApiRequest.mockRejectedValue(closed);
+
+  const { result } = await renderHook(() => useScheduleRepository());
+
+  await expect(result.current.claimPosition('SHIFT-1', 'DRIVER')).rejects.toBe(closed);
+});
+
 test('claimPosition re-throws a non-409 ApiError (e.g. NOT_FOUND) instead of masking it', async () => {
   const notFound = new ApiError({
     type: 'about:blank',

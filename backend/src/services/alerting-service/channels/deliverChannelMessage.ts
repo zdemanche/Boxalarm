@@ -15,6 +15,7 @@ import {
   parseCadUpdateEnvelope,
   parseMutualAidPromptEnvelope,
   resolveChannelTarget,
+  TEST_AUDIT_TTL_SECONDS,
   type ChannelEnvelopePayload,
   type ChannelName,
   type ContactChannelSnapshot,
@@ -132,8 +133,9 @@ function buildSendGuard(params: DeliverChannelMessageParams, sentAt: number): Se
       entityType: 'DELIVERY_RECEIPT',
       channelTier: CHANNEL_TIER[channel],
       toneSequence,
-      gsi1pk: `MEMBER#${memberId}`,
-      gsi1sk: `RECEIPT#${sentAt}#${dispatchId}`,
+      ...(params.isTest === true
+        ? { isTest: true, ttl: sentAt + TEST_AUDIT_TTL_SECONDS }
+        : { gsi1pk: `MEMBER#${memberId}`, gsi1sk: `RECEIPT#${sentAt}#${dispatchId}` }),
     },
   };
 }

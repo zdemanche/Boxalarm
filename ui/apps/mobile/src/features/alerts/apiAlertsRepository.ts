@@ -22,6 +22,32 @@ import type {
  * replaced by a retryable "couldn't load" rather than an open-ended spinner (a11y-spec N1). */
 export const ALERT_DETAIL_TIMEOUT_MS = 8_000;
 
+const ANSWERS: ReadonlySet<string> = new Set(['RESPONDING', 'NOT_RESPONDING', 'DIRECT_TO_SCENE']);
+
+type WireRosterEntry = Omit<Partial<RosterEntry>, 'ackStatus'> & {
+  memberId: string;
+  ackStatus?: string | null;
+};
+
+function toRosterEntry(wire: WireRosterEntry): RosterEntry[] {
+  const { ackStatus } = wire;
+  if (ackStatus && ackStatus !== 'NONE' && !ANSWERS.has(ackStatus)) return [];
+  return [
+    {
+      ...wire,
+      name: wire.name ?? wire.memberId,
+      ackStatus:
+        ackStatus && ANSWERS.has(ackStatus)
+          ? (ackStatus as RosterEntry['ackStatus'])
+          : 'UNANSWERED',
+      eta: wire.eta ?? null,
+      assignedApparatusId: wire.assignedApparatusId ?? null,
+      quals: wire.quals ?? [],
+      lastAnsweredTone: wire.lastAnsweredTone ?? null,
+    },
+  ];
+}
+
 function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): AlertsRepository {
   const req = (path: string, init?: Omit<ApiRequestOptions, 'apiBaseUrl'>) =>
     apiRequest(path, tokens, { ...init, apiBaseUrl });
@@ -151,8 +177,8 @@ function buildApiAlertsRepository(tokens: AuthTokenSource, apiBaseUrl: string): 
 
     async getRoster(dispatchId): Promise<RosterEntry[]> {
       const response = await req(`alerting/dispatches/${encodeURIComponent(dispatchId)}/roster`);
-      const body = (await response.json()) as { members: RosterEntry[] };
-      return body.members;
+      const body = (await response.json()) as { members: WireRosterEntry[] };
+      return body.members.flatMap(toRosterEntry);
     },
 
     // Through the SQLite outbox, never a bare POST: the old `void submitResponse` dropped a failed

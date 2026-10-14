@@ -31,6 +31,15 @@ export interface DutyShift {
 // as a lost shift.
 export type ClaimResult = 'CLAIMED' | 'ALREADY_MINE' | 'ALREADY_TAKEN';
 
+export const SHIFT_CLOSED_PROBLEM = 'https://boxalarm.dev/problems/shift-closed';
+export const SHIFT_NOT_QUALIFIED_PROBLEM =
+  'https://boxalarm.dev/problems/shift-position-not-qualified';
+
+export const SHIFT_PROBLEM_MESSAGE: Readonly<Record<string, string>> = {
+  [SHIFT_CLOSED_PROBLEM]: 'This shift has ended',
+  [SHIFT_NOT_QUALIFIED_PROBLEM]: "You don't hold the qualification this position needs",
+};
+
 /** Claiming has to be atomic on the server (F2.9), so it is never queued or guessed offline. */
 export class ClaimNeedsConnectionError extends Error {
   constructor() {

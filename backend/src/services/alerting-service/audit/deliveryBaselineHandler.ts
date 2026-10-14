@@ -11,7 +11,11 @@ import {
 } from '@boxalarm/authz';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
-import { queryDepartmentAuditLog, type DispatchAuditEntry } from './queryAuditLog.js';
+import {
+  isEpochSeconds,
+  queryDepartmentAuditLog,
+  type DispatchAuditEntry,
+} from './queryAuditLog.js';
 import { computeDeliveryBaseline } from './deliveryBaseline.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingAudit';
@@ -24,7 +28,7 @@ function parseRange(
   const params = qs ?? {};
   const from = Number(params.from);
   const to = Number(params.to);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) {
+  if (!isEpochSeconds(from) || !isEpochSeconds(to) || from > to) {
     return undefined;
   }
   return { from, to };

@@ -3,6 +3,13 @@ import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { mergeReceiptAttempts } from '../receipts/deliveryReceiptRepository.js';
 
 const PAGE_SIZE = 25;
+const TIMELINE_CONCURRENCY = 8;
+const MIN_EPOCH_SECONDS = 1_000_000_000;
+const MAX_EPOCH_SECONDS = 9_999_999_999;
+
+export function isEpochSeconds(value: number): boolean {
+  return Number.isInteger(value) && value >= MIN_EPOCH_SECONDS && value <= MAX_EPOCH_SECONDS;
+}
 // TODO: E1-S3 — ESCALATION_EVENT and DISPATCH_RESPONSE_RECORD have no writer yet; once E1-S3
 // ships they collocate under the same pk and this filter picks them up with zero code changes.
 const TIMELINE_ENTITY_TYPES = [
@@ -28,8 +35,13 @@ export function decodeCursor(cursor: string): Record<string, unknown> {
 }
 
 export interface MemberAuditPage {
-  readonly entries: readonly Record<string, unknown>[];
+  readonly entries: readonly MemberDispatchEntry[];
   readonly nextCursor?: string;
+}
+
+export interface MemberDispatchEntry {
+  readonly dispatchId: string;
+  readonly sentAt?: number;
 }
 
 export async function queryMemberDeliveryHistory(
@@ -55,10 +67,29 @@ export async function queryMemberDeliveryHistory(
       ...(cursor ? { ExclusiveStartKey: decodeCursor(cursor) } : {}),
     }),
   );
-  const entries = result.Items ?? [];
+  const entries = projectMemberDispatches(result.Items ?? []);
   return result.LastEvaluatedKey
     ? { entries, nextCursor: encodeCursor(result.LastEvaluatedKey) }
     : { entries };
+}
+
+function projectMemberDispatches(items: readonly Record<string, unknown>[]): MemberDispatchEntry[] {
+  const byDispatch = new Map<string, number | undefined>();
+  for (const item of items) {
+    if (typeof item.dispatchId !== 'string') {
+      continue;
+    }
+    const sentAt = typeof item.sentAt === 'number' ? item.sentAt : undefined;
+    const prior = byDispatch.get(item.dispatchId);
+    byDispatch.set(
+      item.dispatchId,
+      prior === undefined || (sentAt !== undefined && sentAt < prior) ? (sentAt ?? prior) : prior,
+    );
+  }
+  return [...byDispatch].map(([dispatchId, sentAt]) => ({
+    dispatchId,
+    ...(sentAt !== undefined ? { sentAt } : {}),
+  }));
 }
 
 export interface DispatchAuditEntry {
@@ -157,14 +188,18 @@ export async function queryDepartmentAuditLog(
   );
 
   const dispatches = (result.Items ?? []) as Record<string, unknown>[];
+  const withIds = dispatches.flatMap((dispatch) =>
+    typeof dispatch.dispatchId === 'string' ? [{ dispatchId: dispatch.dispatchId, dispatch }] : [],
+  );
   const entries: DispatchAuditEntry[] = [];
-  for (const dispatch of dispatches) {
-    const dispatchId = dispatch.dispatchId;
-    if (typeof dispatchId !== 'string') {
-      continue;
-    }
-    const timeline = await queryDispatchTimeline(client, tableName, deptId, dispatchId);
-    entries.push({ dispatchId, dispatch, timeline });
+  for (let start = 0; start < withIds.length; start += TIMELINE_CONCURRENCY) {
+    const batch = withIds.slice(start, start + TIMELINE_CONCURRENCY);
+    const timelines = await Promise.all(
+      batch.map(({ dispatchId }) => queryDispatchTimeline(client, tableName, deptId, dispatchId)),
+    );
+    batch.forEach(({ dispatchId, dispatch }, index) => {
+      entries.push({ dispatchId, dispatch, timeline: timelines[index] ?? [] });
+    });
   }
 
   return result.LastEvaluatedKey

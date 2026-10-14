@@ -178,16 +178,18 @@ export interface SelfTestRun {
   channelsTested: string[];
   channelResults: Record<string, SelfTestChannelResult>;
   overallResult: 'RUNNING' | 'PASS' | 'FAIL';
+  eligibilityReason?: string;
 }
 
-export type DeliveryReceiptStatus = 'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT';
+export type DeliveryReceiptStatus =
+  'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT' | 'NOT_SENT';
 
 export interface DeliveryReceipt {
   memberId: string;
   channel: string;
   toneSequence: number;
   status: DeliveryReceiptStatus;
-  sentAt: number;
+  sentAt?: number;
   deliveredAt: number | null;
   openedAt: number | null;
   failureReason: string | null;

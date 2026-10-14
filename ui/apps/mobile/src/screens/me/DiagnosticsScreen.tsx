@@ -36,26 +36,44 @@ function formatTime(epochSeconds: number): string {
 }
 
 /** Receipts have no status field — the delivery state is which timestamps the provider set. */
-function describeEntry(entry: OwnTimelineEntry): { label: string; at: number | undefined } {
+function describeEntry(entry: OwnTimelineEntry): {
+  label: string;
+  at: number | undefined;
+  danger: boolean;
+} {
   const channel = CHANNEL_LABEL[(entry.channel ?? '').toUpperCase()] ?? entry.channel ?? 'Channel';
   if (entry.entityType === 'DELIVERY_RECEIPT') {
-    if (entry.openedAt) return { label: `${channel}: opened`, at: entry.openedAt };
-    if (entry.deliveredAt) return { label: `${channel}: delivered`, at: entry.deliveredAt };
-    if (entry.failureReason) {
-      return { label: `${channel}: failed (${entry.failureReason})`, at: entry.sentAt };
+    if (entry.openedAt) return { label: `${channel}: opened`, at: entry.openedAt, danger: false };
+    if (entry.deliveredAt) {
+      return { label: `${channel}: delivered`, at: entry.deliveredAt, danger: false };
     }
-    return { label: `${channel}: sent, delivery not confirmed`, at: entry.sentAt };
+    if (entry.failureReason) {
+      return {
+        label: `${channel}: failed (${entry.failureReason})`,
+        at: entry.sentAt,
+        danger: true,
+      };
+    }
+    if (entry.sentAt === undefined) {
+      return { label: `${channel}: not sent`, at: undefined, danger: true };
+    }
+    return { label: `${channel}: sent, delivery not confirmed`, at: entry.sentAt, danger: false };
   }
   if (entry.entityType === 'ESCALATION_EVENT') {
     return {
       label: `Escalated to voice${entry.reason ? ` (${entry.reason})` : ''}`,
       at: entry.escalatedAt,
+      danger: false,
     };
   }
   if (entry.entityType === 'DISPATCH_RESPONSE_RECORD') {
-    return { label: `Your response: ${entry.ackStatus ?? 'recorded'}`, at: entry.answeredAt };
+    return {
+      label: `Your response: ${entry.ackStatus ?? 'recorded'}`,
+      at: entry.answeredAt,
+      danger: false,
+    };
   }
-  return { label: entry.entityType, at: undefined };
+  return { label: entry.entityType, at: undefined, danger: false };
 }
 
 function groupByTone(timeline: readonly OwnTimelineEntry[]): [number, OwnTimelineEntry[]][] {
@@ -138,14 +156,18 @@ function DispatchTimeline({
               Tone {tone}
             </Text>
             {entries.map((entry, index) => {
-              const { label, at } = describeEntry(entry);
+              const { label, at, danger } = describeEntry(entry);
               return (
                 <View key={`${entry.entityType}-${index}`}>
-                  <Text
-                    style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
-                  >
-                    {label}
-                  </Text>
+                  {danger ? (
+                    <StatusChip status="danger" label={label} />
+                  ) : (
+                    <Text
+                      style={{ color: theme.fg, fontSize: typeScale.body.size, fontWeight: '600' }}
+                    >
+                      {label}
+                    </Text>
+                  )}
                   {at ? (
                     <Text style={{ color: theme.fgMuted, fontSize: typeScale.bodyDense.size }}>
                       {formatTime(at)}

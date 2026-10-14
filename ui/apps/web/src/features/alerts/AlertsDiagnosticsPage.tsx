@@ -27,6 +27,7 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
     if (entry.failureReason || entry.status === 'FAILED') {
       return `Failed${entry.failureReason ? ` — ${entry.failureReason}` : ''}`;
     }
+    if (entry.sentAt === undefined || entry.status === 'NOT_SENT') return 'Not sent';
     return 'Sent, not confirmed delivered';
   }
   if (entry.entityType === 'ESCALATION_EVENT')
@@ -42,6 +43,7 @@ function timelineRole(entry: DiagnosticsTimelineEntry): StatusRole | null {
   if (entry.openedAt || entry.status === 'OPENED') return 'ok';
   if (entry.deliveredAt || entry.status === 'DELIVERED') return 'ok';
   if (entry.failureReason || entry.status === 'FAILED') return 'danger';
+  if (entry.sentAt === undefined || entry.status === 'NOT_SENT') return 'danger';
   return 'warning';
 }
 

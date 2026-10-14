@@ -63,15 +63,15 @@ function ackRole(status: RosterEntry['ackStatus']): StatusRole {
 }
 
 function receiptLabel(status: DeliveryReceipt['status']): string {
-  return status === 'SENT_UNCONFIRMED'
-    ? 'Sent, not confirmed delivered'
-    : status.charAt(0) + status.slice(1).toLowerCase();
+  if (status === 'SENT_UNCONFIRMED') return 'Sent, not confirmed delivered';
+  if (status === 'NOT_SENT') return 'Not sent';
+  return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
-/** Delivered/opened ok, failed alarm, sent-but-unconfirmed a caution (a11y-spec §1.8). */
+/** Delivered/opened ok, failed or never sent alarm, sent-but-unconfirmed a caution (a11y-spec §1.8). */
 function receiptRole(status: DeliveryReceipt['status']): StatusRole {
   if (status === 'DELIVERED' || status === 'OPENED') return 'ok';
-  if (status === 'FAILED') return 'danger';
+  if (status === 'FAILED' || status === 'NOT_SENT') return 'danger';
   if (status === 'SENT_UNCONFIRMED') return 'warning';
   return 'info';
 }

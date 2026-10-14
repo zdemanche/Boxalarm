@@ -22,14 +22,14 @@ export async function queryMemberDiagnostics(
       Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: `ROSTER#${memberId}` },
     }),
   );
-  const onEligibleRoster = rosterResult.Item !== undefined;
 
   const [timeline, deviceState] = await Promise.all([
-    onEligibleRoster
-      ? queryMemberDispatchTimeline(client, tableName, deptId, dispatchId, memberId)
-      : Promise.resolve([]),
+    queryMemberDispatchTimeline(client, tableName, deptId, dispatchId, memberId),
     getDeviceState(client, tableName, deptId, memberId),
   ]);
+  const onEligibleRoster =
+    rosterResult.Item !== undefined ||
+    timeline.some((entry) => entry.entityType === 'DELIVERY_RECEIPT');
 
   return { onEligibleRoster, timeline, deviceState: deviceState ?? null };
 }

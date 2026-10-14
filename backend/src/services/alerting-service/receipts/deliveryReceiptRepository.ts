@@ -89,7 +89,7 @@ export interface DeliveryReceiptRecord {
   readonly memberId: string;
   readonly channel: string;
   readonly toneSequence: number;
-  readonly sentAt: number;
+  readonly sentAt?: number;
   readonly deliveredAt?: number;
   readonly openedAt?: number;
   readonly failureReason?: string;
@@ -137,7 +137,7 @@ export function mergeReceiptAttempts(
       memberId: item.memberId as string,
       channel,
       toneSequence: item.toneSequence as number,
-      sentAt: Math.min(...sentAts),
+      ...(sentAts.length > 0 ? { sentAt: Math.min(...sentAts) } : {}),
       ...optionalNumber('deliveredAt', prior?.deliveredAt ?? item.deliveredAt),
       ...optionalNumber('openedAt', prior?.openedAt ?? item.openedAt),
       ...optionalString('failureReason', prior?.failureReason ?? item.failureReason),

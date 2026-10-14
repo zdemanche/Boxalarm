@@ -18,7 +18,7 @@ function mockClient(sendImpl: (command: unknown) => Promise<unknown>) {
 describe('queryMemberDeliveryHistory (AC2)', () => {
   it('queries only the given memberId GSI1 partition, scoped to the caller department', async () => {
     const client = mockClient(() =>
-      Promise.resolve({ Items: [{ entityType: 'DELIVERY_RECEIPT' }] }),
+      Promise.resolve({ Items: [{ entityType: 'DELIVERY_RECEIPT', dispatchId: 'D-1' }] }),
     );
 
     const page = await queryMemberDeliveryHistory(client, 'alerting-table', DEPT_ID, 'mbr-102');
@@ -35,6 +35,29 @@ describe('queryMemberDeliveryHistory (AC2)', () => {
     expect(call.input.ExpressionAttributeValues[':gsi1pk']).toBe('MEMBER#mbr-102');
     expect(call.input.FilterExpression).toBe('deptId = :deptId');
     expect(call.input.ExpressionAttributeValues[':deptId']).toBe('NICHOLS');
+  });
+
+  it('projects the guard and fan-out rows of one page to a single {dispatchId, sentAt} per dispatch', async () => {
+    const client = mockClient(() =>
+      Promise.resolve({
+        Items: [
+          {
+            dispatchId: 'D-2',
+            sk: 'RECEIPT#mbr-1#SMS#1',
+            idempotencyKey: 'k',
+            sendState: 'SENT',
+            gsi1pk: 'MEMBER#mbr-1',
+            sentAt: 205,
+          },
+          { dispatchId: 'D-2', sk: 'RECEIPT#mbr-1#sms#1', sentAt: 200 },
+          { dispatchId: 'D-1', sk: 'RECEIPT#mbr-1#push#1' },
+        ],
+      }),
+    );
+
+    const page = await queryMemberDeliveryHistory(client, 'alerting-table', DEPT_ID, 'mbr-1');
+
+    expect(page.entries).toEqual([{ dispatchId: 'D-2', sentAt: 200 }, { dispatchId: 'D-1' }]);
   });
 
   it('returns an empty entries array when the member has no receipts', async () => {
@@ -107,6 +130,35 @@ describe('queryDepartmentAuditLog (AC1/AC4)', () => {
       'DELIVERY_RECEIPT',
       'ESCALATION_EVENT',
     ]);
+  });
+
+  it('issues the per-dispatch timeline queries concurrently and keeps GSI2 order', async () => {
+    const dispatchIds = ['D-1', 'D-2', 'D-3'];
+    const releases: (() => void)[] = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const client = mockClient((command) => {
+      const input = (command as { input: Record<string, unknown> }).input;
+      if (input.IndexName === 'GSI2') {
+        return Promise.resolve({ Items: dispatchIds.map((dispatchId) => ({ dispatchId })) });
+      }
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      return new Promise((resolve) => {
+        releases.push(() => {
+          inFlight -= 1;
+          resolve({ Items: [] });
+        });
+      });
+    });
+
+    const pending = queryDepartmentAuditLog(client, 'alerting-table', DEPT_ID, 100, 200);
+    await vi.waitFor(() => expect(releases).toHaveLength(dispatchIds.length));
+    expect(peakInFlight).toBe(dispatchIds.length);
+    releases.reverse().forEach((release) => release());
+
+    const page = await pending;
+    expect(page.entries.map((entry) => entry.dispatchId)).toEqual(dispatchIds);
   });
 
   it('paginates the per-dispatch timeline fan-out until LastEvaluatedKey is exhausted', async () => {

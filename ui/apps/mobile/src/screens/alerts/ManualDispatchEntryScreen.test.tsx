@@ -1,5 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { AccessibilityInfo, Platform, StyleSheet } from 'react-native';
+import { ApiError } from '../../lib/apiClient';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
 import { ManualDispatchEntryScreen } from './ManualDispatchEntryScreen';
 
@@ -29,6 +30,29 @@ test('submitting a valid manual entry navigates to the new dispatch roster', asy
   expect(mockNavigate).toHaveBeenCalledWith('Roster', {
     dispatchId: expect.any(String) as unknown as string,
   });
+});
+
+test('a 409 says no new page was sent and that a new call needs a different reference', async () => {
+  const submit = jest
+    .spyOn(mockAlertsRepository, 'submitManualDispatch')
+    .mockRejectedValueOnce(
+      new ApiError({ type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' }),
+    );
+  const { getByLabelText, findByRole, findByText } = await render(<ManualDispatchEntryScreen />);
+
+  await fireEvent.changeText(getByLabelText('Incident type'), 'Structure fire');
+  await fireEvent.changeText(getByLabelText('Address'), '12 Elm St');
+  await fireEvent.press(await findByRole('radio', { name: 'Nichols' }));
+  await fireEvent.changeText(getByLabelText('Operator-entered reference'), 'ext-1');
+  await fireEvent.press(await findByRole('button', { name: 'Submit dispatch' }));
+
+  expect(
+    await findByText(
+      'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+    ),
+  ).toBeTruthy();
+  expect(mockNavigate).not.toHaveBeenCalled();
+  submit.mockRestore();
 });
 
 test('leaves the form usable without crashing when required fields are empty', async () => {

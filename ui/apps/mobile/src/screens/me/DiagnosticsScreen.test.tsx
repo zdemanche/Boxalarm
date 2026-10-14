@@ -116,6 +116,62 @@ test('renders the per-tone, per-channel timeline for the most recent dispatch', 
   );
 });
 
+test('a page that was claimed but never sent shows as not sent, with a danger glyph and word', async () => {
+  routeRequests({
+    [HISTORY]: () => ok({ entries: [{ dispatchId: 'D-1', sentAt: T + 5 }] }),
+    [ACTIVE]: () => ok({ dispatches: [], activeWindowSeconds: 7200 }),
+    'alerting/dispatches/D-1/diagnostics': () =>
+      ok({
+        dispatchId: 'D-1',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          { entityType: 'DELIVERY_RECEIPT', channel: 'push', toneSequence: 2 },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'sms',
+            toneSequence: 2,
+            failureReason: 'SnsUnavailableError',
+          },
+        ],
+        deviceState: null,
+      }),
+  });
+
+  const { findByText, getByText, getAllByText } = await render(<DiagnosticsScreen />);
+
+  expect(await findByText('Push: not sent')).toBeTruthy();
+  expect(getAllByText('⊠')).toHaveLength(2);
+  expect(getByText(/SMS: failed \(SnsUnavailableError\)/)).toBeTruthy();
+});
+
+test('a merged row with both a failure reason and a delivery time reads as delivered', async () => {
+  routeRequests({
+    [HISTORY]: () => ok({ entries: [{ dispatchId: 'D-1', sentAt: T + 5 }] }),
+    [ACTIVE]: () => ok({ dispatches: [], activeWindowSeconds: 7200 }),
+    'alerting/dispatches/D-1/diagnostics': () =>
+      ok({
+        dispatchId: 'D-1',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'push',
+            toneSequence: 1,
+            sentAt: T + 5,
+            deliveredAt: T + 6,
+            failureReason: 'APNs: Unregistered',
+          },
+        ],
+        deviceState: null,
+      }),
+  });
+
+  const { findByText, queryByText } = await render(<DiagnosticsScreen />);
+
+  expect(await findByText('Push: delivered')).toBeTruthy();
+  expect(queryByText(/failed/)).toBeNull();
+});
+
 test('a recent call the member was never paged for shows as not on the eligible roster', async () => {
   routeRequests({
     [HISTORY]: () => ok({ entries: [] }),

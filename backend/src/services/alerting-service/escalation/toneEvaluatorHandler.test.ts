@@ -227,8 +227,13 @@ function createFakeDdb(
       if (update.ExpressionAttributeValues && ':sentAt' in update.ExpressionAttributeValues) {
         const key = `${update.Key.pk}#${update.Key.sk}`;
         const receipt = items.get(key);
-        if (receipt)
-          items.set(key, { ...receipt, sentAt: update.ExpressionAttributeValues[':sentAt'] });
+        if (receipt) {
+          const { failureReason, ...rest } = receipt;
+          const kept = update.UpdateExpression.includes('REMOVE failureReason')
+            ? rest
+            : { ...rest, failureReason };
+          items.set(key, { ...kept, sentAt: update.ExpressionAttributeValues[':sentAt'] });
+        }
         return Promise.resolve({});
       }
       applyMetadataUpdate(
@@ -755,6 +760,48 @@ describe('toneEvaluatorHandler', () => {
 
     expect(publishedMemberIds(sns)).toEqual(['mbr-1']);
     expect(items.get(`${PK}#RECEIPT#mbr-1#push#2`)?.sentAt).toEqual(expect.any(Number));
+  });
+
+  it('records why a tone page was not published, leaving the receipt unsent', async () => {
+    class SnsUnavailableError extends Error {}
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER]);
+    sns.send.mockRejectedValue(new SnsUnavailableError('sns down'));
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await expect(
+      handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 }),
+    ).rejects.toThrow('sns down');
+
+    const receipt = items.get(`${PK}#RECEIPT#mbr-1#push#2`);
+    expect(receipt?.failureReason).toBe('SnsUnavailableError');
+    expect(receipt?.sentAt).toBeUndefined();
+  });
+
+  it('clears a stale failure reason once a retry publishes the page', async () => {
+    const failedClaim: FakeItem = {
+      pk: PK,
+      sk: 'RECEIPT#mbr-1#push#2',
+      entityType: 'DELIVERY_RECEIPT',
+      memberId: 'mbr-1',
+      idempotencyKey: 'dispatch-1#2#mbr-1#push',
+      failureReason: 'SnsUnavailableError',
+    };
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER, failedClaim]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    const receipt = items.get(`${PK}#RECEIPT#mbr-1#push#2`);
+    expect(receipt?.sentAt).toEqual(expect.any(Number));
+    expect(receipt?.failureReason).toBeUndefined();
   });
 
   it('does not re-publish a receipt already marked sent', async () => {

@@ -491,6 +491,129 @@ test('diagnostics labels raw receipts (no status field) from their provider time
   expect(screen.getByText('Sent, not confirmed delivered')).toBeTruthy();
 });
 
+test('diagnostics shows a receipt that was never sent as Not sent, and a recorded failure outranks it', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-6/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-6',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          { entityType: 'DELIVERY_RECEIPT', channel: 'PUSH', toneSequence: 2 },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'SMS',
+            toneSequence: 2,
+            failureReason: 'SnsUnavailableError',
+          },
+        ],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-6');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  const notSent = await screen.findByText('Not sent');
+  expect(notSent.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+  expect(notSent.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+  expect(screen.getByText('Failed — SnsUnavailableError')).toBeTruthy();
+});
+
+test('diagnostics shows Delivered when a receipt carries both a failure reason and a delivery time', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-7/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-7',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'PUSH',
+            toneSequence: 1,
+            sentAt: 1700000000,
+            deliveredAt: 1700000005,
+            failureReason: 'APNs: Unregistered',
+          },
+        ],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-7');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  expect(await screen.findByText('Delivered')).toBeTruthy();
+  expect(screen.queryByText(/Failed/)).toBeNull();
+});
+
+test('a NOT_SENT receipt shows as Not sent with its glyph and word on the roster page', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-9', () =>
+      HttpResponse.json({
+        dispatchId: 'D-9',
+        incidentType: 'Structure fire',
+        address: '18 Nichols Ave',
+        crossStreets: 'Main & Nichols',
+        mapLink: null,
+        narrative: 'Smoke showing',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-9/roster', () => HttpResponse.json({ members: [] })),
+    http.get('/api/v1/alerting/dispatches/D-9/receipts', () =>
+      HttpResponse.json({
+        receipts: [
+          {
+            memberId: 'm-1',
+            channel: 'push',
+            toneSequence: 2,
+            status: 'NOT_SENT',
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: null,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/riding-board/D-9', () =>
+      HttpResponse.json({ dispatchId: 'D-9', apparatus: [] }),
+    ),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-9');
+
+  const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
+  const notSent = await within(receipts).findByText('Not sent');
+  expect(notSent.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+  expect(notSent.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+});
+
 test('diagnostics states the member was not on the eligible roster, distinct from sent-not-delivered', async () => {
   server.use(
     http.get('/api/v1/alerting/dispatches/D-4/diagnostics/m-9', () =>

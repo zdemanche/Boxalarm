@@ -132,6 +132,8 @@ interface DeliveryFault {
   smsFailure?: string;
   /** Push accepted by the provider but the device never confirmed (app killed, no network). */
   pushUnconfirmed?: boolean;
+  /** The page was never published (the claim was written, the publish did not happen). */
+  pushNotSent?: boolean;
 }
 
 interface DispatchSeed {
@@ -195,27 +197,37 @@ function receiptsFor(
             openedAt: null,
             failureReason: fault.pushFailure,
           }
-        : fault.pushUnconfirmed
+        : fault.pushNotSent
           ? {
               memberId,
               channel: 'push',
               toneSequence: tone,
-              status: 'SENT_UNCONFIRMED',
-              sentAt,
+              status: 'NOT_SENT',
               deliveredAt: null,
               openedAt: null,
               failureReason: null,
             }
-          : {
-              memberId,
-              channel: 'push',
-              toneSequence: tone,
-              status: openedAt ? 'OPENED' : 'DELIVERED',
-              sentAt,
-              deliveredAt: sentAt + 2 + (index % 3),
-              openedAt,
-              failureReason: null,
-            };
+          : fault.pushUnconfirmed
+            ? {
+                memberId,
+                channel: 'push',
+                toneSequence: tone,
+                status: 'SENT_UNCONFIRMED',
+                sentAt,
+                deliveredAt: null,
+                openedAt: null,
+                failureReason: null,
+              }
+            : {
+                memberId,
+                channel: 'push',
+                toneSequence: tone,
+                status: openedAt ? 'OPENED' : 'DELIVERED',
+                sentAt,
+                deliveredAt: sentAt + 2 + (index % 3),
+                openedAt,
+                failureReason: null,
+              };
       receipts.push(push);
 
       receipts.push(
@@ -450,6 +462,7 @@ const SEEDS: Record<string, DispatchSeed> = {
       'm-27': { pushFailure: 'APNs: BadDeviceToken (app reinstalled, token not refreshed)' },
       'm-8': { pushUnconfirmed: true },
       'm-28': { pushUnconfirmed: true },
+      'm-11': { pushNotSent: true },
     },
     seats: {
       'Engine 301': { OFF: 'm-9', DRIVER: 'm-12', NOZZLE: 'm-15', BACKUP: 'm-16' },
@@ -917,13 +930,13 @@ function demoLadderControl(
 function diagnosticsTimeline(dispatchId: string, memberId: string): DiagnosticsTimelineEntry[] {
   const receipts = (RECEIPTS.get(dispatchId) ?? []).filter((r) => r.memberId === memberId);
   const entries: { at: number; entry: DiagnosticsTimelineEntry }[] = receipts.map((r) => ({
-    at: r.sentAt,
+    at: r.sentAt ?? 0,
     entry: {
       entityType: 'DELIVERY_RECEIPT',
       channel: r.channel,
       toneSequence: r.toneSequence,
       status: r.status,
-      sentAt: r.sentAt,
+      ...(r.sentAt !== undefined ? { sentAt: r.sentAt } : {}),
       deliveredAt: r.deliveredAt,
       openedAt: r.openedAt,
       failureReason: r.failureReason,

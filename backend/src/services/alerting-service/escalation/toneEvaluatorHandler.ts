@@ -23,6 +23,7 @@ import { logError, logInfo } from '../dispatches/logger.js';
 import { queryRoster } from '../roster/repository.js';
 import { createSnsClient, readFanOutTopicConfig } from '../fanout/snsClient.js';
 import { runWithConcurrencyLimit } from '../fanout/handler.js';
+import { ensureRosterEntry } from '../fanout/fanOut.js';
 import {
   deriveFanOutKey,
   deriveMessageDeduplicationId,
@@ -132,32 +133,6 @@ function isManualOverride(value: unknown): value is ManualOverride {
   return typeof triggeredBy === 'string' && triggeredBy.trim().length > 0;
 }
 
-const ROSTER_SEED_EXPRESSION =
-  'SET entityType = :rosterEntityType, memberId = :rosterMemberId, quals = if_not_exists(quals, :rosterQuals), ackStatus = if_not_exists(ackStatus, :rosterNone), currentChannelTier = if_not_exists(currentChannelTier, :rosterPrimary), escalationLevel = if_not_exists(escalationLevel, :rosterZero)';
-
-async function seedRosterEntry(
-  ddb: DynamoDBDocumentClient,
-  tableName: string,
-  pk: string,
-  member: EligibilitySnapshotItem,
-): Promise<void> {
-  await ddb.send(
-    new UpdateCommand({
-      TableName: tableName,
-      Key: { pk, sk: `ROSTER#${member.memberId}` },
-      UpdateExpression: ROSTER_SEED_EXPRESSION,
-      ExpressionAttributeValues: {
-        ':rosterEntityType': 'DISPATCH_ROSTER_ENTRY',
-        ':rosterMemberId': member.memberId,
-        ':rosterQuals': member.quals,
-        ':rosterNone': 'NONE',
-        ':rosterPrimary': 'primary',
-        ':rosterZero': 0,
-      },
-    }),
-  );
-}
-
 interface DispatchMetadata extends DispatchAlertText {
   readonly toneLadderStatus: string;
 }
@@ -236,45 +211,75 @@ async function publishToneChannel(
       toneSequence,
     });
   }
-  await sns.send(
-    new PublishCommand({
-      TopicArn: topicArn,
-      Message: JSON.stringify(
-        buildAlertingEnvelope(
-          'alerting.dispatch.normalized',
-          dispatchId,
-          buildChannelPagePayload({
-            deptId,
+  try {
+    await sns.send(
+      new PublishCommand({
+        TopicArn: topicArn,
+        Message: JSON.stringify(
+          buildAlertingEnvelope(
+            'alerting.dispatch.normalized',
             dispatchId,
-            memberId,
-            channel,
-            channelTier: CHANNEL_TIER,
-            toneSequence,
-            dispatch,
-          }),
+            buildChannelPagePayload({
+              deptId,
+              dispatchId,
+              memberId,
+              channel,
+              channelTier: CHANNEL_TIER,
+              toneSequence,
+              dispatch,
+            }),
+          ),
         ),
-      ),
-      MessageGroupId: dispatchId,
-      MessageDeduplicationId: deriveMessageDeduplicationId({
-        dispatchId,
-        toneSequence,
-        memberId,
-        channel,
+        MessageGroupId: dispatchId,
+        MessageDeduplicationId: deriveMessageDeduplicationId({
+          dispatchId,
+          toneSequence,
+          memberId,
+          channel,
+        }),
+        MessageAttributes: {
+          channel: { DataType: 'String', StringValue: channel },
+          channelTier: { DataType: 'String', StringValue: CHANNEL_TIER },
+          toneSequence: { DataType: 'Number', StringValue: String(toneSequence) },
+        },
       }),
-      MessageAttributes: {
-        channel: { DataType: 'String', StringValue: channel },
-        channelTier: { DataType: 'String', StringValue: CHANNEL_TIER },
-        toneSequence: { DataType: 'Number', StringValue: String(toneSequence) },
-      },
-    }),
-  );
+    );
+  } catch (error) {
+    logError('alerting.toneLadder.publishFailed', error, {
+      deptId,
+      dispatchId,
+      memberId,
+      channel,
+      toneSequence,
+    });
+    await ddb
+      .send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { pk, sk },
+          UpdateExpression: 'SET failureReason = :reason',
+          ExpressionAttributeValues: {
+            ':reason': error instanceof Error ? error.constructor.name : 'UnknownError',
+          },
+        }),
+      )
+      .catch((updateError) => {
+        logError('alerting.toneLadder.receiptFailureAnnotationFailed', updateError, {
+          deptId,
+          dispatchId,
+          memberId,
+          channel,
+        });
+      });
+    throw error;
+  }
 
   // Marks the claim as published, so a later retry skips it instead of re-publishing.
   await ddb.send(
     new UpdateCommand({
       TableName: tableName,
       Key: { pk, sk },
-      UpdateExpression: 'SET sentAt = :sentAt',
+      UpdateExpression: 'SET sentAt = :sentAt REMOVE failureReason',
       ExpressionAttributeValues: { ':sentAt': Math.floor(Date.now() / 1000) },
     }),
   );
@@ -414,12 +419,7 @@ async function fireToneForMember(
   // after the voice schedule, so the evaluation still retries.
   let channelFailure: Error | undefined;
   try {
-    await seedRosterEntry(
-      ddb,
-      tableName,
-      buildDeptScopedPk(deptId, 'DISPATCH', dispatchId),
-      member,
-    );
+    await ensureRosterEntry(ddb, tableName, deptId, dispatchId, member.memberId, member.quals);
   } catch (error) {
     logError('alerting.toneLadder.rosterSeedFailed', error, {
       deptId,
