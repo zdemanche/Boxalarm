@@ -240,6 +240,6 @@ export const handler = withAuthorization(resetCredentials, {
   actionType: 'Boxalarm::Action',
   actionId: 'ResetMemberCredentials',
   resourceType: 'Boxalarm::Member',
-  resourceId: (event) => readTargetMemberId(event.body) ?? '',
+  resourceId: (event) => readTargetMemberId(event.body) ?? 'unknown',
   alarmOnInvocation: 'ResetMemberCredentialsInvoked',
 });

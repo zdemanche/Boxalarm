@@ -115,7 +115,9 @@ describe('deviceLossHandler', () => {
   });
 
   it('is gated by the Cedar RevokeSession action and alarms on every invocation', async () => {
-    const withAuthorization = vi.fn((inner: unknown) => inner);
+    const withAuthorization = vi.fn<
+      (inner: unknown, options: { resourceId: (event: unknown) => string }) => unknown
+    >((inner) => inner);
     vi.doMock('@boxalarm/authz', async () => {
       const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
       return { ...actual, withAuthorization };
@@ -130,6 +132,11 @@ describe('deviceLossHandler', () => {
         resourceType: 'Boxalarm::Member',
         alarmOnInvocation: 'RevokeSessionInvoked',
       }),
+    );
+    const options = withAuthorization.mock.calls[0]?.[1];
+    expect(options?.resourceId(buildEvent('ADMIN', JSON.stringify({})))).not.toBe('');
+    expect(options?.resourceId(buildEvent('ADMIN', JSON.stringify({ memberId: 'mbr-102' })))).toBe(
+      'mbr-102',
     );
   });
 

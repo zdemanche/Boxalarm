@@ -293,7 +293,9 @@ describe('credentialResetHandler', () => {
 describe('credentialResetHandler Cedar wiring', () => {
   it('is gated by the ResetMemberCredentials action and alarms on every invocation', async () => {
     vi.resetModules();
-    const withAuthorization = vi.fn((inner: unknown) => inner);
+    const withAuthorization = vi.fn<
+      (inner: unknown, options: { resourceId: (event: unknown) => string }) => unknown
+    >((inner) => inner);
     vi.doMock('@boxalarm/authz', async () => {
       const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
       return { ...actual, withAuthorization };
@@ -310,6 +312,8 @@ describe('credentialResetHandler Cedar wiring', () => {
         alarmOnInvocation: 'ResetMemberCredentialsInvoked',
       }),
     );
+    const options = withAuthorization.mock.calls[0]?.[1];
+    expect(options?.resourceId({ body: JSON.stringify({}) })).not.toBe('');
     vi.doUnmock('@boxalarm/authz');
   });
 });

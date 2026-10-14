@@ -340,6 +340,6 @@ export const handler = withAuthorization(revokeLostDevice, {
   actionType: 'Boxalarm::Action',
   actionId: 'RevokeSession',
   resourceType: 'Boxalarm::Member',
-  resourceId: (event) => readMemberId(event.body) ?? '',
+  resourceId: (event) => readMemberId(event.body) ?? 'unknown',
   alarmOnInvocation: 'RevokeSessionInvoked',
 });
