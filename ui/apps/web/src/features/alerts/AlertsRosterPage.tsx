@@ -166,7 +166,9 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
         error as { problem?: { status?: number; detail?: string; errors?: FieldError[] } }
       ).problem;
       if (problem?.status === 409) {
-        setFormError('This dispatch was already entered. It has not been resubmitted.');
+        setFormError(
+          'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+        );
       } else if (problem?.errors) {
         setFieldErrors(problem.errors);
       } else {

@@ -547,6 +547,109 @@ test('canary panel shows unhealthy with text when the last run is stale even tho
   expect(await screen.findByText('Unhealthy — last run is stale')).toBeTruthy();
 });
 
+test('canary panel renders per-channel results in the backend shape without [object Object]', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1200,
+        latestRanAt: now,
+        runs: [
+          {
+            ranAt: now,
+            result: 'PASS',
+            latencyMs: 1200,
+            channelResults: {
+              PUSH: { ok: true, ms: 812 },
+              SMS: { ok: false, ms: 7420, reason: 'provider refused: x' },
+            },
+          },
+        ],
+      }),
+    ),
+  );
+
+  renderDiagnosticsPage(['ADMIN']);
+
+  const list = await screen.findByRole('list', { name: 'Latest run by channel' });
+  expect(within(list).getByText(/PUSH: OK/).textContent).toMatch(/812ms/);
+  expect(within(list).getByText(/SMS: Failed/).textContent).toMatch(/provider refused: x/);
+  expect(list.textContent).not.toMatch(/object Object/);
+});
+
+test('diagnostics shows Delivered, not Failed, when a receipt has both deliveredAt and failureReason', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-6/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-6',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'SMS',
+            toneSequence: 1,
+            sentAt: 1700000000,
+            deliveredAt: 1700000005,
+            failureReason: 'LATE_CARRIER_ERROR',
+          },
+        ],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-6');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  expect(await screen.findByText('Delivered')).toBeTruthy();
+  expect(screen.queryByText(/Failed/)).toBeNull();
+});
+
+test('a 409 on manual entry says no new page was sent and a new call needs a different reference', async () => {
+  server.use(
+    http.get('/api/v1/alerting/home-locality', () =>
+      HttpResponse.json({ towns: ['Nichols'], zips: ['06611'], state: 'CT' }),
+    ),
+    http.post('/api/v1/alerting/dispatches', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Conflict', status: 409, traceId: 'trace-409' },
+        { status: 409 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage(['CHIEF']);
+
+  await user.type(await screen.findByLabelText('Incident type'), 'MVA');
+  await user.type(screen.getByLabelText('Address'), '1 Main St');
+  await user.type(screen.getByLabelText('Cross streets'), 'N/A');
+  await screen.findByRole('option', { name: 'Nichols' });
+  await user.selectOptions(screen.getByLabelText(/Town \/ village/), 'Nichols');
+  await user.type(screen.getByLabelText('Narrative'), 'MVA with injuries');
+  await user.type(screen.getByLabelText('Operator-entered reference'), 'ext-9');
+  await user.click(screen.getByRole('button', { name: 'Submit dispatch' }));
+
+  expect(
+    await screen.findByText(
+      'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+    ),
+  ).toBeTruthy();
+});
+
 test('R3-A: the manual entry requires a locality; "Other town" sends the typed town', async () => {
   let posted: Record<string, unknown> | undefined;
   server.use(

@@ -301,11 +301,18 @@ export interface DiagnosticsResult {
 
 export type CanaryResult = 'PASS' | 'FAIL';
 
+export interface CanaryChannelResult {
+  ok: boolean;
+  ms: number;
+  reason?: string;
+  delivered?: boolean;
+}
+
 export interface CanaryRun {
   ranAt: number;
   result: CanaryResult;
   latencyMs: number;
-  channelResults: Record<string, unknown>;
+  channelResults: Record<string, CanaryChannelResult>;
 }
 
 export interface CanaryStatus {

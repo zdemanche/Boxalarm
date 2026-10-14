@@ -222,8 +222,12 @@ function CanaryPanel() {
         <ul className={styles.chipRow} aria-label="Latest run by channel">
           {Object.entries(query.data.runs[0].channelResults).map(([channel, result]) => (
             <li key={channel}>
-              <StatusChip status={result === 'PASS' ? 'ok' : 'danger'}>
-                {channel.toUpperCase()}: {String(result)}
+              <StatusChip status={result.ok ? 'ok' : 'danger'}>
+                {channel.toUpperCase()}: {result.ok ? 'OK' : 'Failed'} · {result.ms}ms
+                {result.reason ? ` — ${result.reason}` : ''}
+                {result.ok && result.delivered === false
+                  ? ' — credentials verified, not delivered'
+                  : ''}
               </StatusChip>
             </li>
           ))}

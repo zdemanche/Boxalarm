@@ -746,7 +746,11 @@ const CANARY_RUNS: readonly CanaryRun[] = Array.from({ length: CANARY_RUN_COUNT 
       ranAt,
       result: 'FAIL',
       latencyMs: 7420,
-      channelResults: { push: 'PASS', sms: 'FAIL', voice: 'PASS' },
+      channelResults: {
+        PUSH: { ok: true, ms: 640 },
+        SMS: { ok: false, ms: 7420, reason: 'provider timeout' },
+        VOICE: { ok: true, ms: 1180 },
+      },
     };
   }
   const latencyMs =
@@ -755,7 +759,11 @@ const CANARY_RUNS: readonly CanaryRun[] = Array.from({ length: CANARY_RUN_COUNT 
     ranAt,
     result: 'PASS',
     latencyMs: Math.round(latencyMs),
-    channelResults: { push: 'PASS', sms: 'PASS', voice: 'PASS' },
+    channelResults: {
+      PUSH: { ok: true, ms: 640 },
+      SMS: { ok: true, ms: 900 },
+      VOICE: { ok: true, ms: 1180 },
+    },
   };
 });
 
