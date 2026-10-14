@@ -49,6 +49,12 @@ describe('parseSchedulePayload (AC1)', () => {
     [{ occupancyId: 42 }, 'occupancy'],
     [{ occupancyId: 'OCC-1' }, 'scheduledDate'],
     [{ occupancyId: 'OCC-1', scheduledDate: 'not-a-date' }, 'scheduledDate'],
+    [{ occupancyId: 'OCC-1', scheduledDate: '10/05/2026' }, 'scheduledDate'],
+    [{ occupancyId: 'OCC-1', scheduledDate: '2026' }, 'scheduledDate'],
+    [{ occupancyId: 'OCC-1', scheduledDate: 'Oct 5 2026' }, 'scheduledDate'],
+    [{ occupancyId: 'OCC-1', scheduledDate: '2026-02-30' }, 'scheduledDate'],
+    [{ occupancyId: 'OCC-1', scheduledDate: ' 2026-10-05' }, 'scheduledDate'],
+    [{ occupancyId: 'OCC-1', scheduledDate: '2026-10-05T10:00:00Z' }, 'scheduledDate'],
     [{ occupancyId: 'OCC#1', scheduledDate: '2026-10-05' }, 'occupancy'],
     [null, 'object'],
     ['string-body', 'object'],
@@ -163,6 +169,18 @@ describe('resolveDueWindow (AC4)', () => {
 
   it('rejects a NaN-producing leadDays', () => {
     expect(() => resolveDueWindow({ leadDays: 'abc' }, new Date())).toThrow(ValidationError);
+  });
+
+  it.each(['367', '99000000', '1e9'])(
+    'rejects leadDays %s above the cap with a ValidationError',
+    (leadDays) => {
+      expect(() => resolveDueWindow({ leadDays }, new Date())).toThrow(ValidationError);
+    },
+  );
+
+  it('accepts the maximum leadDays', () => {
+    const window = resolveDueWindow({ month: '2026-01', leadDays: '366' }, new Date());
+    expect(window.months).toHaveLength(13);
   });
 
   it('rejects a negative leadDays', () => {

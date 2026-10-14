@@ -42,6 +42,7 @@ function vpClientRejecting(): VerifiedPermissionsClient {
 
 interface DynamoBehavior {
   readonly occupancyExists?: boolean;
+  readonly occupancyArchived?: boolean;
   readonly putBehavior?: 'succeed' | 'throw';
   readonly updateBehavior?: 'succeed' | 'conditionFailed' | 'throw';
 }
@@ -52,10 +53,19 @@ interface FakeDynamoClient {
 }
 
 function fakeDynamoClient(behavior: DynamoBehavior = {}): FakeDynamoClient {
-  const { occupancyExists = true, putBehavior = 'succeed', updateBehavior = 'succeed' } = behavior;
+  const {
+    occupancyExists = true,
+    occupancyArchived = false,
+    putBehavior = 'succeed',
+    updateBehavior = 'succeed',
+  } = behavior;
   const send = vi.fn((command: unknown) => {
     if (command instanceof GetCommand) {
-      return Promise.resolve(occupancyExists ? { Item: { pk: 'p', sk: 'METADATA' } } : {});
+      return Promise.resolve(
+        occupancyExists
+          ? { Item: { pk: 'p', sk: 'METADATA', ...(occupancyArchived && { archivedAt: 1 }) } }
+          : {},
+      );
     }
     if (command instanceof PutCommand) {
       if (putBehavior === 'throw') {
@@ -238,6 +248,26 @@ describe('recordInspection handler', () => {
     );
 
     expect(result).toMatchObject({ statusCode: 404 });
+  });
+
+  it('returns 404 and writes nothing when the schedule occupancy is archived', async () => {
+    const dynamo = fakeDynamoClient({ occupancyArchived: true });
+    const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);
+
+    const result = await handler(buildEvent({ occupancyId: 'OCC-1', scheduledDate: '2026-10-05' }));
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    expect(dynamo.send.mock.calls.some((call) => call[0] instanceof PutCommand)).toBe(false);
+  });
+
+  it('returns 400 and writes nothing for a non-ISO scheduledDate', async () => {
+    const dynamo = fakeDynamoClient();
+    const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);
+
+    const result = await handler(buildEvent({ occupancyId: 'OCC-1', scheduledDate: '10/05/2026' }));
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(dynamo.send).not.toHaveBeenCalled();
   });
 
   it('returns 404 notFoundProblem when the conduct inspectionId references no INSPECTION_RECORD item', async () => {

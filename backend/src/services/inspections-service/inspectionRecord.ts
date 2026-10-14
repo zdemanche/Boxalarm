@@ -1,4 +1,5 @@
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { isValidCalendarDate } from './hydrant/hydrantKeys.js';
 
 export type ViolationStatus = 'open' | 'resolved';
 
@@ -119,8 +120,8 @@ export function parseSchedulePayload(body: unknown): SchedulePayload {
   if (!isPkSafeString(occupancyId)) {
     throw new ValidationError("occupancyId is required and must be a non-empty string without '#'");
   }
-  if (!isNonEmptyString(scheduledDate) || Number.isNaN(Date.parse(scheduledDate))) {
-    throw new ValidationError('scheduledDate is required and must be a valid ISO date string');
+  if (typeof scheduledDate !== 'string' || !isValidCalendarDate(scheduledDate)) {
+    throw new ValidationError('scheduledDate is required and must be a valid YYYY-MM-DD date');
   }
   return { occupancyId, scheduledDate };
 }
@@ -186,6 +187,7 @@ const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 const MS_PER_DAY = 86_400_000;
 const INSPECTION_TIME_ZONE = 'America/New_York';
 const OVERDUE_LOOKBACK_DAYS = 365;
+const MAX_LEAD_DAYS = 366;
 
 function localDate(now: Date): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -219,8 +221,8 @@ export function resolveDueWindow(
   let leadDays = 30;
   if (leadDaysParam !== undefined) {
     const parsed = Number(leadDaysParam);
-    if (!Number.isInteger(parsed) || parsed < 0) {
-      throw new ValidationError('leadDays must be a non-negative integer');
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > MAX_LEAD_DAYS) {
+      throw new ValidationError(`leadDays must be an integer between 0 and ${MAX_LEAD_DAYS}`);
     }
     leadDays = parsed;
   }

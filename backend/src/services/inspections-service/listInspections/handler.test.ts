@@ -201,6 +201,16 @@ describe('listInspections handler', () => {
     expect(dynamo.send).not.toHaveBeenCalled();
   });
 
+  it('returns 400 and sends no query for a leadDays above the cap', async () => {
+    const dynamo = fakeDynamoClient({});
+    const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);
+
+    const result = await handler(buildEvent({ leadDays: '99000000' }));
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(dynamo.send).not.toHaveBeenCalled();
+  });
+
   it('queries every intermediate month partition for a leadDays window spanning 3+ calendar months', async () => {
     const dynamo = fakeDynamoClient({});
     const { handler } = await loadHandler(vpClientDeciding('ALLOW'), dynamo);
