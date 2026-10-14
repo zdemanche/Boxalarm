@@ -16,6 +16,14 @@ export function isValidCalendarDate(value: string): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+const HYDRANT_FLOW_TEST_INTERVAL_DAYS = 365;
+
+export function computeHydrantNextFlowTestDue(lastFlowTestDate: string): string {
+  const next = new Date(`${lastFlowTestDate}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + HYDRANT_FLOW_TEST_INTERVAL_DAYS);
+  return next.toISOString().slice(0, 10);
+}
+
 const GEOHASH_BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
 
 export function buildHydrantDueGsi2Pk(deptId: VerifiedDeptId, yyyyMm: string): string {

@@ -196,6 +196,34 @@ describe('updateHydrant (AC2)', () => {
     expect(update?.ExpressionAttributeValues?.[':gsi2sk']).toBe('2028-03-05#HYD-0231');
   });
 
+  it('derives nextFlowTestDue and the gsi2 keys from a patch carrying only lastFlowTestDate', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock
+      .on(GetCommand)
+      .resolves({ Item: { status: 'IN_SERVICE', nextFlowTestDue: '2026-05-01' } });
+    await updateHydrant(deptId, 'HYD-0231', { lastFlowTestDate: '2026-10-13' }, 'corr-1');
+    const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
+    const values = items?.[0]?.Update?.ExpressionAttributeValues;
+    expect(values?.[':nextFlowTestDue']).toBe('2027-10-13');
+    expect(values?.[':gsi2pk']).toBe('DEPT#NICHOLS#DUE#HYDRANT#2027-10');
+    expect(values?.[':gsi2sk']).toBe('2027-10-13#HYD-0231');
+    expect(items?.[1]?.Put?.Item?.payload).toMatchObject({ nextFlowTestDue: '2027-10-13' });
+  });
+
+  it('keeps an explicit nextFlowTestDue over the derived one', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock.on(GetCommand).resolves({ Item: { status: 'IN_SERVICE' } });
+    await updateHydrant(
+      deptId,
+      'HYD-0231',
+      { lastFlowTestDate: '2026-10-13', nextFlowTestDue: '2026-12-01' },
+      'corr-1',
+    );
+    const update =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Update;
+    expect(update?.ExpressionAttributeValues?.[':nextFlowTestDue']).toBe('2026-12-01');
+  });
+
   it('reads back the persisted item with ConsistentRead so a stale pre-update image can never be returned', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     ddbMock.on(GetCommand).resolves({ Item: { status: 'OUT_OF_SERVICE' } });

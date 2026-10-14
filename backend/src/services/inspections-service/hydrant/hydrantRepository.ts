@@ -15,6 +15,7 @@ import {
   buildHydrantDueGsi2Pk,
   buildHydrantGsi2Keys,
   buildHydrantGsi3Keys,
+  computeHydrantNextFlowTestDue,
 } from './hydrantKeys.js';
 import type { HydrantStatus } from './hydrantKeys.js';
 
@@ -248,6 +249,10 @@ export async function updateHydrant(
   const { tableName } = readHydrantTableConfig(process.env);
   const pk = buildDeptScopedPk(deptId, 'HYDRANT', hydrantId);
   const now = Date.now();
+  const effectivePatch: UpdateHydrantInput =
+    patch.lastFlowTestDate !== undefined && patch.nextFlowTestDue === undefined
+      ? { ...patch, nextFlowTestDue: computeHydrantNextFlowTestDue(patch.lastFlowTestDate) }
+      : patch;
 
   const setClauses: string[] = ['updatedAt = :updatedAt'];
   const names: Record<string, string> = {};
@@ -262,10 +267,10 @@ export async function updateHydrant(
     setClauses.push('lastFlowTestDate = :lastFlowTestDate');
     values[':lastFlowTestDate'] = patch.lastFlowTestDate;
   }
-  if (patch.nextFlowTestDue !== undefined) {
-    const gsi2 = buildHydrantGsi2Keys(deptId, patch.nextFlowTestDue, hydrantId);
+  if (effectivePatch.nextFlowTestDue !== undefined) {
+    const gsi2 = buildHydrantGsi2Keys(deptId, effectivePatch.nextFlowTestDue, hydrantId);
     setClauses.push('nextFlowTestDue = :nextFlowTestDue', 'gsi2pk = :gsi2pk', 'gsi2sk = :gsi2sk');
-    values[':nextFlowTestDue'] = patch.nextFlowTestDue;
+    values[':nextFlowTestDue'] = effectivePatch.nextFlowTestDue;
     values[':gsi2pk'] = gsi2.gsi2pk;
     values[':gsi2sk'] = gsi2.gsi2sk;
   }
@@ -291,7 +296,7 @@ export async function updateHydrant(
       'inspections-service',
       'inspections.hydrant.updated',
       correlationId,
-      buildHydrantEventPayload(deptId, hydrantId, { ...existing, ...patch }),
+      buildHydrantEventPayload(deptId, hydrantId, { ...existing, ...effectivePatch }),
     );
 
     try {

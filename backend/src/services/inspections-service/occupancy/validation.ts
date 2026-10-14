@@ -161,6 +161,18 @@ export function validateCreateOccupancyInput(body: Record<string, unknown>): Cre
   const hazards = validateHazards(body.hazards, 'hazards', errors);
   const latitude = validateOptionalFiniteNumber(body.latitude, 'latitude', errors);
   const longitude = validateOptionalFiniteNumber(body.longitude, 'longitude', errors);
+  if (latitude !== undefined && Math.abs(latitude) > 90) {
+    errors.push({ field: 'latitude', message: 'must be between -90 and 90' });
+  }
+  if (longitude !== undefined && Math.abs(longitude) > 180) {
+    errors.push({ field: 'longitude', message: 'must be between -180 and 180' });
+  }
+  if ((body.latitude === undefined) !== (body.longitude === undefined)) {
+    errors.push({
+      field: body.latitude === undefined ? 'latitude' : 'longitude',
+      message: 'latitude and longitude must be provided together',
+    });
+  }
 
   if (errors.length > 0) {
     throw new ValidationError(errors);
