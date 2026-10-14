@@ -20,7 +20,7 @@ Work is tracked as `<KEY>-UI` monorepo issues labelled `area:ui`, each a sub-iss
 
 **No micro-frontend topology.** One application per surface, deliberately — the Moonaan MFE shell/remote pattern buys nothing at single-department scale. Do not apply `sdlc:mfe-architecture` here. Revisit only when a second department needs an independent deploy cadence.
 
-Shared packages: `@boxalarm/core` (owns the offline sync engine) · `@boxalarm/design-tokens` · `@boxalarm/i18n`. The bootstrap issue predates the rebrand and says `@fd/*` — use `@boxalarm/*`.
+Shared packages: only `@boxalarm/design-tokens` is built. `@boxalarm/core` and `@boxalarm/i18n` are planned in architecture §9 but do not exist - do not create `packages/core` ad hoc. The bootstrap issue predates the rebrand and says `@fd/*` — use `@boxalarm/*`.
 
 ## Why native, not a PWA — settled, do not relitigate
 
@@ -35,7 +35,7 @@ Blocked on the Apple Critical Alerts entitlement — [#4](https://github.com/zde
 **A volunteer on a phone, at night, in a hurry** — often in turnout gear with gloves, sometimes in a moving apparatus. Any workflow that assumes a desk is wrong by default.
 
 - Truck check completable in **under 90 seconds**
-- Offline capture with sync-on-reconnect (the sync engine lives in `@boxalarm/core`)
+- Offline capture with sync-on-reconnect (the sync engine lives app-local in `apps/mobile/src/sync`: `outbox.ts`, `syncManager.ts`, `db.ts`)
 - WCAG 2.1 AA, glove-sized touch targets, dual contrast palettes for daylight *and* a dark apparatus cab
 
 Auth: `react-native-app-auth` (mobile), `oidc-client-ts` (web) against Cognito.

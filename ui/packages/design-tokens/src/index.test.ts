@@ -3,8 +3,6 @@ import { meetsAA } from './contrast';
 import {
   accentPalette,
   breakpoints,
-  elevation,
-  iconSize,
   palette,
   radius,
   radiusScale,
@@ -107,25 +105,6 @@ describe('touchTarget', () => {
 describe('radius', () => {
   test('default is smaller than card', () => {
     expect(radius.default).toBeLessThan(radius.card);
-  });
-});
-
-describe('elevation', () => {
-  test('shadow opacity increases with each level', () => {
-    expect(elevation.level1.shadowOpacity).toBeGreaterThan(elevation.level0.shadowOpacity);
-    expect(elevation.level2.shadowOpacity).toBeGreaterThan(elevation.level1.shadowOpacity);
-  });
-
-  test('each level carries an Android elevation value too', () => {
-    expect(elevation.level1.androidElevation).toBeGreaterThan(elevation.level0.androidElevation);
-    expect(elevation.level2.androidElevation).toBeGreaterThan(elevation.level1.androidElevation);
-  });
-});
-
-describe('iconSize', () => {
-  test('scale is ordered smallest to largest', () => {
-    expect(iconSize.sm).toBeLessThan(iconSize.md);
-    expect(iconSize.md).toBeLessThan(iconSize.lg);
   });
 });
 

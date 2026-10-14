@@ -17,7 +17,7 @@ Client surfaces for **[Boxalarm](../README.md)** — a fire department operation
 
 ## Shared packages
 
-`@boxalarm/core` (owns the offline sync engine) · `@boxalarm/design-tokens` · `@boxalarm/i18n`
+Only `@boxalarm/design-tokens` is built. `@boxalarm/core` and `@boxalarm/i18n` are planned but do not exist; the offline sync engine lives in `apps/mobile/src/sync`.
 
 ## Why native, not a PWA
 
