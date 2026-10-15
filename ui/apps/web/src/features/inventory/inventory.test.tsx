@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -393,4 +393,70 @@ test('a non-admin viewer sees no restock control on consumables (#131)', async (
   await screen.findByText('Reorder needed');
 
   expect(screen.queryByRole('button', { name: /Restock/ })).toBeNull();
+});
+
+function acquiredAsset(): EquipmentAsset {
+  return {
+    assetId: 'eq-1',
+    deptId: 'd1',
+    serialNumber: 'SCBA-1',
+    location: 'Station 1',
+    lifecycleStatus: 'ACQUIRED',
+  };
+}
+
+test('a failed lifecycle change says the save failed and keeps the page and inputs (B2-184)', async () => {
+  server.use(
+    http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(acquiredAsset())),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+    http.put('/api/v1/inventory/equipment/eq-1/lifecycle', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Conflict',
+          status: 409,
+          detail: 'Asset is already retired.',
+          traceId: 't',
+        },
+        { status: 409 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['ADMIN'], '/inventory/eq-1');
+  await screen.findByRole('heading', { name: 'SCBA-1' });
+  await user.type(screen.getByLabelText('New location'), 'Bay 4');
+  await user.click(screen.getByRole('button', { name: 'Move to In service' }));
+
+  expect(await screen.findByText('Unable to save changes: Asset is already retired.')).toBeTruthy();
+  expect(screen.queryByText('Something went wrong loading this page')).toBeNull();
+  expect((screen.getByLabelText('New location') as HTMLInputElement).value).toBe('Bay 4');
+});
+
+test('retiring an asset asks for confirmation and sends nothing on cancel (B2-187)', async () => {
+  let posts: unknown[] = [];
+  server.use(
+    http.get('/api/v1/inventory/equipment/eq-1', () => HttpResponse.json(acquiredAsset())),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+    http.put('/api/v1/inventory/equipment/eq-1/lifecycle', async ({ request }) => {
+      posts = [...posts, await request.json()];
+      return HttpResponse.json({ ...acquiredAsset(), lifecycleStatus: 'RETIRED' });
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderApp(['ADMIN'], '/inventory/eq-1');
+  await screen.findByRole('heading', { name: 'SCBA-1' });
+
+  await user.click(screen.getByRole('button', { name: 'Move to Retired' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(within(dialog).getByText('Retire SCBA-1?')).toBeTruthy();
+  expect(posts).toEqual([]);
+  await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  expect(posts).toEqual([]);
+
+  await user.click(screen.getByRole('button', { name: 'Move to Retired' }));
+  await user.click(await screen.findByRole('button', { name: 'Retire asset' }));
+  await waitFor(() => expect(posts).toHaveLength(1));
 });

@@ -258,8 +258,39 @@ test("today's shifts lists only shifts overlapping today, in local time", async 
 
   renderLanding({ sub: 'm1', 'cognito:groups': ['OFFICER'] });
   expect(await screen.findByText('STATION-TODAY')).toBeTruthy();
-  expect(screen.getByText(/partially filled/)).toBeTruthy();
+  expect(
+    screen.getByText('Partially filled').closest('[data-status]')?.getAttribute('data-status'),
+  ).toBe('caution');
   expect(screen.queryByText('STATION-OLD')).toBeNull();
+});
+
+test("today's shifts flags an open shift with a warning chip and omits cancelled shifts", async () => {
+  const today = new Date();
+  today.setHours(18, 0, 0, 0);
+  const shift = (shiftId: string, stationId: string, status: string) => ({
+    shiftId,
+    startAt: today.getTime(),
+    endAt: today.getTime() + 43_200_000,
+    stationId,
+    status,
+  });
+  server.use(
+    http.get('/api/v1/personnel/shifts', () =>
+      HttpResponse.json({
+        shifts: [
+          shift('s-open', 'STATION-OPEN', 'OPEN'),
+          shift('s-gone', 'STATION-GONE', 'CANCELLED'),
+        ],
+      }),
+    ),
+  );
+
+  renderLanding({ sub: 'm1', 'cognito:groups': ['OFFICER'] });
+  expect(await screen.findByText('STATION-OPEN')).toBeTruthy();
+  expect(screen.getByText('Open').closest('[data-status]')?.getAttribute('data-status')).toBe(
+    'warning',
+  );
+  expect(screen.queryByText('STATION-GONE')).toBeNull();
 });
 
 test("today's shifts says none are scheduled only after a successful empty read", async () => {

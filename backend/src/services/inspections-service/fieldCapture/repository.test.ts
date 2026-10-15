@@ -77,6 +77,7 @@ describe('submitFieldCapture', () => {
     const domainUpdate = transactItems[2]?.Update as {
       Key: Record<string, unknown>;
       ConditionExpression: string;
+      UpdateExpression: string;
       ExpressionAttributeValues: Record<string, unknown>;
     };
     expect(domainUpdate.Key).toEqual({
@@ -84,10 +85,31 @@ describe('submitFieldCapture', () => {
       sk: 'INSPECTION#INS-1',
     });
     expect(domainUpdate.ConditionExpression).toBe('attribute_exists(sk)');
+    expect(domainUpdate.UpdateExpression).toContain(
+      'violations = list_append(if_not_exists(violations, :empty), :violations)',
+    );
+    expect(domainUpdate.UpdateExpression).toContain(
+      'photoS3Keys = list_append(if_not_exists(photoS3Keys, :empty), :photoS3Keys)',
+    );
     expect(domainUpdate.ExpressionAttributeValues[':photoS3Keys']).toEqual([
       'NICHOLS/INSPECTION_RECORD/INS-1/photo.jpg',
     ]);
     expect(domainUpdate.ExpressionAttributeValues[':conductedBy']).toBe('member-1');
+  });
+
+  it('returns the existing violations and photos together with the new capture', async () => {
+    const existing = {
+      ...EXISTING_ITEM,
+      violations: [{ code: 'V0', description: 'blocked exit', status: 'open' as const }],
+      photoS3Keys: ['NICHOLS/INSPECTION_RECORD/INS-1/first.jpg'],
+    };
+    const send = vi.fn().mockResolvedValueOnce({ Item: existing }).mockResolvedValueOnce({});
+    const result = await submitFieldCapture(fakeDoc(send), TABLE, buildInput());
+    expect(result.item.violations.map((v) => v.code)).toEqual(['V0', 'V1']);
+    expect(result.item.photoS3Keys).toEqual([
+      'NICHOLS/INSPECTION_RECORD/INS-1/first.jpg',
+      'NICHOLS/INSPECTION_RECORD/INS-1/photo.jpg',
+    ]);
   });
 
   it('throws FieldCaptureInspectionNotFoundError when no inspection record exists to attach to (ticket depends-on E5-S5)', async () => {

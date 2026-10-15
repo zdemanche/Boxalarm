@@ -2,11 +2,13 @@ import {
   AdminAddUserToGroupCommand,
   AdminCreateUserCommand,
   AdminDeleteUserCommand,
+  AdminGetUserCommand,
   AdminListGroupsForUserCommand,
   AdminRemoveUserFromGroupCommand,
   AdminUpdateUserAttributesCommand,
   AdminUserGlobalSignOutCommand,
   CognitoIdentityProviderClient,
+  InvalidParameterException,
   UsernameExistsException,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
@@ -47,6 +49,14 @@ export class MemberLoginExistsError extends Error {
   }
 }
 
+/** Thrown when Cognito rejects the email itself, so the caller can answer 400. */
+export class InvalidMemberEmailError extends Error {
+  constructor(email: string) {
+    super(`${email} is not a valid email address`);
+    this.name = 'InvalidMemberEmailError';
+  }
+}
+
 /** Every new member starts in the MEMBER group, matching the member row's roles. */
 const INITIAL_GROUP = 'MEMBER';
 
@@ -79,6 +89,9 @@ export async function createMemberLogin(
     if (error instanceof UsernameExistsException) {
       throw new MemberLoginExistsError(input.email);
     }
+    if (error instanceof InvalidParameterException) {
+      throw new InvalidMemberEmailError(input.email);
+    }
     throw error;
   }
   if (!sub) {
@@ -97,6 +110,46 @@ export async function createMemberLogin(
   } catch (error) {
     await deleteMemberLogin(client, config, input.email);
     throw error;
+  }
+  return sub;
+}
+
+/**
+ * A login that outlived a failed create (timeout, or the row write and the cleanup both
+ * failed) answers 409 forever unless the retry can adopt it. Returns its `sub` when the login
+ * belongs to `deptId` (re-adding it to MEMBER, which is idempotent); undefined when it is
+ * another department's, which stays a 409.
+ */
+export async function adoptExistingLogin(
+  client: CognitoIdentityProviderClient,
+  config: MemberLoginConfig,
+  input: { readonly email: string; readonly deptId: string },
+): Promise<string | undefined> {
+  const existing = await client.send(
+    new AdminGetUserCommand({ UserPoolId: config.userPoolId, Username: input.email }),
+  );
+  const attribute = (name: string) =>
+    existing.UserAttributes?.find((attr) => attr.Name === name)?.Value;
+  const sub = attribute('sub');
+  if (!sub || attribute('custom:deptId') !== input.deptId) {
+    return undefined;
+  }
+  await client.send(
+    new AdminAddUserToGroupCommand({
+      UserPoolId: config.userPoolId,
+      Username: input.email,
+      GroupName: INITIAL_GROUP,
+    }),
+  );
+  if (existing.UserStatus === 'FORCE_CHANGE_PASSWORD') {
+    await client.send(
+      new AdminCreateUserCommand({
+        UserPoolId: config.userPoolId,
+        Username: input.email,
+        MessageAction: 'RESEND',
+        DesiredDeliveryMediums: ['EMAIL'],
+      }),
+    );
   }
   return sub;
 }

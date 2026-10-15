@@ -124,13 +124,17 @@ describe("AuditTrail", () => {
     await settle(audit);
 
     const rules = await resolve(audit.lifecycleConfiguration.rules);
-    expect(rules).toHaveLength(1);
+    expect(rules).toHaveLength(2);
     expect(rules?.[0]?.status).toBe("Enabled");
     expect(rules?.[0]?.transitions?.[0]).toMatchObject({
       days: AUDIT_LIFECYCLE_GLACIER_TRANSITION_DAYS,
       storageClass: "GLACIER_IR",
     });
     expect(rules?.[0]?.expiration?.days).toBe(AUDIT_LIFECYCLE_EXPIRATION_DAYS);
+    expect(rules?.[0]?.noncurrentVersionExpiration?.noncurrentDays).toBe(1);
+    expect(rules?.[1]?.expiration?.expiredObjectDeleteMarker).toBe(true);
+    expect(rules?.[0]?.filter?.prefix).toBe("AWSLogs/");
+    expect(rules?.[1]?.filter?.prefix).toBe("AWSLogs/");
     // Must expire strictly after the Object Lock retention elapses.
     expect(AUDIT_LIFECYCLE_EXPIRATION_DAYS).toBeGreaterThan(365);
   });

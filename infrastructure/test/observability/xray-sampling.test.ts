@@ -92,7 +92,7 @@ describe("createAlertingSamplingRule", () => {
     expect(alertingName).toBe("boxalarm-prod-alerting-sampling");
     expect(alertingFixedRate).toBe(1.0);
     expect(alertingPriority).toBeLessThan(defaultPriority as number);
-    expect(alertingServiceName).toBe("boxalarm-prod-alerting-service-*");
+    expect(alertingServiceName).toBe("boxalarm-prod-alerting-*");
   });
 
   it("throws on empty env", async () => {

@@ -1,7 +1,7 @@
 import { useQueries } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { Card, StatusChip } from '../../components/ui';
+import { Card, Skeleton, StatusChip } from '../../components/ui';
 import { daysUntil, dueLabel, formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { getMaintenance } from './api';
 import type { Apparatus } from './types';
@@ -13,8 +13,14 @@ const REMINDER_WINDOW_SECONDS = 30 * 86400;
 // #124 AC3: /apparatus due-soon panel. Fans getMaintenance out across the already-loaded
 // apparatus roster (bounded, 5 units at Nichols FD) - client-side UI fan-out over a small,
 // already-fetched list, not the backend n-plus-1/scan() criterion's target. A unit whose call
-// fails is silently omitted rather than failing the whole panel.
-export function MaintenanceDueSoonPanel({ apparatus }: { apparatus: Apparatus[] }) {
+// fails is reported as a count rather than failing the whole panel.
+export function MaintenanceDueSoonPanel({
+  apparatus,
+  loading: rosterLoading,
+}: {
+  apparatus: Apparatus[];
+  loading: boolean;
+}) {
   const auth = useAuth();
   const results = useQueries({
     queries: apparatus.map((unit) => ({
@@ -33,11 +39,16 @@ export function MaintenanceDueSoonPanel({ apparatus }: { apparatus: Apparatus[] 
     )
     .sort((a, b) => a.nextScheduled - b.nextScheduled);
 
+  const loading = rosterLoading || results.some((result) => result.isLoading);
+  const failed = results.filter((result) => result.isError).length;
+
   return (
     <Card title="Maintenance due soon">
-      {dueSoon.length === 0 ? (
+      {dueSoon.length === 0 && loading ? (
+        <Skeleton lines={2} />
+      ) : dueSoon.length === 0 && failed === 0 ? (
         <p className={styles.message}>No maintenance due within 30 days.</p>
-      ) : (
+      ) : dueSoon.length > 0 ? (
         <ul className={styles.list}>
           {dueSoon.map(({ unit, nextScheduled }) => {
             const dueDate = toCalendarDate(nextScheduled * 1000);
@@ -58,7 +69,13 @@ export function MaintenanceDueSoonPanel({ apparatus }: { apparatus: Apparatus[] 
             );
           })}
         </ul>
-      )}
+      ) : null}
+      {failed > 0 ? (
+        <p role="status" className={styles.message}>
+          Maintenance for {failed} {failed === 1 ? 'unit' : 'units'} couldn&rsquo;t load. This is
+          not an empty list.
+        </p>
+      ) : null}
     </Card>
   );
 }

@@ -178,16 +178,18 @@ export interface SelfTestRun {
   channelsTested: string[];
   channelResults: Record<string, SelfTestChannelResult>;
   overallResult: 'RUNNING' | 'PASS' | 'FAIL';
+  eligibilityReason?: string;
 }
 
-export type DeliveryReceiptStatus = 'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT';
+export type DeliveryReceiptStatus =
+  'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT' | 'NOT_SENT';
 
 export interface DeliveryReceipt {
   memberId: string;
   channel: string;
   toneSequence: number;
   status: DeliveryReceiptStatus;
-  sentAt: number;
+  sentAt?: number;
   deliveredAt: number | null;
   openedAt: number | null;
   failureReason: string | null;
@@ -235,6 +237,7 @@ export interface RidingSeatPosition {
   code: string;
   label: string;
   requiredQual?: string;
+  version: number;
   assignment?: RidingSeatAssignment;
 }
 
@@ -260,6 +263,8 @@ export interface AlertsRepository {
   /** The department's active calls - the in-app path to a call whose notification is gone. */
   listActiveDispatches(): Promise<ActiveDispatchList>;
   getRoster(dispatchId: string): Promise<RosterEntry[]>;
+  /** The department's members as memberId -> "First Last"; a separate call so a personnel outage never blocks the roster. */
+  listMemberNames(): Promise<Record<string, string>>;
   /**
    * Saves the answer on the phone and starts sending it; resolves with the outbox row carrying it
    * (null when there is no API to send to - the local mock), never with the network result.
@@ -291,6 +296,7 @@ export interface AlertsRepository {
       positionCode: string;
       memberId: string | null;
       expectedVersion: number;
+      clientAssignmentId?: string;
     },
   ): Promise<void>;
 }

@@ -32,6 +32,33 @@ describe('renderTranscriptPdf', () => {
     expect(text).toContain('LADDER_OPS');
   });
 
+  it('paginates a long history so no line falls below the page and every page is indexed', () => {
+    const attendance = Array.from({ length: 150 }, (_, i) => ({
+      eventId: `event-${i}`,
+      category: 'LADDER_OPS',
+      hours: 1,
+      startAt: i,
+    }));
+    const text = renderTranscriptPdf(buildTranscript('MBR-0034', [CERT], attendance)).toString(
+      'latin1',
+    );
+
+    const pageCount = (text.match(/\/Type \/Page /g) ?? []).length;
+    expect(pageCount).toBeGreaterThan(1);
+    expect(text).toContain(`/Count ${pageCount}`);
+    expect(text).toContain('event-149');
+    expect(text).toContain('LADDER_OPS: 150h');
+    for (const stream of text.match(/stream\n[\s\S]*?\nendstream/g) ?? []) {
+      expect((stream.match(/ Tj/g) ?? []).length).toBeLessThanOrEqual(60);
+    }
+    const xrefStart = Number(/startxref\n(\d+)/.exec(text)![1]);
+    expect(text.slice(xrefStart, xrefStart + 4)).toBe('xref');
+    const offsets = [...text.matchAll(/(\d{10}) 00000 n/g)].map((m) => Number(m[1]));
+    offsets.forEach((offset, i) => {
+      expect(text.slice(offset).startsWith(`${i + 1} 0 obj`)).toBe(true);
+    });
+  });
+
   it('renders a well-formed PDF for an empty transcript without error (AC3)', () => {
     const pdf = renderTranscriptPdf(buildTranscript('MBR-9999', [], []));
     const text = pdf.toString('latin1');

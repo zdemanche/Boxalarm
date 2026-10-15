@@ -6,12 +6,16 @@ describe("index.ts production wiring", { timeout: 120_000 }, () => {
   let counts: Record<string, number>;
   let logGroupNames: Set<string>;
   let dashboardNames: Set<string>;
+  let alarmNames: Set<string>;
+  let metricFilterNames: Set<string>;
 
   beforeEach(async () => {
     vi.resetModules();
     counts = {};
     logGroupNames = new Set();
     dashboardNames = new Set();
+    alarmNames = new Set();
+    metricFilterNames = new Set();
     await pulumi.runtime.setMocks(
       {
         newResource: (args: pulumi.runtime.MockResourceArgs) => {
@@ -20,6 +24,12 @@ describe("index.ts production wiring", { timeout: 120_000 }, () => {
           if (args.type === "aws:cloudwatch/logGroup:LogGroup") {
             logGroupNames.add(args.inputs.name as string);
             state.arn = `arn:aws:logs:us-east-1:123456789012:log-group:${args.inputs.name}`;
+          }
+          if (args.type === "aws:cloudwatch/metricAlarm:MetricAlarm") {
+            alarmNames.add(args.inputs.name as string);
+          }
+          if (args.type === "aws:cloudwatch/logMetricFilter:LogMetricFilter") {
+            metricFilterNames.add(args.inputs.name as string);
           }
           if (args.type === "aws:cloudwatch/dashboard:Dashboard") {
             dashboardNames.add(args.inputs.dashboardName as string);
@@ -202,6 +212,9 @@ describe("index.ts production wiring", { timeout: 120_000 }, () => {
           indexModule.ridingBoard.getRoute.lambda.function.arn,
           indexModule.ridingBoard.assignRoute.lambda.function.arn,
           indexModule.alertingAlarms.pageTopic.arn,
+          indexModule.identityAlarms.throttles.id,
+          indexModule.identityAlarms.errors.id,
+          indexModule.identityAlarms.statusLookupFailed.id,
           indexModule.eligibilityStaleness.lambda.function.arn,
           indexModule.escalation.toneEvaluatorLambda.function.arn,
           indexModule.routesOps.canaryStatus.lambda.function.arn,
@@ -244,6 +257,11 @@ describe("index.ts production wiring", { timeout: 120_000 }, () => {
     );
     expect(logGroupNames).toEqual(expectedLogGroupNames);
     expect(dashboardNames).toEqual(expectedDashboardNames);
+
+    expect(alarmNames).toContain("boxalarm-dev-identity-pre-token-throttles");
+    expect(alarmNames).toContain("boxalarm-dev-identity-pre-token-errors");
+    expect(alarmNames).toContain("boxalarm-dev-identity-pre-token-status-lookup-failed");
+    expect(metricFilterNames).toContain("boxalarm-dev-identity-pre-token-status-lookup-failed");
 
     // Let every nested ComponentResource's derived-policy resource registrations
     // (RolePolicy/Route/Integration built from `.apply()`-derived IAM statements) settle

@@ -72,8 +72,6 @@ function prePlanCopy(
     utilityShutoffs: [],
     snapshotUpdatedAt: extra.snapshotUpdatedAt ?? 1,
     ...(normalized?.unit ? { addressUnit: normalized.unit } : {}),
-    ...(normalized?.town ? { addressTown: normalized.town } : {}),
-    ...(normalized?.zip ? { addressZip: normalized.zip } : {}),
     ...(normalized ? prePlanAddressIndexKeys(DEPT_ID, normalized.key, occupancyId) : {}),
     ...(extra.location
       ? { ...extra.location, ...prePlanGeoIndexKeys(DEPT_ID, extra.location, occupancyId) }

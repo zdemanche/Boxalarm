@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { ApiError, type ProblemDetails } from '../../lib/apiClient';
 import { ConfirmDialog, Dialog } from './Dialog';
 
 afterEach(cleanup);
@@ -149,5 +150,22 @@ describe('ConfirmDialog', () => {
     expect(
       screen.getByRole('button', { name: 'Place out of service' }).getAttribute('aria-busy'),
     ).toBeNull();
+  });
+
+  test('async onConfirm: a gateway-shaped rejection still shows a non-empty alert', async () => {
+    const user = userEvent.setup();
+    render(
+      <ConfirmDialog
+        open
+        onOpenChange={vi.fn()}
+        title="Place Engine 301 out of service?"
+        consequence="It will be removed from riding assignments."
+        confirmLabel="Place out of service"
+        onConfirm={() => Promise.reject(new ApiError({} as ProblemDetails, 'Forbidden'))}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Place out of service' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Forbidden'));
   });
 });

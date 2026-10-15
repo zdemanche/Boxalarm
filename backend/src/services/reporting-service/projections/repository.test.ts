@@ -45,4 +45,83 @@ describe('applyProjection', () => {
     const client = { send } as unknown as DynamoDBDocumentClient;
     await expect(applyProjection(client, 'platform', deptId, event, 1)).resolves.toBe('duplicate');
   });
+
+  it('guards each rollup write with a per-field clock taken from the event time', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = { send } as unknown as DynamoDBDocumentClient;
+    await applyProjection(
+      client,
+      'platform',
+      deptId,
+      { ...event, eventTimeMs: 1_600_000_000_000 },
+      1_700_000_000_000,
+    );
+    const items = (
+      send.mock.calls[0]?.[0] as unknown as {
+        input: { TransactItems: { Update?: Record<string, unknown> }[] };
+      }
+    ).input.TransactItems;
+    expect(items[1]?.Update).toMatchObject({
+      ConditionExpression: 'attribute_not_exists(#clock) OR #clock <= :clockMs',
+      ExpressionAttributeNames: {
+        '#clock': 'statusAt',
+        '#entityType': 'entityType',
+        '#memberId': 'memberId',
+        '#status': 'status',
+        '#removed': 'removed',
+        '#ttl': 'ttl',
+      },
+      ExpressionAttributeValues: {
+        ':clockMs': 1_600_000_000_000,
+        ':entityType': 'REPORTING_MEMBER',
+        ':memberId': 'm-1',
+        ':status': 'ACTIVE',
+      },
+    });
+    expect(items[2]?.Update).not.toHaveProperty('ConditionExpression');
+  });
+
+  it('reports a rollup write that loses the clock comparison as stale instead of failing', async () => {
+    const error = new TransactionCanceledException({
+      message: 'cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+    });
+    const send = vi.fn().mockRejectedValue(error);
+    const client = { send } as unknown as DynamoDBDocumentClient;
+    await expect(applyProjection(client, 'platform', deptId, event, 1)).resolves.toBe('stale');
+  });
+
+  it('turns a delete into a clock-guarded tombstone with a ttl', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = { send } as unknown as DynamoDBDocumentClient;
+    await applyProjection(
+      client,
+      'platform',
+      deptId,
+      {
+        eventId: 'evt-2',
+        eventType: 'neris.incident.approved',
+        deptId: 'NICHOLS',
+        eventTimeMs: 1_650_000_000_000,
+        payload: { incidentId: 'inc-1' },
+      },
+      1_700_000_000_000,
+    );
+    const items = (
+      send.mock.calls[0]?.[0] as unknown as {
+        input: { TransactItems: Record<string, unknown>[] };
+      }
+    ).input.TransactItems;
+    expect(items.some((item) => 'Delete' in item)).toBe(false);
+    expect(items[1]?.Update).toMatchObject({
+      Key: { pk: 'DEPT#NICHOLS#REPORTING_ROLLUP', sk: 'NERIS#inc-1' },
+      ConditionExpression: 'attribute_not_exists(#clock) OR #clock <= :clockMs',
+      ExpressionAttributeValues: {
+        ':removed': true,
+        ':ttl': 1_700_000_000 + 48 * 60 * 60,
+        ':clockMs': 1_650_000_000_000,
+      },
+    });
+  });
 });

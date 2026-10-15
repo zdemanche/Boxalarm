@@ -44,6 +44,8 @@ describe('getApparatus handler', () => {
 
   afterEach(() => {
     vi.doUnmock('./apparatusRepository.js');
+    vi.doUnmock('../inspections-service/assetsSigner.js');
+    delete process.env.PLATFORM_ASSETS_BUCKET_NAME;
     vi.restoreAllMocks();
   });
 
@@ -91,6 +93,47 @@ describe('getApparatus handler', () => {
       ],
       failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],
     });
+  });
+
+  it('adds a signed photoUrl to open defects that carry a department-scoped photo key', async () => {
+    process.env.PLATFORM_ASSETS_BUCKET_NAME = 'assets-bucket';
+    const createSignedAssetUrl = vi.fn().mockResolvedValue('https://signed.example/photo');
+    vi.doMock('../inspections-service/assetsSigner.js', () => ({ createSignedAssetUrl }));
+    vi.doMock('./apparatusRepository.js', () => ({
+      getApparatusRepository: () => ({
+        getApparatusDetail: vi.fn().mockResolvedValue({
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'IN_SERVICE',
+          openDefects: [
+            { defectId: 'DEF-1', photoS3Key: 'NICHOLS/defect/DEF-1/tire.jpg' },
+            { defectId: 'DEF-2', photoS3Key: null },
+            { defectId: 'DEF-3', photoS3Key: 'OTHER/defect/DEF-3/x.jpg' },
+            { defectId: 'DEF-4', photoS3Key: 'NICHOLS/defect/DEF-1/tire.jpg' },
+          ],
+          failedTests: [],
+        }),
+      }),
+    }));
+    const { handler } = await import('./getApparatus.js');
+
+    const result = await handler(
+      buildEvent(VALID_AUTH_CONTEXT, 'ENGINE-2'),
+      {} as never,
+      () => undefined,
+    );
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      openDefects: { defectId: string; photoUrl?: string }[];
+    };
+    expect(body.openDefects.map((d) => d.photoUrl)).toEqual([
+      'https://signed.example/photo',
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(createSignedAssetUrl).toHaveBeenCalledTimes(1);
   });
 
   it('returns 200 with empty openDefects/failedTests when there are none', async () => {

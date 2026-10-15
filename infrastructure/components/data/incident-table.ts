@@ -11,6 +11,7 @@ export interface IncidentTableArgs {
  * Incident-service DynamoDB table (E6-S1-INFRA).
  * Customer-managed KMS, on-demand, PITR + Streams from day one.
  * GSI1 supports queries by DEPT#{deptId} / INCIDENT#{alarmAt}.
+ * GSI3 serves audit-trail reads by entity (same key names as the platform table).
  */
 export class IncidentTable extends pulumi.ComponentResource {
   public readonly table: aws.dynamodb.Table;
@@ -49,6 +50,8 @@ export class IncidentTable extends pulumi.ComponentResource {
           { name: "sk", type: "S" },
           { name: "gsi1pk", type: "S" },
           { name: "gsi1sk", type: "S" },
+          { name: "gsi3pk", type: "S" },
+          { name: "gsi3sk", type: "S" },
         ],
         globalSecondaryIndexes: [
           {
@@ -56,6 +59,13 @@ export class IncidentTable extends pulumi.ComponentResource {
             // Application keys: gsi1pk = DEPT#{deptId}, gsi1sk = INCIDENT#{alarmAt}
             hashKey: "gsi1pk",
             rangeKey: "gsi1sk",
+            projectionType: "ALL",
+          },
+          {
+            name: "GSI3",
+            // Audit rows: gsi3pk = DEPT#{deptId}#AUDIT#ENTITY#INCIDENT#{incidentId}, gsi3sk = audit timestamp
+            hashKey: "gsi3pk",
+            rangeKey: "gsi3sk",
             projectionType: "ALL",
           },
         ],

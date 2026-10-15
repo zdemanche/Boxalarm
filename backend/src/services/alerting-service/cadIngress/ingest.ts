@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import {
+  MAX_FIELD_CHARS,
   MAX_NARRATIVE_CHARS,
   dispatchTextFingerprint,
+  extractCadFields,
   normalizeDispatchText,
   parseCadText,
   parseCadTextBounded,
@@ -11,6 +13,7 @@ import {
   DEFAULT_CAD_TIME_ZONE,
   type CadParseResult,
   type CadParsedFields,
+  type CadParserTemplate,
 } from '@boxalarm/cad-parser';
 import {
   cadLocality,
@@ -55,10 +58,19 @@ export interface CadIngestInput {
   readonly text: string;
   /** Webhook only: fields the CAD sent already structured (they win over the template). */
   readonly structured?: CadParsedFields;
+  /** Webhook only: structured fields plus the sender's text, so a change in either is new content. */
+  readonly identityText?: string;
   /** Epoch seconds. */
   readonly receivedAt: number;
   /** The authenticated message's replay marker, written in the same transaction. */
-  readonly replay?: { readonly token: string; readonly ttlSeconds: number };
+  readonly replay?: {
+    readonly token: string;
+    readonly ttlSeconds: number;
+    /** Who wrote the marker (the SES message id), so a retry of it is told from a replay. */
+    readonly origin?: string;
+    /** More keys the same message answers to; each is a marker in the same transaction. */
+    readonly also?: readonly { readonly token: string; readonly ttlSeconds: number }[];
+  };
 }
 
 export type CadIngestResult =
@@ -133,12 +145,24 @@ function splitUnits(units: string | undefined): string[] {
   return units ? units.split(/[\s,;/]+/).filter((unit) => unit.length > 0) : [];
 }
 
+const INCIDENT_NUMBER_LIMITS = { field: MAX_FIELD_CHARS, narrative: 0 } as const;
+
+function recoverIncidentNumber(
+  parser: CadParserTemplate | undefined,
+  text: string,
+): CadParsedFields {
+  const rule = parser?.fields.incidentNumber;
+  if (rule?.label === undefined) return {};
+  return extractCadFields([['incidentNumber', rule]], text, INCIDENT_NUMBER_LIMITS);
+}
+
 export function buildCadDispatch(
   source: CadSourceCopy,
   text: string,
   structured: CadParsedFields | undefined,
   /** The template's result, when already run under its deadline (parseCadTextBounded). */
   preParsed?: CadParseResult,
+  identityText?: string,
 ): {
   readonly dispatch: DispatchReceived;
   readonly parseStatus: 'PARSED' | 'RAW';
@@ -153,7 +177,7 @@ export function buildCadDispatch(
   const fields: CadParsedFields = structuredResult ?? { ...parsed?.fields, ...structured };
   const isParsed = structuredResult !== undefined || parsed?.status === 'PARSED';
   const narrativeFallback = rawText.slice(0, MAX_NARRATIVE_CHARS);
-  const identity = cadIdentity(source.sourceId, fields, rawText);
+  const identity = cadIdentity(source.sourceId, fields, identityText ?? rawText);
   const { externalDispatchId } = identity;
 
   if (isParsed && fields.address) {
@@ -202,13 +226,21 @@ export async function ingestCadDispatch(
   const { deptId, source, channel } = input;
   // The template runs in a worker under a hard deadline (security review M3); a template that
   // overruns it fails open to RAW - the dispatch still pages - and is counted.
-  const preParsed = input.structured?.address
+  const normalizedText = normalizeDispatchText(input.text).trim();
+  let preParsed = input.structured?.address
     ? undefined
-    : await parseCadTextBounded(source.parser, normalizeDispatchText(input.text).trim());
+    : await parseCadTextBounded(source.parser, normalizedText);
   if (
     preParsed?.status === 'RAW' &&
     (preParsed.reason === 'TIMEOUT' || preParsed.reason === 'ERROR')
   ) {
+    // The incident number is the page's identity: without it an update of a paged call (or the
+    // call after a timed-out original) would page the whole roster again. A label rule is a
+    // linear, escaped match, so it is safe to run in-thread past the deadline.
+    preParsed = {
+      ...preParsed,
+      fields: recoverIncidentNumber(source.parser, normalizedText),
+    };
     emitCadMetric('CadParseTimeout', { Channel: channel, Reason: preParsed.reason });
     logInfo('cadIngress.parse.deadline', {
       deptId,
@@ -216,25 +248,39 @@ export async function ingestCadDispatch(
       reason: preParsed.reason,
     });
   }
-  const built = buildCadDispatch(source, input.text, input.structured, preParsed);
+  const built = buildCadDispatch(
+    source,
+    input.text,
+    input.structured,
+    preParsed,
+    input.identityText,
+  );
   const idempotencyKey = deriveIngressIdempotencyKey(
     deptId,
     'CAD',
     built.dispatch.externalDispatchId,
   );
 
-  const contentHash = dispatchTextFingerprint(normalizeDispatchText(input.text));
+  const contentHash = dispatchTextFingerprint(
+    normalizeDispatchText(input.identityText ?? input.text),
+  );
   const timeZone = source.timeZone ?? DEFAULT_CAD_TIME_ZONE;
   // The original's time, placed on the day it was received (chain review R3-M1).
   const messageTime = resolveCadMessageTime(built.fields.dispatchTime, {
     receivedAt: input.receivedAt,
     timeZone,
   });
-  const replayMarker = input.replay
-    ? replayMarkerItem(
-        { deptId, sourceId: source.sourceId, token: input.replay.token },
-        input.receivedAt,
-        input.replay.ttlSeconds,
+  const replayMarkers = input.replay
+    ? [
+        { token: input.replay.token, ttlSeconds: input.replay.ttlSeconds },
+        ...(input.replay.also ?? []),
+      ].map(({ token, ttlSeconds }) =>
+        replayMarkerItem(
+          { deptId, sourceId: source.sourceId, token },
+          input.receivedAt,
+          ttlSeconds,
+          input.replay?.origin,
+        ),
       )
     : undefined;
 
@@ -255,7 +301,7 @@ export async function ingestCadDispatch(
       ...(built.fields.incidentNumber ? { incidentNumber: built.fields.incidentNumber } : {}),
       ...(built.fields.dispatchTime ? { dispatchTimeText: built.fields.dispatchTime } : {}),
     },
-    ...(replayMarker ? { replayMarker } : {}),
+    ...(replayMarkers ? { replayMarkers } : {}),
   });
 
   // A later message for an incident already paged: an update, never silent and never a
@@ -274,12 +320,13 @@ export async function ingestCadDispatch(
           dispatchId,
           dispatch: built.dispatch,
           parseStatus: built.parseStatus,
+          typeCarried: built.fields.incidentType !== undefined,
           contentHash,
           channel,
           receivedAt: input.receivedAt,
           timeZone,
           ...(built.fields.dispatchTime ? { messageTimeText: built.fields.dispatchTime } : {}),
-          ...(replayMarker ? { replayMarker } : {}),
+          ...(replayMarkers ? { replayMarkers } : {}),
         })
       : ({ outcome: 'missing' } as const);
     if (update.outcome === 'recorded' && dispatchId) {
@@ -299,6 +346,17 @@ export async function ingestCadDispatch(
         updateId: update.updateId,
         parseStatus: built.parseStatus,
       };
+    }
+    if (update.outcome === 'unchanged' && dispatchId) {
+      emitCadMetric('CadIngressUnchanged', { Channel: channel, Identity: built.identity.kind });
+      logInfo('cadIngress.update.unchanged', {
+        deptId,
+        sourceId: source.sourceId,
+        channel,
+        dispatchId,
+        updateId: update.updateId,
+      });
+      return { outcome: 'duplicate', parseStatus: built.parseStatus };
     }
     if (update.outcome === 'history' && dispatchId) {
       emitCadMetric('CadIngressOlderMessage', { Channel: channel });

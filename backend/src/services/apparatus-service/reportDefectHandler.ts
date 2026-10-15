@@ -13,6 +13,7 @@ import { createDynamoClient, readApparatusTableConfig } from './dynamoClient.js'
 import {
   createDefectPhotoUploadUrl,
   readDefectPhotoUploadConfig,
+  defectPhotoKeyPrefix,
   resignDefectPhotoUploadUrl,
 } from './defectPhotoUpload.js';
 import {
@@ -27,6 +28,7 @@ import { apparatusNotFoundProblem, validationProblem } from './problemDetails.js
 import type { ValidationFieldError } from './problemDetails.js';
 import {
   ServiceStatusConflictError,
+  hasOutOfServiceRecordSince,
   setServiceStatus,
   type SetServiceStatusInput,
 } from './repository.js';
@@ -223,10 +225,12 @@ async function replayedDefectResponse(
   deptId: VerifiedDeptId,
 ): Promise<APIGatewayProxyResultV2> {
   const upload =
-    photoFilename && existing.photoS3Key
+    photoFilename &&
+    existing.photoS3Key?.startsWith(defectPhotoKeyPrefix(deptId, existing.defectId))
       ? await resignDefectPhotoUploadUrl(
           await readDefectPhotoUploadConfig(process.env),
           deptId,
+          existing.defectId,
           existing.photoS3Key,
         )
       : undefined;
@@ -235,6 +239,66 @@ async function replayedDefectResponse(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(toResponseBody(existing, upload)),
   };
+}
+
+async function markOutOfService(
+  deps: ReportDefectDeps,
+  defect: DefectRecord,
+  deptId: VerifiedDeptId,
+  traceId: string,
+  replay = false,
+): Promise<void> {
+  try {
+    if (
+      replay &&
+      (await hasOutOfServiceRecordSince(
+        deps.client,
+        deps.tableName,
+        deptId,
+        defect.apparatusId,
+        defect.reportedAt,
+      ))
+    ) {
+      return;
+    }
+    await deps.setServiceStatus(deps.client, deps.tableName, {
+      deptId,
+      unitId: defect.unitId,
+      status: 'OUT_OF_SERVICE',
+      reason: defect.description,
+      changedBy: defect.reportedBy,
+      correlationId: traceId,
+      origin: 'DEFECT',
+    });
+  } catch (error) {
+    if (!(error instanceof ServiceStatusConflictError)) {
+      console.error(
+        JSON.stringify({
+          event: 'apparatus.defect.oos_transition_failed',
+          correlationId: traceId,
+          deptId,
+          unitId: defect.unitId,
+          defectId: defect.defectId,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      emitDefectMetric('DefectOosTransitionFailed');
+    }
+    // Conflict = already OOS; defect + outbox already committed. Do not fail the report.
+  }
+}
+
+async function replayDefect(
+  deps: ReportDefectDeps,
+  existing: DefectRecord,
+  photoFilename: string | undefined,
+  deptId: VerifiedDeptId,
+  traceId: string,
+): Promise<APIGatewayProxyResultV2> {
+  if (existing.severity === 'OUT_OF_SERVICE' && existing.status === 'OPEN') {
+    await markOutOfService(deps, existing, deptId, traceId, true);
+  }
+  return replayedDefectResponse(existing, photoFilename, deptId);
 }
 
 async function reportDefect(
@@ -290,7 +354,7 @@ async function reportDefect(
         clientMutationId: value.clientMutationId,
       });
       if (existing) {
-        return await replayedDefectResponse(existing, value.photoFilename, deptId);
+        return await replayDefect(deps, existing, value.photoFilename, deptId, traceId);
       }
     } catch (error) {
       console.error(
@@ -374,7 +438,7 @@ async function reportDefect(
         clientMutationId: value.clientMutationId,
       });
       if (existing) {
-        return replayedDefectResponse(existing, value.photoFilename, deptId);
+        return replayDefect(deps, existing, value.photoFilename, deptId, traceId);
       }
     }
     console.error(
@@ -391,34 +455,7 @@ async function reportDefect(
   }
 
   if (value.severity === 'OUT_OF_SERVICE') {
-    try {
-      await deps.setServiceStatus(deps.client, deps.tableName, {
-        deptId,
-        unitId,
-        status: 'OUT_OF_SERVICE',
-        reason: value.description,
-        changedBy: principal.sub,
-        correlationId: traceId,
-        // apparatus.defect.reported (outOfService: true) already notifies the same roles
-        // about this change; a serviceStatus.changed event too would double-notify.
-        suppressEvent: true,
-      });
-    } catch (error) {
-      if (!(error instanceof ServiceStatusConflictError)) {
-        console.error(
-          JSON.stringify({
-            event: 'apparatus.defect.oos_transition_failed',
-            correlationId: traceId,
-            deptId,
-            unitId,
-            defectId: defect.defectId,
-            error: error instanceof Error ? error.message : String(error),
-          }),
-        );
-        emitDefectMetric('DefectOosTransitionFailed');
-      }
-      // Conflict = already OOS; defect + outbox already committed. Do not fail the report.
-    }
+    await markOutOfService(deps, defect, deptId, traceId);
   }
 
   emitDefectMetric('DefectReported');

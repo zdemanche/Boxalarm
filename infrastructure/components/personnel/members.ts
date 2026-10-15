@@ -71,9 +71,27 @@ const CREATE_STATEMENT = (tableArn: pulumi.Input<string>) =>
   ]);
 
 /**
+ * create.ts: GetItem on member rows only, to tell an adopted login that already has a
+ * member row (409) from one that does not.
+ */
+const CREATE_READ_MEMBER_STATEMENT = (tableArn: pulumi.Input<string>) =>
+  pulumi.output(tableArn).apply((arn) => [
+    {
+      Sid: "MembersCreateReadMember" as const,
+      Effect: "Allow" as const,
+      Action: ["dynamodb:GetItem"],
+      Resource: [arn],
+      Condition: {
+        "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#MEMBER#*"] },
+      },
+    },
+  ]);
+
+/**
  * create.ts also creates the member's login (lib/memberLogin.ts): AdminCreateUser, then
- * AdminAddUserToGroup MEMBER, and AdminDeleteUser to undo a login whose member row could
- * not be written. Scoped to this env's pool only.
+ * AdminAddUserToGroup MEMBER, AdminGetUser to adopt a same-department login that has no
+ * member row yet, and AdminDeleteUser to undo a login whose member row could not be
+ * written. Scoped to this env's pool only.
  */
 const CREATE_LOGIN_STATEMENT = (userPoolArn: pulumi.Input<string>) =>
   pulumi.output(userPoolArn).apply((arn) => [
@@ -84,6 +102,7 @@ const CREATE_LOGIN_STATEMENT = (userPoolArn: pulumi.Input<string>) =>
         "cognito-idp:AdminCreateUser",
         "cognito-idp:AdminAddUserToGroup",
         "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminGetUser",
       ],
       Resource: [arn],
     },
@@ -157,6 +176,7 @@ export class Members extends pulumi.ComponentResource {
     "MemberEmailChanged" | "MemberEmailCompensationFailed" | "MemberEmailSignOutFailed",
     aws.cloudwatch.MetricAlarm
   >;
+  public readonly rolesUpdateFailedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: MembersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Members", args.env);
@@ -184,13 +204,15 @@ export class Members extends pulumi.ComponentResource {
         code: lambdaCode("personnel-service", "members-create"),
         logGroup: args.logGroup,
         environment: { ...baseEnvironment, COGNITO_USER_POOL_ID: args.userPoolId },
+        timeout: 15,
         additionalPolicyStatements: pulumi
           .all([
             CREATE_STATEMENT(args.platformTableArn),
+            CREATE_READ_MEMBER_STATEMENT(args.platformTableArn),
             CREATE_LOGIN_STATEMENT(args.userPoolArn),
             vpStatement,
           ])
-          .apply(([table, login, vp]) => [...table, ...login, ...vp]),
+          .apply(([table, read, login, vp]) => [...table, ...read, ...login, ...vp]),
       },
       { parent: this },
     );
@@ -350,6 +372,26 @@ export class Members extends pulumi.ComponentResource {
           "Use Account security > Report device lost for them (all devices) so no session from before the change survives.",
       ),
     };
+
+    this.rolesUpdateFailedAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-member-roles-update-failed-alarm`,
+      {
+        name: `boxalarm-${env}-personnel-member-roles-update-failed`,
+        alarmDescription:
+          "A role change failed after Cognito groups may already have moved, so a member's tokens can hold roles the roster and audit log do not show. " +
+          "Re-save the member's roles from the member's page (member.roles.update.partial names the member).",
+        namespace: "Boxalarm/personnel",
+        metricName: "MemberRolesUpdateFailed",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
 
     // E2-S6-INFRA #208: member self-service profile/contact update (F2.6, AP 12). One route,
     // two Cedar actions: updateMember.ts authorizes SelfUpdateMember (every role, via the

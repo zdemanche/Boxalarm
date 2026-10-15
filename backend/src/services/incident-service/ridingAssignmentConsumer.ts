@@ -33,8 +33,8 @@ interface RidingAssignmentEnvelope {
   readonly deptId: VerifiedDeptId;
   readonly dispatchId: string;
   readonly apparatusId: string;
+  readonly positionCode: string;
   readonly memberId: string | null;
-  readonly previousMemberId: string | null;
 }
 
 function parseEnvelope(body: string): RidingAssignmentEnvelope {
@@ -50,8 +50,8 @@ function parseEnvelope(body: string): RidingAssignmentEnvelope {
       deptId?: unknown;
       dispatchId?: unknown;
       apparatusId?: unknown;
+      positionCode?: unknown;
       memberId?: unknown;
-      previousMemberId?: unknown;
     };
   };
   const payload = envelope.payload;
@@ -67,8 +67,9 @@ function parseEnvelope(body: string): RidingAssignmentEnvelope {
     payload.dispatchId.length === 0 ||
     typeof payload.apparatusId !== 'string' ||
     payload.apparatusId.length === 0 ||
-    (payload.memberId !== null && typeof payload.memberId !== 'string') ||
-    (payload.previousMemberId !== null && typeof payload.previousMemberId !== 'string')
+    typeof payload.positionCode !== 'string' ||
+    payload.positionCode.length === 0 ||
+    (payload.memberId !== null && typeof payload.memberId !== 'string')
   ) {
     throw new Error('apparatus.riding_assignment payload failed shape validation');
   }
@@ -81,8 +82,8 @@ function parseEnvelope(body: string): RidingAssignmentEnvelope {
     deptId: toVerifiedDeptId({ deptId: payload.deptId }),
     dispatchId: payload.dispatchId,
     apparatusId: payload.apparatusId,
+    positionCode: payload.positionCode,
     memberId: payload.memberId,
-    previousMemberId: payload.previousMemberId,
   };
 }
 
@@ -98,20 +99,31 @@ function logError(event: string, error: unknown, context: Record<string, unknown
   );
 }
 
-function nextAssignedPositions(
-  existing: unknown,
-  memberId: string | null,
-  previousMemberId: string | null,
-): string[] {
-  const current = Array.isArray(existing)
-    ? existing.filter((entry): entry is string => typeof entry === 'string')
-    : [];
-  const withoutPrevious =
-    previousMemberId !== null ? current.filter((id) => id !== previousMemberId) : current;
-  if (memberId !== null && !withoutPrevious.includes(memberId)) {
-    return [...withoutPrevious, memberId];
-  }
-  return withoutPrevious;
+interface SeatState {
+  readonly memberId: string | null;
+  readonly updatedAt: number;
+}
+
+function isSeatState(value: unknown): value is SeatState {
+  const seat = value as Partial<SeatState> | null;
+  return (
+    typeof seat === 'object' &&
+    seat !== null &&
+    typeof seat.updatedAt === 'number' &&
+    (seat.memberId === null || typeof seat.memberId === 'string')
+  );
+}
+
+function readSeats(existing: unknown): Record<string, SeatState> {
+  if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) return {};
+  return Object.fromEntries(Object.entries(existing).filter(([, seat]) => isSeatState(seat)));
+}
+
+function assignedMembers(seats: Record<string, SeatState>): string[] {
+  const members = Object.values(seats)
+    .map((seat) => seat.memberId)
+    .filter((id): id is string => id !== null);
+  return [...new Set(members)];
 }
 
 type UpdateOutcome = 'updated' | 'stale' | 'locked';
@@ -121,8 +133,8 @@ async function updateResponseUnit(
   tableName: string,
   key: { readonly pk: string; readonly sk: string },
   apparatusId: string,
+  positionCode: string,
   memberId: string | null,
-  previousMemberId: string | null,
   eventUpdatedAt: number,
 ): Promise<UpdateOutcome> {
   // Until the report exists (the dispatch is still running) there is no METADATA row to
@@ -130,19 +142,18 @@ async function updateResponseUnit(
   let reportExists = true;
   for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt += 1) {
     const existing = await client.send(new GetCommand({ TableName: tableName, Key: key }));
-    const existingItem = existing.Item as
-      { assignedPositions?: unknown; assignedPositionsUpdatedAt?: unknown } | undefined;
-    const priorUpdatedAt =
-      typeof existingItem?.assignedPositionsUpdatedAt === 'number'
-        ? existingItem.assignedPositionsUpdatedAt
-        : undefined;
-    if (priorUpdatedAt !== undefined && priorUpdatedAt > eventUpdatedAt) {
+    const existingItem = existing.Item as { seats?: unknown } | undefined;
+    const priorSeats = readSeats(existingItem?.seats);
+    const priorSeatUpdatedAt = priorSeats[positionCode]?.updatedAt;
+    if (priorSeatUpdatedAt !== undefined && priorSeatUpdatedAt > eventUpdatedAt) {
       return 'stale';
     }
-    const priorPositions = Array.isArray(existingItem?.assignedPositions)
-      ? existingItem.assignedPositions
-      : [];
-    const nextPositions = nextAssignedPositions(priorPositions, memberId, previousMemberId);
+    const nextSeats = { ...priorSeats, [positionCode]: { memberId, updatedAt: eventUpdatedAt } };
+    const seatsCondition = !existingItem
+      ? 'attribute_not_exists(pk)'
+      : existingItem.seats === undefined
+        ? 'attribute_not_exists(seats)'
+        : 'seats = :priorSeats';
 
     try {
       await client.send(
@@ -152,18 +163,18 @@ async function updateResponseUnit(
               Update: {
                 TableName: tableName,
                 Key: key,
-                ConditionExpression:
-                  'attribute_not_exists(pk) OR if_not_exists(assignedPositions, :emptyList) = :priorPositions',
+                ConditionExpression: seatsCondition,
                 UpdateExpression:
-                  'SET entityType = :entityType, unitType = :unitType, unitId = :unitId, assignedPositions = :next, assignedPositionsUpdatedAt = :new',
+                  'SET entityType = :entityType, unitType = :unitType, unitId = :unitId, seats = :seats, assignedPositions = :next',
                 ExpressionAttributeValues: {
                   ':entityType': 'INCIDENT_RESPONSE_UNIT',
                   ':unitType': 'APPARATUS',
                   ':unitId': apparatusId,
-                  ':next': nextPositions,
-                  ':priorPositions': priorPositions,
-                  ':emptyList': [],
-                  ':new': eventUpdatedAt,
+                  ':seats': nextSeats,
+                  ':next': assignedMembers(nextSeats),
+                  ...(seatsCondition === 'seats = :priorSeats'
+                    ? { ':priorSeats': existingItem?.seats }
+                    : {}),
                 },
               },
             },
@@ -225,8 +236,7 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentConsumerDe
     throw error;
   }
 
-  const { eventId, eventTime, deptId, dispatchId, apparatusId, memberId, previousMemberId } =
-    envelope;
+  const { eventId, eventTime, deptId, dispatchId, apparatusId, positionCode, memberId } = envelope;
   const tableName = getTableName(process.env);
   const client = deps.client ?? getDocumentClient();
   const dedupKey = {
@@ -263,8 +273,8 @@ async function processRecord(record: SQSRecord, deps: RidingAssignmentConsumerDe
       tableName,
       responseUnitKey,
       apparatusId,
+      positionCode,
       memberId,
-      previousMemberId,
       eventUpdatedAt,
     );
     if (outcome === 'stale') {

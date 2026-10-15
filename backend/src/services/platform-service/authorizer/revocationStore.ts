@@ -57,11 +57,13 @@ export async function readRevokedAt(
   tableName: string,
   deptId: string,
   sub: string,
+  consistentRead = false,
 ): Promise<number | undefined> {
   const result = await docClient.send(
     new GetCommand({
       TableName: tableName,
       Key: revocationKey(deptId, sub),
+      ConsistentRead: consistentRead,
       ProjectionExpression: 'revokedAt',
     }),
   );

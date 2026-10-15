@@ -42,11 +42,10 @@ export interface SetServiceStatusInput {
   /** The request's traceId, so the notification can be traced back to the change. */
   readonly correlationId: string;
   /**
-   * The OOS flip driven by an OUT_OF_SERVICE defect report suppresses the status event: the
-   * apparatus.defect.reported event already notifies the same roles about the same change,
-   * and a second event would double-notify (reportDefectHandler.ts).
+   * Set by the OUT_OF_SERVICE defect report: apparatus.defect.reported already notifies the
+   * same roles, so notification consumers must not deliver for origin DEFECT.
    */
-  readonly suppressEvent?: boolean;
+  readonly origin?: 'DEFECT';
 }
 
 /**
@@ -70,6 +69,7 @@ function serviceStatusOutboxPut(tableName: string, input: SetServiceStatusInput)
           unitId: input.unitId,
           status: input.status,
           ...(input.reason ? { reason: input.reason } : {}),
+          ...(input.origin ? { origin: input.origin } : {}),
           changedBy: input.changedBy,
           deptId: input.deptId,
         },
@@ -239,6 +239,29 @@ async function findOpenOutOfServiceRecord(
     : undefined;
 }
 
+export async function hasOutOfServiceRecordSince(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  apparatusId: string,
+  since: number,
+): Promise<boolean> {
+  const output = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      KeyConditionExpression: 'pk = :apparatusPk AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: {
+        ':apparatusPk': buildDeptScopedPk(deptId, 'APPARATUS', apparatusId),
+        ':prefix': 'OOS#',
+      },
+      ScanIndexForward: false,
+      Limit: 1,
+    }),
+  );
+  const startAt: unknown = output.Items?.[0]?.startAt;
+  return typeof startAt === 'number' && startAt >= since;
+}
+
 function epochSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -311,7 +334,7 @@ export async function setServiceStatus(
                 ConditionExpression: 'attribute_not_exists(sk)',
               },
             },
-            ...(input.suppressEvent ? [] : [serviceStatusOutboxPut(tableName, input)]),
+            serviceStatusOutboxPut(tableName, input),
           ],
         }),
       );
@@ -340,7 +363,7 @@ export async function setServiceStatus(
                 ExpressionAttributeValues: { ':endAt': epochSeconds() },
               },
             },
-            ...(input.suppressEvent ? [] : [serviceStatusOutboxPut(tableName, input)]),
+            serviceStatusOutboxPut(tableName, input),
           ],
         }),
       );

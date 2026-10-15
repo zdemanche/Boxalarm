@@ -2,7 +2,9 @@
  * Server-side session revocation check for the authorizer (review M1).
  *
  * Latency: at most one GetItem per member per CACHE_TTL_MS per warm authorizer instance, with
- * the store client's single-attempt 400 ms ceiling; everything else is a Map lookup. A
+ * the store client's two-attempt ~600 ms ceiling; everything else is a Map lookup. A failed
+ * read is remembered for FAILURE_BACKOFF_MS, so an outage costs one slow read per member per
+ * backoff window, not one per request. A
  * revocation therefore takes effect within CACHE_TTL_MS (plus the write), not the up-to-60
  * minutes an offline-verified access token would otherwise live.
  *
@@ -33,6 +35,7 @@
  * ALERTING_PLANE_ROUTES so the two cannot drift.
  */
 export const CACHE_TTL_MS = 30_000;
+export const FAILURE_BACKOFF_MS = 5_000;
 const MAX_CACHE_ENTRIES = 5_000;
 
 export const FAIL_OPEN_ROUTE_KEYS: readonly string[] = [
@@ -63,20 +66,33 @@ export function revocationFailsOpen(routeKey: string, env: NodeJS.ProcessEnv): b
 
 export type RevocationDecision = 'allow' | 'revoked' | 'unavailable';
 
-export type RevokedAtReader = (deptId: string, sub: string) => Promise<number | undefined>;
+export type RevokedAtReader = (
+  deptId: string,
+  sub: string,
+  consistentRead: boolean,
+) => Promise<number | undefined>;
 
 interface CacheEntry {
   readonly revokedAt: number | undefined;
-  readonly fetchedAtMs: number;
+  readonly known: boolean;
+  readonly expiresAtMs: number;
 }
 
 export interface RevocationChecker {
-  check(input: { deptId: string; sub: string; issuedAt: number }): Promise<RevocationDecision>;
+  check(input: {
+    deptId: string;
+    sub: string;
+    issuedAt: number;
+    fresh?: boolean;
+  }): Promise<RevocationDecision>;
 }
+
+export type RevocationReadErrorHandler = (error: unknown, staleUsed: boolean) => void;
 
 export function createRevocationChecker(
   readRevokedAt: RevokedAtReader,
   nowMs: () => number = Date.now,
+  onReadError: RevocationReadErrorHandler = () => undefined,
 ): RevocationChecker {
   const cache = new Map<string, CacheEntry>();
 
@@ -85,21 +101,28 @@ export function createRevocationChecker(
     revokedAt !== undefined && issuedAt <= revokedAt ? 'revoked' : 'allow';
 
   return {
-    async check({ deptId, sub, issuedAt }) {
+    async check({ deptId, sub, issuedAt, fresh = false }) {
       const key = `${deptId}#${sub}`;
       const cached = cache.get(key);
-      if (cached && nowMs() - cached.fetchedAtMs < CACHE_TTL_MS) {
-        return decide(cached.revokedAt, issuedAt);
+      if (cached && !fresh && nowMs() < cached.expiresAtMs) {
+        return cached.known ? decide(cached.revokedAt, issuedAt) : 'unavailable';
       }
       try {
-        const revokedAt = await readRevokedAt(deptId, sub);
+        const revokedAt = await readRevokedAt(deptId, sub, fresh);
         if (cache.size >= MAX_CACHE_ENTRIES) {
           cache.clear();
         }
-        cache.set(key, { revokedAt, fetchedAtMs: nowMs() });
+        cache.set(key, { revokedAt, known: true, expiresAtMs: nowMs() + CACHE_TTL_MS });
         return decide(revokedAt, issuedAt);
-      } catch {
-        return cached ? decide(cached.revokedAt, issuedAt) : 'unavailable';
+      } catch (error) {
+        const known = cached?.known ?? false;
+        onReadError(error, known);
+        cache.set(key, {
+          revokedAt: cached?.revokedAt,
+          known,
+          expiresAtMs: nowMs() + FAILURE_BACKOFF_MS,
+        });
+        return known ? decide(cached?.revokedAt, issuedAt) : 'unavailable';
       }
     },
   };

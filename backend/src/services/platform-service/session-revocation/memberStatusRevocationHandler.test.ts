@@ -223,6 +223,25 @@ describe('memberStatusRevocationHandler', () => {
     );
   });
 
+  it('looks the department up once for a legacy event whose login has none, and writes no marker', async () => {
+    const resolveMemberDeptId = vi.fn().mockResolvedValue(undefined);
+    const disableMemberLogin = vi.fn().mockResolvedValue(undefined);
+    const revokeMemberSession = vi.fn().mockResolvedValue(undefined);
+    mockCognito({ resolveMemberDeptId, disableMemberLogin, revokeMemberSession });
+
+    const { handler } = await import('./memberStatusRevocationHandler.js');
+    await handler(
+      { Records: [sqsRecord(memberUpdatedEvent('mbr-102', 'LOA'))] },
+      {} as never,
+      () => undefined,
+    );
+
+    expect(resolveMemberDeptId).toHaveBeenCalledTimes(1);
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
+    expect(disableMemberLogin).toHaveBeenCalled();
+    expect(revokeMemberSession).toHaveBeenCalled();
+  });
+
   // Security-web MINOR 9: a redriven pre-deptId LOA event must not lock out a member who is
   // ACTIVE today - the department comes from Cognito and the row decides.
   it('re-reads the row for a legacy event without deptId, so a redriven LOA leaves an ACTIVE member enabled', async () => {

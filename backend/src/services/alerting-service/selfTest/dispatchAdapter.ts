@@ -4,6 +4,8 @@ import type {
   NormalizeResult,
 } from '../dispatches/dispatchIngressPort.js';
 
+export const SELF_TEST_LOCK_WINDOW_SECONDS = 60;
+
 export const SELF_TEST_CHANNELS: readonly string[] = ['PUSH', 'SMS'];
 
 export function buildSelfTestDispatch(testId: string): DispatchReceived {

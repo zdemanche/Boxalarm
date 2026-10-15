@@ -31,8 +31,6 @@ export interface PrePlanCopyItem {
   readonly summary?: string;
   readonly address?: string;
   readonly addressUnit?: string;
-  readonly addressTown?: string;
-  readonly addressZip?: string;
   readonly hazards?: readonly string[];
   readonly utilityShutoffs?: readonly UtilityShutoff[];
   readonly latitude?: number;

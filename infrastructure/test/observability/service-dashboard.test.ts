@@ -65,7 +65,7 @@ describe("ServiceDashboard", () => {
     const errorRateWidget = findWidget(body, /error rate/i);
     const errorsSearch = metricRow(errorRateWidget, "errorsSearch");
     expect(errorsSearch.expression).toBe(
-      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Errors\" FunctionName=boxalarm-prod-personnel-service-', 'Sum', 60)",
+      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Errors\" FunctionName=boxalarm-prod-personnel-', 'Sum', 60)",
     );
     expect(errorsSearch.visible).toBe(false);
     const errorsSum = metricRow(errorRateWidget, "errors");
@@ -73,7 +73,7 @@ describe("ServiceDashboard", () => {
 
     const invocationsSearch = metricRow(errorRateWidget, "invocationsSearch");
     expect(invocationsSearch.expression).toBe(
-      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Invocations\" FunctionName=boxalarm-prod-personnel-service-', 'Sum', 60)",
+      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Invocations\" FunctionName=boxalarm-prod-personnel-', 'Sum', 60)",
     );
     const invocationsSum = metricRow(errorRateWidget, "invocations");
     expect(invocationsSum.expression).toBe("SUM(invocationsSearch)");
@@ -84,7 +84,7 @@ describe("ServiceDashboard", () => {
     const latencyWidget = findWidget(body, /latency/i);
     const durationSearch = metricRow(latencyWidget, "durationSearch");
     expect(durationSearch.expression).toBe(
-      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Duration\" FunctionName=boxalarm-prod-personnel-service-', 'p99', 60)",
+      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Duration\" FunctionName=boxalarm-prod-personnel-', 'p99', 60)",
     );
     const durationAggregate = metricRow(latencyWidget, "duration");
     expect(durationAggregate.expression).toBe("AVERAGE(durationSearch)");
@@ -92,7 +92,7 @@ describe("ServiceDashboard", () => {
     const throughputWidget = findWidget(body, /throughput/i);
     const throughputSearch = metricRow(throughputWidget, "throughputSearch");
     expect(throughputSearch.expression).toBe(
-      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Invocations\" FunctionName=boxalarm-prod-personnel-service-', 'Sum', 60)",
+      "SEARCH('{AWS/Lambda,FunctionName} MetricName=\"Invocations\" FunctionName=boxalarm-prod-personnel-', 'Sum', 60)",
     );
     const throughputAggregate = metricRow(throughputWidget, "throughput");
     expect(throughputAggregate.expression).toBe("SUM(throughputSearch)");

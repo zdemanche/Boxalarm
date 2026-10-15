@@ -102,6 +102,48 @@ describe('runCertificationExpiryScan (core-harm: exactly one publish, no false n
     expect(ebSend).toHaveBeenCalledTimes(1);
   });
 
+  it('carries the scanned record certType on the published cert.expiry.due payload', async () => {
+    const { runCertificationExpiryScan } = await import('./handler.js');
+    const send = ddbSend({
+      leadDaysItem: { value: { certExpiryLeadDays: 30 } },
+      currentMonthItems: [dueCertItem({ expiryDate: '2026-09-20', certType: 'EMT-B' })],
+    });
+    const ebSend = vi.fn().mockResolvedValue({ Entries: [{}] });
+
+    await runCertificationExpiryScan('trace-certtype', {
+      dynamoClient: { send } as unknown as DynamoDBDocumentClient,
+      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
+      now: NOW,
+    });
+
+    const putEvents = ebSend.mock.calls[0]?.[0] as { input: { Entries: { Detail: string }[] } };
+    const detail = JSON.parse(putEvents.input.Entries[0]?.Detail ?? '{}') as {
+      payload: Record<string, unknown>;
+    };
+    expect(detail.payload).toMatchObject({
+      memberId: 'MBR-1',
+      certId: 'CERT-1',
+      certType: 'EMT-B',
+    });
+  });
+
+  it('publishes no cert.expiry.due for a REVOKED cert inside the lead window', async () => {
+    const { runCertificationExpiryScan } = await import('./handler.js');
+    const send = ddbSend({
+      leadDaysItem: { value: { certExpiryLeadDays: 30 } },
+      currentMonthItems: [dueCertItem({ expiryDate: '2026-09-20', status: 'REVOKED' })],
+    });
+    const ebSend = vi.fn();
+
+    await runCertificationExpiryScan('trace-revoked', {
+      dynamoClient: { send } as unknown as DynamoDBDocumentClient,
+      eventBridgeClient: { send: ebSend } as unknown as EventBridgeClient,
+      now: NOW,
+    });
+
+    expect(ebSend).not.toHaveBeenCalled();
+  });
+
   it('publishes no event for a cert outside the lead-time window', async () => {
     const { runCertificationExpiryScan } = await import('./handler.js');
     const send = ddbSend({

@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  ConditionalCheckFailedException,
+  TransactionCanceledException,
+} from '@aws-sdk/client-dynamodb';
 import {
   GetCommand,
   TransactWriteCommand,
+  UpdateCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import {
+  isOpenShiftMeta,
   listDeptShiftMetaItems,
   mapWithConcurrency,
   queryShiftItems,
@@ -32,13 +37,16 @@ export type ProposeSwapOutcome =
       readonly requiresOfficerApproval: boolean;
     }
   | { readonly kind: 'POSITION_NOT_FOUND' }
-  | { readonly kind: 'NOT_CLAIMED_BY_YOU' };
+  | { readonly kind: 'NOT_CLAIMED_BY_YOU' }
+  | { readonly kind: 'SHIFT_CLOSED' };
 
 export type ApproveSwapOutcome =
   | { readonly kind: 'APPROVED'; readonly toMemberId: string }
   | { readonly kind: 'NOT_FOUND' }
   | { readonly kind: 'NOT_PENDING' }
-  | { readonly kind: 'POSITION_CONFLICT' };
+  | { readonly kind: 'POSITION_CONFLICT' }
+  | { readonly kind: 'SHIFT_CLOSED' }
+  | { readonly kind: 'NOT_QUALIFIED'; readonly requiredQual: string };
 
 export class ShiftSwapWriteError extends Error {
   readonly reason: string;
@@ -103,7 +111,9 @@ export async function listPendingShiftSwaps(
   tableName: string,
   deptId: VerifiedDeptId,
 ): Promise<ShiftSwapListEntry[]> {
-  const shiftMetaItems = await listDeptShiftMetaItems(doc, tableName, deptId);
+  const shiftMetaItems = (await listDeptShiftMetaItems(doc, tableName, deptId)).filter(
+    isOpenShiftMeta,
+  );
   const perShift = await mapWithConcurrency(
     shiftMetaItems,
     SWAP_FETCH_CONCURRENCY,
@@ -133,6 +143,13 @@ export async function listPendingShiftSwaps(
   return perShift.flat();
 }
 
+function isShiftClosed(meta: Record<string, unknown> | undefined, now: number): boolean {
+  return (
+    meta !== undefined &&
+    (meta.status === 'CANCELLED' || (typeof meta.endAt === 'number' && meta.endAt <= now))
+  );
+}
+
 function cancellationReasonCodes(error: TransactionCanceledException): (string | undefined)[] {
   return error.CancellationReasons?.map((reason) => reason.Code) ?? [];
 }
@@ -148,8 +165,14 @@ export async function proposeShiftSwap(
 ): Promise<ProposeSwapOutcome> {
   const pk = buildDeptScopedPk(deptId, 'SHIFT', shiftId);
   const positionSk = `POSITION#${positionCode}`;
-  const { requiresOfficerApproval } = await readShiftSwapConfig(doc, tableName, deptId);
+  const shiftMetadata = await doc.send(
+    new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
+  );
   const requestedAt = Date.now();
+  if (isShiftClosed(shiftMetadata.Item, requestedAt)) {
+    return { kind: 'SHIFT_CLOSED' };
+  }
+  const { requiresOfficerApproval } = await readShiftSwapConfig(doc, tableName, deptId);
   const eventId = randomUUID();
 
   try {
@@ -226,6 +249,30 @@ export async function proposeShiftSwap(
   return { kind: 'PROPOSED', requestedAt, requiresOfficerApproval };
 }
 
+async function denyStaleSwap(
+  doc: DynamoDBDocumentClient,
+  tableName: string,
+  pk: string,
+  requestedAt: number,
+): Promise<void> {
+  try {
+    await doc.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { pk, sk: `SWAP#${requestedAt}` },
+        ConditionExpression: '#status = :pending',
+        UpdateExpression: 'SET #status = :denied',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':pending': 'PENDING', ':denied': 'DENIED' },
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw new ShiftSwapWriteError(error);
+    }
+  }
+}
+
 export async function approveShiftSwap(
   doc: DynamoDBDocumentClient,
   tableName: string,
@@ -246,9 +293,17 @@ export async function approveShiftSwap(
   const shiftMetadata = await doc.send(
     new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
   );
+  const approvedAt = Date.now();
+  if (isShiftClosed(shiftMetadata.Item, approvedAt)) {
+    return { kind: 'SHIFT_CLOSED' };
+  }
   const startAt: unknown = shiftMetadata.Item?.startAt;
   const gsi1sk = typeof startAt === 'number' ? `SHIFT_POSITION#${startAt}` : undefined;
-  const approvedAt = Date.now();
+  const positionItem = await doc.send(
+    new GetCommand({ TableName: tableName, Key: { pk, sk: positionSk }, ConsistentRead: true }),
+  );
+  const positionQual: unknown = positionItem.Item?.requiredQual;
+  const requiredQual = typeof positionQual === 'string' ? positionQual : undefined;
   const eventId = randomUUID();
 
   try {
@@ -269,15 +324,21 @@ export async function approveShiftSwap(
             Update: {
               TableName: tableName,
               Key: { pk, sk: positionSk },
-              ConditionExpression: 'claimedByMemberId = :fromMemberId',
+              ConditionExpression: `claimedByMemberId = :fromMemberId AND (attribute_not_exists(claimedAt) OR claimedAt <= :requestedAt) AND ${
+                requiredQual === undefined
+                  ? 'attribute_not_exists(requiredQual)'
+                  : 'requiredQual = :requiredQual'
+              }`,
               UpdateExpression:
                 gsi1sk === undefined
                   ? 'SET claimedByMemberId = :toMemberId, claimedAt = :claimedAt'
                   : 'SET claimedByMemberId = :toMemberId, claimedAt = :claimedAt, gsi1pk = :gsi1pk, gsi1sk = :gsi1sk',
               ExpressionAttributeValues: {
                 ':fromMemberId': swap.fromMemberId,
+                ':requestedAt': requestedAt,
                 ':toMemberId': swap.toMemberId,
                 ':claimedAt': approvedAt,
+                ...(requiredQual === undefined ? {} : { ':requiredQual': requiredQual }),
                 ...(gsi1sk === undefined
                   ? {}
                   : { ':gsi1pk': `MEMBER#${swap.toMemberId}`, ':gsi1sk': gsi1sk }),
@@ -310,6 +371,21 @@ export async function approveShiftSwap(
               },
             },
           },
+          ...(requiredQual === undefined
+            ? []
+            : [
+                {
+                  ConditionCheck: {
+                    TableName: tableName,
+                    Key: {
+                      pk: buildDeptScopedPk(deptId, 'MEMBER', swap.toMemberId),
+                      sk: `QUAL#${requiredQual}`,
+                    },
+                    ConditionExpression: 'currentlyEligible = :eligible',
+                    ExpressionAttributeValues: { ':eligible': true },
+                  },
+                },
+              ]),
         ],
       }),
     );
@@ -323,7 +399,23 @@ export async function approveShiftSwap(
       return { kind: 'NOT_PENDING' };
     }
     if (reasons[1] === 'ConditionalCheckFailed') {
+      try {
+        await denyStaleSwap(doc, tableName, pk, requestedAt);
+      } catch (denyError) {
+        console.error(
+          JSON.stringify({
+            event: 'shifts.swap.deny_stale_failed',
+            shiftId,
+            requestedAt,
+            reason: denyError instanceof Error ? denyError.constructor.name : 'UnknownError',
+            message: denyError instanceof Error ? denyError.message : undefined,
+          }),
+        );
+      }
       return { kind: 'POSITION_CONFLICT' };
+    }
+    if (requiredQual !== undefined && reasons[3] === 'ConditionalCheckFailed') {
+      return { kind: 'NOT_QUALIFIED', requiredQual };
     }
     throw new ShiftSwapWriteError(error);
   }

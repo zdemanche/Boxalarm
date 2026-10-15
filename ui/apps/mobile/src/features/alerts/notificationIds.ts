@@ -16,3 +16,8 @@ export function mutualAidNotificationId(dispatchId: string): string {
 export function isRingingAlertId(id: string): boolean {
   return id.startsWith('dispatch:') || id.startsWith('mutual-aid:');
 }
+
+/** A redelivered digest push reuses its notification, so it never shows twice. */
+export function digestNotificationId(notificationId: string): string {
+  return `digest:${notificationId}`;
+}

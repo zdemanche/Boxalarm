@@ -108,7 +108,7 @@ Known items. These are not another review round:
 - The fake server answers `GET` for records it never created.
 - A re-created record whose old id NERIS returns to listing after the POST is left as a duplicate in NERIS. The nightly reconciliation reports it as `UNKNOWN_IN_NERIS` new drift.
 - (Round 2d, K1) If the PUT of an ADOPT re-create fails, the old id is not kept, and later attempts no longer look it up. After a false "missing", an edited incident number or `call_create`, and a refused PUT, a retry could POST a second record. Fix when touched: keep `previousNerisIncidentId` in the lookup while the report has no NERIS id.
-- (Round 2d, K2) The adopt lookup accepts any record found by id, including one NERIS marks deleted. Skip DELETED candidates once NERIS's behaviour is confirmed.
+- (Round 2d, K2) The adopt lookup accepted any record found by id, including one NERIS marks deleted. **Decided 2026-10-14:** the lookup before the POST skips DELETED candidates; a DELETED record is adopted (and PUT) only as a fallback after NERIS refuses the same-id create. Reconciliation also skips DELETED remote records, and a polled `DELETED` status sets `nerisMissingAt` so the report can be re-created. Whether NERIS lets a deleted record be read by id, and what its duplicate-create response is, remain unverified.
 
 ## Still open
 

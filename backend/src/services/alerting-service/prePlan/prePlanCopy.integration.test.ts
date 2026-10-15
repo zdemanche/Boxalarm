@@ -143,12 +143,12 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
 
   async function consumePrePlan(payload: Record<string, unknown>, eventTime?: string) {
     const { handler } = await import('./prePlanCopyHandler.js');
-    await handler(sqsEvent('inspections.preplan.updated', payload, eventTime));
+    return handler(sqsEvent('inspections.preplan.updated', payload, eventTime));
   }
 
   async function consumeHydrant(payload: Record<string, unknown>, eventTime?: string) {
     const { handler } = await import('./hydrantCopyHandler.js');
-    await handler(sqsEvent('inspections.hydrant.updated', payload, eventTime));
+    return handler(sqsEvent('inspections.hydrant.updated', payload, eventTime));
   }
 
   // Dispatches the dispatcher placed in a home town (R3-A: no locality, no verified match).
@@ -285,7 +285,7 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
   });
 
   it('discards an older pre-plan event that arrives after a newer one (staleness guard)', async () => {
-    await consumePrePlan(
+    const result = await consumePrePlan(
       {
         deptId: 'NICHOLS',
         occupancyId: 'OCC-0231',
@@ -296,6 +296,7 @@ describe('pre-plan + hydrant copies -> dispatch detail (real DynamoDB with the a
       },
       '2026-09-01T00:00:00Z',
     );
+    expect(result).toEqual({ batchItemFailures: [] });
 
     const copy = await client.send(
       new GetCommand({

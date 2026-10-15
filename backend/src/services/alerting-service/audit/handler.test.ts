@@ -82,7 +82,9 @@ describe('handler (audit query entrypoint)', () => {
 
   it('returns 200 with entries for a memberId query (AC2)', async () => {
     mockAuthzDecision('ALLOW');
-    mockDynamo('OK', [{ entityType: 'DELIVERY_RECEIPT', memberId: 'mbr-102' }]);
+    mockDynamo('OK', [
+      { entityType: 'DELIVERY_RECEIPT', memberId: 'mbr-102', dispatchId: 'D-1', sentAt: 5 },
+    ]);
     const { handler } = await import('./handler.js');
 
     const result = (await handler(
@@ -91,7 +93,7 @@ describe('handler (audit query entrypoint)', () => {
 
     expect(result.statusCode).toBe(200);
     expect(JSON.parse(result.body ?? '{}')).toEqual({
-      entries: [{ entityType: 'DELIVERY_RECEIPT', memberId: 'mbr-102' }],
+      entries: [{ dispatchId: 'D-1', sentAt: 5 }],
     });
   });
 
@@ -101,7 +103,7 @@ describe('handler (audit query entrypoint)', () => {
     const { handler } = await import('./handler.js');
 
     const result = (await handler(
-      buildEvent({ from: '100', to: '200' }),
+      buildEvent({ from: '1700000000', to: '1700000100' }),
     )) as APIGatewayProxyStructuredResultV2;
 
     expect(result.statusCode).toBe(200);
@@ -227,11 +229,15 @@ describe('handler (audit query entrypoint)', () => {
     mockDynamo('OK');
     const { handler } = await import('./handler.js');
 
-    const nonNumeric = await handler(buildEvent({ from: 'abc', to: '200' }));
-    const outOfOrder = await handler(buildEvent({ from: '300', to: '200' }));
+    const nonNumeric = await handler(buildEvent({ from: 'abc', to: '1700000200' }));
+    const outOfOrder = await handler(buildEvent({ from: '1700000300', to: '1700000200' }));
+    const unpadded = await handler(buildEvent({ from: '1', to: '2' }));
+    const milliseconds = await handler(buildEvent({ from: '1760000000000', to: '1760000001000' }));
 
     expect(nonNumeric).toMatchObject({ statusCode: 400 });
     expect(outOfOrder).toMatchObject({ statusCode: 400 });
+    expect(unpadded).toMatchObject({ statusCode: 400 });
+    expect(milliseconds).toMatchObject({ statusCode: 400 });
   });
 
   it('returns 400 on a malformed cursor', async () => {

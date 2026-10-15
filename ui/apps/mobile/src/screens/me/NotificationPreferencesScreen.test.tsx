@@ -172,3 +172,64 @@ test('a training officer is told the department certification digest cannot be m
     await findByText(/department-wide certification-expiry digest; it cannot be muted/),
   ).toBeTruthy();
 });
+
+test('when preferences fail to load the switches are disabled and a toggle sends no PUT', async () => {
+  mockApiRequest.mockRejectedValue(new TypeError('Network request failed'));
+
+  const { findByLabelText, findAllByRole } = await render(<NotificationPreferencesScreen />);
+
+  await findAllByRole('alert');
+  const toggle = await findByLabelText('Certification expiry push notifications');
+  expect(toggle.props.disabled).toBe(true);
+  await act(async () => {
+    fireEvent(toggle, 'valueChange', false);
+  });
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+});
+
+test('Try again reloads the preferences and enables the switches', async () => {
+  mockApiRequest
+    .mockRejectedValueOnce(new TypeError('Network request failed'))
+    .mockResolvedValue({ json: async () => ({ preferences: [] }) });
+
+  const { findByLabelText, findByText } = await render(<NotificationPreferencesScreen />);
+  fireEvent.press(await findByText('Try again'));
+
+  const toggle = await findByLabelText('Certification expiry push notifications');
+  await waitFor(() => expect(toggle.props.disabled).toBeFalsy());
+});
+
+test('a toggle while the preferences are still loading sends no PUT', async () => {
+  mockApiRequest.mockReturnValue(new Promise(() => undefined));
+
+  const { findByLabelText } = await render(<NotificationPreferencesScreen />);
+  const toggle = await findByLabelText('Certification expiry push notifications');
+  await act(async () => {
+    fireEvent(toggle, 'valueChange', false);
+  });
+
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+});
+
+test('toggling push keeps the email mute the member set elsewhere', async () => {
+  mockApiRequest.mockImplementation(async (_path: string, _auth: unknown, init?: RequestInit) => {
+    if (init?.method === 'PUT') return { json: async () => ({}) };
+    return {
+      json: async () => ({
+        preferences: [{ category: 'cert-expiry', channels: { push: false, email: true } }],
+      }),
+    };
+  });
+
+  const { findByLabelText } = await render(<NotificationPreferencesScreen />);
+  const toggle = await findByLabelText('Certification expiry push notifications');
+  await waitFor(() => expect(toggle.props.disabled).toBeFalsy());
+  await act(async () => {
+    fireEvent(toggle, 'valueChange', false);
+  });
+
+  const put = mockApiRequest.mock.calls.find(([, , init]) => init?.method === 'PUT')!;
+  expect(JSON.parse(put[2].body as string)).toMatchObject({
+    channels: { push: true, email: true },
+  });
+});

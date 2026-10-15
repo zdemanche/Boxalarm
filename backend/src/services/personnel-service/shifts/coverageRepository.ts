@@ -1,6 +1,7 @@
 import { QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { listMembers } from '../lib/memberRepository.js';
+import { isPagedStatus } from '../lib/statusTransitions.js';
 import { readQuals } from '../quals/repository.js';
 import { logWarn } from '../lib/logger.js';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
@@ -69,6 +70,10 @@ export async function listDeptShiftMetaItems(
   return items;
 }
 
+export function isOpenShiftMeta(meta: Record<string, unknown>): boolean {
+  return meta.status !== 'CANCELLED' && Number(meta.endAt) >= Date.now();
+}
+
 export async function fetchDeptShiftsWithPositions(
   doc: DynamoDBDocumentClient,
   tableName: string,
@@ -80,10 +85,7 @@ export async function fetchDeptShiftsWithPositions(
   // condition, since gsi3sk is an unpadded numeric string whose lexicographic order does not
   // match numeric order); upgrade path is zero-padding gsi3sk in shiftAssembly.ts and adding a
   // real KeyConditionExpression range per AP18.
-  const now = Date.now();
-  const relevantShiftMeta = shiftMetaItems.filter(
-    (meta) => meta.status !== 'CANCELLED' && Number(meta.endAt) >= now,
-  );
+  const relevantShiftMeta = shiftMetaItems.filter(isOpenShiftMeta);
 
   return mapWithConcurrency(relevantShiftMeta, SHIFT_POSITION_FETCH_CONCURRENCY, async (meta) => {
     const shiftId = String(meta.shiftId);
@@ -125,8 +127,11 @@ export async function buildEligibleQualCodeIndex(
     logWarn('shifts.coverage.emptyRoster', correlationId, { deptId });
     emitOutcomeMetric(METRICS_NAMESPACE, 'ShiftCoverageEmptyRoster');
   }
-  const perMemberQuals = await mapWithConcurrency(members, QUAL_READ_CONCURRENCY, (member) =>
-    readQuals(doc, tableName, deptId, member.memberId),
+  const pageableMembers = members.filter((member) => isPagedStatus(member.status));
+  const perMemberQuals = await mapWithConcurrency(
+    pageableMembers,
+    QUAL_READ_CONCURRENCY,
+    (member) => readQuals(doc, tableName, deptId, member.memberId),
   );
   const eligibleQualCodes = new Set<string>();
   for (const quals of perMemberQuals) {

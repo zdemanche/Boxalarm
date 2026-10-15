@@ -18,7 +18,8 @@
 //
 // Usage: node scripts/preflight.mjs <dev|qa|staging|prod> [--region us-east-1] [--first-deploy]
 // Uses the default AWS credential chain. Exit 0 = ready, 1 = not ready, 2 = usage.
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { LambdaClient, GetAccountSettingsCommand } from "@aws-sdk/client-lambda";
 import { CloudTrailClient, DescribeTrailsCommand } from "@aws-sdk/client-cloudtrail";
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
@@ -159,7 +160,15 @@ async function main() {
   console.log(`preflight passed for ${args.env} in ${args.region}.`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const isMain = (() => {
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   main().catch((error) => {
     console.error(`preflight could not read the account: ${error?.message ?? error}`);
     process.exit(1);

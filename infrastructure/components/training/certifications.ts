@@ -247,6 +247,8 @@ export class Certifications extends pulumi.ComponentResource {
         serviceName: "training-service",
         functionName: `boxalarm-${env}-training-cert-expiry-scanner`,
         handler: LAMBDA_HANDLER,
+        timeout: 60,
+        memorySize: 512,
         code: lambdaCode("training-service", "certification-expiry-scanner"),
         logGroup: args.logGroup,
         environment: {

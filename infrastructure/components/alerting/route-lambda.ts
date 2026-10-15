@@ -11,12 +11,14 @@ import { IamPolicyStatement } from "../observability/observability-policy";
  * calls IsAuthorizedWithToken in-handler. Shared by every route component so the statement is
  * written once.
  */
-export function verifiedPermissionsStatement(): IamPolicyStatement {
+export function verifiedPermissionsStatement(
+  policyStoreArn: pulumi.Input<string>,
+): IamPolicyStatement {
   return {
     Sid: "VerifiedPermissionsIsAuthorized",
     Effect: "Allow",
     Action: ["verifiedpermissions:IsAuthorizedWithToken"],
-    Resource: "*",
+    Resource: policyStoreArn as string,
   };
 }
 

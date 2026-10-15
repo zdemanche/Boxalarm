@@ -112,6 +112,55 @@ describe('create.ts handler (entrypoint)', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it.each(['2026-13-05', '2027-00-15', '2026-02-30', '2026-05-45'])(
+    'returns 400 for the impossible calendar date %s and never writes',
+    async (badDate) => {
+      const { createAuthzClient } = await import('@boxalarm/authz');
+      createAuthzClient(process.env, decidingClient('ALLOW'));
+      const { createDynamoClient } = await import('../dynamoClient.js');
+      const send = vi.fn().mockResolvedValue({});
+      createDynamoClient({ send } as unknown as DynamoDBDocumentClient);
+      const { handler } = await import('./create.js');
+
+      const result = await handler(
+        buildEvent(
+          JSON.stringify({
+            certType: 'FF1',
+            issueDate: '2024-01-10',
+            expiryDate: badDate,
+            issuingAuthority: 'CT DESPP',
+          }),
+        ),
+      );
+
+      expect(result).toMatchObject({ statusCode: 400 });
+      const body = JSON.parse((result as { body: string }).body) as {
+        errors: { field: string }[];
+      };
+      expect(body.errors.map((e) => e.field)).toContain('expiryDate');
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns 400 for an impossible issueDate', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, decidingClient('ALLOW'));
+    const { handler } = await import('./create.js');
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          certType: 'FF1',
+          issueDate: '2024-02-30',
+          expiryDate: '2027-01-10',
+          issuingAuthority: 'CT DESPP',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+  });
+
   it('creates the record and returns 201 with a CURRENT status (AC1)', async () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, decidingClient('ALLOW'));
@@ -207,7 +256,7 @@ describe('create.ts handler (entrypoint)', () => {
     const { handler } = await import('./create.js');
 
     const result = await handler(
-      buildEvent(VALID_BODY, 'MBR-0034', '00-tracefail1000000000000000000-01234567890abcde-01'),
+      buildEvent(VALID_BODY, 'MBR-0034', '00-4bf92f3577b34da6a3ce929d0e0e4731-01234567890abcde-01'),
     );
 
     expect(result).toMatchObject({ statusCode: 500 });
@@ -216,7 +265,7 @@ describe('create.ts handler (entrypoint)', () => {
       traceId: string;
     };
     expect(body.status).toBe(500);
-    expect(body.traceId).toBe('tracefail1000000000000000000');
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4731');
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });

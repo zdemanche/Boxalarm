@@ -58,7 +58,11 @@ describe('members/updateStatus handler (entrypoint test)', () => {
   });
 
   it('updates status, writes audit trail, and returns 200 for an admin caller (AC2)', async () => {
-    getMemberMock.mockResolvedValueOnce({ memberId: 'm1', status: 'PROBATIONARY' });
+    getMemberMock.mockResolvedValueOnce({
+      memberId: 'm1',
+      status: 'PROBATIONARY',
+      firstName: 'Jamie',
+    });
     updateMemberStatusMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
     const result = await handler(
       buildEvent('m1', JSON.stringify({ status: 'ACTIVE' }), 'ADMIN'),
@@ -66,6 +70,12 @@ describe('members/updateStatus handler (entrypoint test)', () => {
       () => undefined,
     );
     expect(result).toMatchObject({ statusCode: 200 });
+    expect(JSON.parse((result as { body: string }).body)).toEqual({
+      memberId: 'm1',
+      firstName: 'Jamie',
+      status: 'ACTIVE',
+      updatedAt: 1,
+    });
     expect(updateMemberStatusMock).toHaveBeenCalledWith(
       'boxalarm-dev-platform',
       expect.objectContaining({ sub: 'actor-1' }),

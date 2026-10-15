@@ -3,6 +3,7 @@ import {
   AdminDisableUserCommand,
   AdminEnableUserCommand,
   AdminGetUserCommand,
+  AdminListGroupsForUserCommand,
   AdminResetUserPasswordCommand,
   AdminUserGlobalSignOutCommand,
   TooManyRequestsException,
@@ -13,9 +14,12 @@ import {
   createRevocationClient,
   disableMemberLogin,
   enableMemberLogin,
+  isProtectedTarget,
+  mayActOnProtectedTarget,
   readRevocationConfig,
   resetMemberPassword,
   resolveMemberDeptId,
+  resolveMemberIdentity,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
 
@@ -168,6 +172,85 @@ describe('resolveMemberDeptId', () => {
     await expect(
       resolveMemberDeptId(client, { userPoolId: 'pool-1', username: 'mbr-ghost' }),
     ).rejects.toBeInstanceOf(UserNotFoundException);
+  });
+});
+
+describe('resolveMemberIdentity', () => {
+  it('returns the custom:deptId and sub attributes from AdminGetUser', async () => {
+    const client = fakeClient(() =>
+      Promise.resolve({
+        UserAttributes: [
+          { Name: 'sub', Value: 'uuid-1' },
+          { Name: 'custom:deptId', Value: 'dept-001' },
+        ],
+      }),
+    );
+
+    await expect(
+      resolveMemberIdentity(client, { userPoolId: 'pool-1', username: 'jsmith@nicholsfd.org' }),
+    ).resolves.toEqual({ deptId: 'dept-001', sub: 'uuid-1' });
+  });
+});
+
+describe('isProtectedTarget', () => {
+  const input = { userPoolId: 'pool-1', username: 'mbr-102' };
+
+  function pagedClient(pages: { Groups?: { GroupName: string }[]; NextToken?: string }[]) {
+    const sent: AdminListGroupsForUserCommand[] = [];
+    const client = fakeClient((command) => {
+      sent.push(command as AdminListGroupsForUserCommand);
+      return Promise.resolve(pages[sent.length - 1]);
+    });
+    return { client, sent };
+  }
+
+  it.each(['CHIEF', 'ADMIN'])('is true when the target is in %s', async (GroupName) => {
+    const { client, sent } = pagedClient([{ Groups: [{ GroupName: 'MEMBER' }, { GroupName }] }]);
+
+    await expect(isProtectedTarget(client, input)).resolves.toBe(true);
+    expect(sent[0]?.input).toEqual({
+      UserPoolId: 'pool-1',
+      Username: 'mbr-102',
+      NextToken: undefined,
+    });
+  });
+
+  it('follows NextToken to find a protected group on a later page', async () => {
+    const { client, sent } = pagedClient([
+      { Groups: [{ GroupName: 'MEMBER' }], NextToken: 't1' },
+      { Groups: [{ GroupName: 'CHIEF' }] },
+    ]);
+
+    await expect(isProtectedTarget(client, input)).resolves.toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.input.NextToken).toBe('t1');
+  });
+
+  it('is false when the target has only unprotected groups or none', async () => {
+    const { client } = pagedClient([
+      { Groups: [{ GroupName: 'MEMBER' }, { GroupName: 'OFFICER' }] },
+    ]);
+    await expect(isProtectedTarget(client, input)).resolves.toBe(false);
+
+    const { client: empty } = pagedClient([{}]);
+    await expect(isProtectedTarget(empty, input)).resolves.toBe(false);
+  });
+
+  it('propagates a Cognito failure so callers fail closed', async () => {
+    const client = fakeClient(() => Promise.reject(new Error('throttled')));
+
+    await expect(isProtectedTarget(client, input)).rejects.toThrow('throttled');
+  });
+});
+
+describe('mayActOnProtectedTarget', () => {
+  it.each([
+    ['ADMIN', true],
+    ['CHIEF ADMIN', true],
+    ['CHIEF', false],
+    ['', false],
+  ])('for caller groups %j is %s', (groups, expected) => {
+    expect(mayActOnProtectedTarget(groups)).toBe(expected);
   });
 });
 

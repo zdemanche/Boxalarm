@@ -1,5 +1,6 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { AccessibilityInfo } from 'react-native';
+import { statusPalette, targetSize } from '@boxalarm/design-tokens';
+import { AccessibilityInfo, StyleSheet } from 'react-native';
 import * as syncManager from './syncManager';
 import { SyncStatusBanner } from './SyncStatusBanner';
 import type { SyncQueueStatus } from '../features/sync/types';
@@ -170,4 +171,48 @@ test('an item with no recorded owner asks the signed-in member to claim or disca
   fireEvent.press(await findByRole('button', { name: 'Send Attendance — Drill as mine' }));
   expect(syncManager.sendAsMe as jest.Mock).toHaveBeenCalledWith('LEGACY-1');
   expect(await findByRole('button', { name: 'Discard Attendance — Drill' })).toBeTruthy();
+});
+
+test('a failure that arrives after the caught-up row was dismissed is shown, not hidden', async () => {
+  let emit: (next: SyncQueueStatus) => void = () => undefined;
+  mockSubscribe.mockImplementation((listener: (next: SyncQueueStatus) => void) => {
+    emit = listener;
+    listener({ items: [], lastSyncAt: new Date().toISOString() });
+    return () => undefined;
+  });
+  const { findByRole, queryByRole } = await render(<SyncStatusBanner />);
+
+  await act(async () => {
+    fireEvent.press(await findByRole('button', { name: 'Dismiss' }));
+  });
+  expect(queryByRole('button', { name: 'Dismiss' })).toBeNull();
+
+  await act(async () => {
+    emit(REJECTED);
+  });
+
+  expect(await findByRole('button', { name: /retry truck check — ladder-1/i })).toBeTruthy();
+  expect(await findByRole('button', { name: /discard truck check — ladder-1/i })).toBeTruthy();
+
+  await act(async () => {
+    emit({ items: [], lastSyncAt: new Date().toISOString() });
+  });
+  expect(queryByRole('button', { name: 'Dismiss' })).toBeNull();
+});
+
+test('the rejection reason and actions use the AA-tested danger colour, undimmed, at field-size targets', async () => {
+  mockStatus(REJECTED);
+  const { findByText, findByRole } = await render(<SyncStatusBanner />);
+
+  const reason = StyleSheet.flatten(
+    (await findByText(/checklist template is retired/i)).props.style,
+  );
+  expect(reason.color).toBe(statusPalette.cab.danger);
+  expect(reason.opacity).toBeUndefined();
+  const retryLabel = StyleSheet.flatten((await findByText('Retry')).props.style);
+  expect(retryLabel.color).toBe(statusPalette.cab.danger);
+  const retry = StyleSheet.flatten(
+    (await findByRole('button', { name: /retry truck check — ladder-1/i })).props.style,
+  );
+  expect(retry.minHeight).toBeGreaterThanOrEqual(targetSize.field);
 });

@@ -245,4 +245,71 @@ describe('inbox handler (entrypoint-test + authz-wiring obligations)', () => {
     expect(dynamoSend).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
+
+  type Cmd = { constructor: { name: string }; input: Record<string, unknown> };
+
+  it("lists only the caller's own partition (pk from principal.sub), ignoring a memberId query parameter", async () => {
+    send.mockResolvedValue({ decision: Decision.ALLOW });
+    const dynamoSend = vi.fn().mockResolvedValue({ Items: [] });
+    mockDdb(dynamoSend);
+
+    const { listHandler } = await import('./handler.js');
+    await listHandler(
+      buildEvent('GET /api/v1/notifications', undefined, { memberId: 'MBR-2', deptId: 'OTHER' }),
+    );
+
+    const query = dynamoSend.mock.calls[0]![0] as Cmd;
+    expect(query.input.ExpressionAttributeValues).toEqual({
+      ':pk': 'DEPT#NICHOLS#MEMBER#MBR-1',
+      ':prefix': 'NOTIF#',
+    });
+  });
+
+  it.each([
+    [undefined, undefined],
+    ['10', 10],
+    ['500', 100],
+    ['0', 1],
+    ['abc', undefined],
+  ])('pages the inbox: limit=%s queries with Limit %s', async (limit, expected) => {
+    send.mockResolvedValue({ decision: Decision.ALLOW });
+    const dynamoSend = vi.fn().mockResolvedValue({ Items: [] });
+    mockDdb(dynamoSend);
+
+    const { listHandler } = await import('./handler.js');
+    await listHandler(
+      buildEvent('GET /api/v1/notifications', undefined, limit ? { limit } : undefined),
+    );
+
+    expect((dynamoSend.mock.calls[0]![0] as Cmd).input.Limit).toBe(expected);
+  });
+
+  it("marks read through the caller's own partition only: GSI1 key and Update Key come from principal.sub", async () => {
+    send.mockResolvedValue({ decision: Decision.ALLOW });
+    const dynamoSend = vi
+      .fn()
+      .mockImplementation((command: Cmd) =>
+        Promise.resolve(
+          command.constructor.name === 'QueryCommand'
+            ? { Items: [{ sk: 'NOTIF#MBR-1#1#NOTIF-1' }] }
+            : {},
+        ),
+      );
+    mockDdb(dynamoSend);
+
+    const { markReadHandler } = await import('./handler.js');
+    await markReadHandler(
+      buildEvent('POST /api/v1/notifications/{id}/read', { id: 'NOTIF-1' }, { memberId: 'MBR-2' }),
+    );
+
+    const [query, update] = dynamoSend.mock.calls.map((call) => call[0] as Cmd);
+    expect(query!.input.ExpressionAttributeValues).toEqual({
+      ':gsi1pk': 'DEPT#NICHOLS#MEMBER#MBR-1',
+      ':gsi1sk': 'NOTIFICATION#NOTIF-1',
+    });
+    expect(update!.input.Key).toEqual({
+      pk: 'DEPT#NICHOLS#MEMBER#MBR-1',
+      sk: 'NOTIF#MBR-1#1#NOTIF-1',
+    });
+  });
 });

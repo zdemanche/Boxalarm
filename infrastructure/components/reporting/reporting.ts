@@ -61,15 +61,20 @@ export const EXPORT_WORKER_TIMEOUT_SECONDS = 300;
 export const PROJECTION_EVENT_TYPES = [
   "personnel.attendance.recorded",
   "personnel.member.updated",
-  "personnel.member.created",
   "personnel.availability.changed",
   "neris.incident.submitted",
   "neris.submission.failed",
+  "neris.incident.approved",
+  "neris.incident.rejected",
+  "neris.incident.failed",
+  "neris.incident.deleted",
+  "neris.incident.missing",
+  "neris.incident.transmitted",
   "training.expiry.due",
   "cert.expiry.due",
-  "apparatus.out_of_service",
-  "apparatus.defect.reported",
+  "apparatus.serviceStatus.changed",
   "scheduling.coverage_gap.detected",
+  "scheduling.coverage_gap.resolved",
 ] as const;
 
 /** Query-only, no dynamodb:Scan — every reporting route reads GSIs on the platform table. */

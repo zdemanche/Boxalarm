@@ -78,6 +78,8 @@ export class PrePlanCopies extends pulumi.ComponentResource {
   public readonly homeLocalityInvalidAlarm: aws.cloudwatch.MetricAlarm;
   /** A dispatch detail was served with no home locality: every pre-plan on it is flagged. */
   public readonly homeLocalityMissingAlarm: aws.cloudwatch.MetricAlarm;
+  /** A pre-plan was saved whose address cannot be indexed: dispatches to it show no pre-plan. */
+  public readonly addressUnindexedAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: PrePlanCopiesArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("PrePlanCopies", args.env);
@@ -128,6 +130,13 @@ export class PrePlanCopies extends pulumi.ComponentResource {
       "HomeLocalityMissing",
       "A dispatch detail was served with no home locality, so every pre-plan match is flagged " +
         "VERIFY ADDRESS. See docs/runbooks/alert-context-replay.md, Home locality.",
+    );
+    this.addressUnindexedAlarm = localityAlarm(
+      "preplan-address-unindexed",
+      "PrePlanCopyAddressUnindexed",
+      "A pre-plan was saved with an address that has no house number and street, so it is not " +
+        "in the address index and a dispatch to it shows no pre-plan. Correct the occupancy " +
+        "address and replay. See docs/runbooks/alert-context-replay.md.",
     );
 
     this.registerOutputs({

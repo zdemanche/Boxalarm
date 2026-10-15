@@ -15,6 +15,7 @@ async function build(env = "dev") {
   const alarms = new AlertingAlarms("alerting-alarms", {
     env,
     channelQueues: messaging.channelQueues,
+    alertingTopic: messaging.topic,
     fanOutFunctionName: "boxalarm-dev-alerting-fan-out",
     fanOutOnFailureQueue: new aws.sqs.Queue("fan-out-onfailure", {
       name: "boxalarm-dev-alerting-fan-out-onfailure",
@@ -171,6 +172,22 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
   });
 
+  it("pages on member-updated record failures the consumer reports instead of throwing", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-alerting-member-updated-record-failed").inputs;
+    expect(alarm.namespace).toBe("Boxalarm/AlertingEligibility");
+    expect(alarm.metricName).toBe("MemberUpdatedRecordFailed");
+    expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
+  });
+
+  it.each(["dev", "qa", "staging"])(
+    "creates no fault-injection SSM parameters in %s",
+    async (env) => {
+      await build(env);
+      expect(resourcesOfType("aws:ssm/parameter:Parameter")).toHaveLength(0);
+    },
+  );
+
   // Review MINOR-R4: the page had no redrive path. The alarm names the runbook and script,
   // and both must exist where it says.
   it("points the escalation on-failure page at its runbook and redrive script", async () => {
@@ -305,6 +322,42 @@ describe("AlertingAlarms — every alert-path failure mode pages", { timeout: 30
     expect(alarms.length).toBeGreaterThan(0);
     for (const alarm of alarms) {
       expect(alarm.inputs.alarmActions, alarm.inputs.name as string).toEqual([PAGE_TOPIC_ARN]);
+    }
+  });
+});
+
+describe("AlertingAlarms — SNS to channel-queue delivery", { timeout: 30_000 }, () => {
+  it("pages on SNS delivery failures and filtered-out publishes for the alerting topic", async () => {
+    installMocks();
+    await build();
+    for (const metricName of [
+      "NumberOfNotificationsFailed",
+      "NumberOfNotificationsFilteredOut-NoMessageAttributes",
+      "NumberOfNotificationsFilteredOut-InvalidAttributes",
+    ]) {
+      const alarm = alarmByName(`boxalarm-dev-alerting-topic-${metricName}`);
+      expect(alarm.inputs).toMatchObject({
+        namespace: "AWS/SNS",
+        metricName,
+        dimensions: { TopicName: "boxalarm-dev-alerting-topic.fifo" },
+        statistic: "Sum",
+        threshold: 0,
+        alarmActions: [PAGE_TOPIC_ARN],
+      });
+    }
+  });
+
+  it("pages when any channel subscription DLQ is not empty", async () => {
+    installMocks();
+    await build();
+    for (const channel of ["push", "sms", "voice"]) {
+      expect(
+        alarmByName(`boxalarm-dev-alerting-${channel}-subscription-dlq-not-empty`).inputs,
+      ).toMatchObject({
+        metricName: "ApproximateNumberOfMessagesVisible",
+        dimensions: { QueueName: `boxalarm-dev-alerting-${channel}-subscription-dlq.fifo` },
+        alarmActions: [PAGE_TOPIC_ARN],
+      });
     }
   });
 });

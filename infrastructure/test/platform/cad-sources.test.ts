@@ -4,9 +4,12 @@ import { CadSources } from "../../components/platform/cad-sources";
 import { ServiceLogGroup } from "../../components/observability/service-log-group";
 import {
   ACCOUNT_ID,
+  alarmByName,
   installMocks,
   isGranted,
+  lambdaByName,
   lambdaEnv,
+  resourcesOfType,
   settle,
   statementsForRole,
 } from "../alerting/mock-harness";
@@ -23,7 +26,7 @@ beforeEach(() => {
   routes.length = 0;
 });
 
-async function build(): Promise<void> {
+async function build(): Promise<CadSources> {
   const httpApi = {
     route: (_name: string, args: { routeKey: string; lambda: { function: { name: unknown } } }) => {
       (args.lambda.function.name as { apply: (fn: (n: string) => void) => void }).apply((n) =>
@@ -32,7 +35,7 @@ async function build(): Promise<void> {
       return {};
     },
   } as unknown as HttpApi;
-  new CadSources("cad-sources", {
+  const sources = new CadSources("cad-sources", {
     env: "dev",
     platformTableName: "boxalarm-dev-platform-table",
     platformTableArn: PLATFORM_TABLE,
@@ -42,10 +45,12 @@ async function build(): Promise<void> {
     httpApi,
     webhookUrl: "https://cad.example.org/api/v1/alerting/ingress/cad-webhook",
     webhookUsagePlanId: "plan-1",
+    pageTopicArn: "arn:aws:sns:us-east-1:123456789012:page",
     emailDomain: "Ingress.Nichols.example.org",
   });
   await settle();
   await settle();
+  return sources;
 }
 
 describe("CadSources (platform settings routes)", { timeout: 30_000 }, () => {
@@ -82,12 +87,31 @@ describe("CadSources (platform settings routes)", { timeout: 30_000 }, () => {
       "secretsmanager:CreateSecret",
       "secretsmanager:PutSecretValue",
       "secretsmanager:GetSecretValue",
+      "secretsmanager:TagResource",
     ]) {
       expect(isGranted(rotate, action, SECRETS)).toBe(true);
       expect(isGranted(rotate, action, "*")).toBe(false);
     }
     expect(lambdaEnv(ROTATE_FN).CAD_WEBHOOK_SECRET_PREFIX).toBe("boxalarm-dev-cad-webhook/");
     expect(lambdaEnv(ROTATE_FN).CAD_WEBHOOK_USAGE_PLAN_ID).toBe("plan-1");
+  });
+
+  it("gives the rotation Lambda room to roll back: 15 s", async () => {
+    await build();
+    expect(lambdaByName(ROTATE_FN).inputs.timeout).toBe(15);
+  });
+
+  it("alarms the page topic on any failed secret or API key cleanup or restore", async () => {
+    await build();
+    const filter = resourcesOfType("aws:cloudwatch/logMetricFilter:LogMetricFilter").find((r) =>
+      String(r.inputs.name).includes("cad-sources-cleanup-failed"),
+    );
+    for (const event of ["secretDeleteFailed", "apiKeyDeleteFailed", "secretRestoreFailed"]) {
+      expect(filter?.inputs.pattern).toContain(`platform.cadSources.${event}`);
+    }
+    const alarm = alarmByName("boxalarm-dev-cad-sources-cleanup-failed");
+    expect(alarm.inputs.alarmActions).toEqual(["arn:aws:sns:us-east-1:123456789012:page"]);
+    expect(alarm.inputs.threshold).toBe(0);
   });
 
   it("the rotation Lambda manages only CAD API keys: create + attach to the plan, delete tagged", async () => {

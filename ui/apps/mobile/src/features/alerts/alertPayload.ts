@@ -24,6 +24,7 @@ export interface AlertPayload {
   mutualAidPrompt?: true;
 }
 
+const PLACEHOLDER_INCIDENT_TYPE = 'Dispatch';
 export const MUTUAL_AID_PROMPT_KIND = 'mutual_aid_prompt';
 
 type PushData = Record<string, unknown> | undefined;
@@ -43,7 +44,7 @@ export function alertPayloadFromPushData(data: PushData, receivedAt: number): Al
   if (!dispatchId) return null;
   const title = str(data?.title);
   const body = str(data?.body);
-  const incidentType = str(data?.incidentType) ?? title ?? 'Dispatch';
+  const incidentType = str(data?.incidentType) ?? title ?? PLACEHOLDER_INCIDENT_TYPE;
   let address = str(data?.address);
   if (!address && body) {
     const prefix = title ? `${title} — ` : null;
@@ -125,14 +126,17 @@ export async function rememberAlertPayload(payload: AlertPayload): Promise<void>
 }
 
 /** Newer fields win, but never with an empty value, and the first receipt time is kept. */
-function mergePayload(existing: AlertPayload | null, next: AlertPayload): AlertPayload {
+export function mergePayload(existing: AlertPayload | null, next: AlertPayload): AlertPayload {
   if (!existing) return next;
   return {
     ...existing,
     ...next,
     receivedAt: Math.min(existing.receivedAt, next.receivedAt),
     address: next.address || existing.address,
-    incidentType: next.incidentType || existing.incidentType,
+    incidentType:
+      next.incidentType && next.incidentType !== PLACEHOLDER_INCIDENT_TYPE
+        ? next.incidentType
+        : existing.incidentType,
     ...(next.crossStreets || existing.crossStreets
       ? { crossStreets: next.crossStreets || existing.crossStreets }
       : {}),

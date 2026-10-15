@@ -169,7 +169,7 @@ describe('members/updateRoles handler (entrypoint test)', () => {
     });
 
     it('dedupes, orders canonically, and always keeps MEMBER', async () => {
-      getMemberMock.mockResolvedValueOnce({ memberId: 'm1', roles: ['MEMBER'] });
+      getMemberMock.mockResolvedValueOnce({ memberId: 'm1', roles: ['MEMBER'], updatedAt: 111 });
       cognitoHas(['MEMBER']);
       updateMemberRolesMock.mockResolvedValueOnce({ updatedAt: 1, eventId: 'evt-1' });
       const result = await put(['CHIEF', 'OFFICER', 'OFFICER']);
@@ -181,6 +181,7 @@ describe('members/updateRoles handler (entrypoint test)', () => {
         ['MEMBER'],
         ['MEMBER', 'OFFICER', 'CHIEF'],
         'actor-1',
+        111,
       );
     });
 

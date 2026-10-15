@@ -141,6 +141,38 @@ describe('normalizeAddress', () => {
     expect(normalized?.key).not.toContain('#');
   });
 
+  it.each([
+    ['12 George Washington Ct', '12 GEORGE WASHINGTON CT'],
+    ['12 Ben Franklin Ct', '12 BEN FRANKLIN CT'],
+    ['12 Old Monroe Ct', '12 OLD MONROE CT'],
+    ['12 Old Stepney Ct', '12 OLD STEPNEY CT'],
+    ['12 James Madison Ct 06611', '12 JAMES MADISON CT'],
+  ])('%s: a town-like word before a final Ct stays in the street name', (raw, key) => {
+    expect(normalizeAddress(raw)).toMatchObject({ key, town: null });
+  });
+
+  it.each([
+    ['12 Oak Ct 06611', '12 OAK CT'],
+    ['12 Oak Ct CT', '12 OAK CT'],
+  ])('%s keeps its own suffix', (raw, key) => {
+    expect(normalizeAddress(raw)?.key).toBe(key);
+  });
+
+  it.each([
+    ['12 Main St W Trumbull CT 06611', '12 MAIN ST W', 'TRUMBULL'],
+    ['123 Main St N Trumbull', '123 MAIN ST N', 'TRUMBULL'],
+    ['12 Main St N Trumbull Apt 4', '12 MAIN ST N', 'TRUMBULL'],
+  ])('%s: a directional before the town stays in the street key', (raw, key, town) => {
+    expect(normalizeAddress(raw)).toMatchObject({ key, town, ambiguous: false });
+  });
+
+  it('keeps the directional with the town when the two together are a place', () => {
+    expect(normalizeAddress('12 Main St North Haven CT')).toMatchObject({
+      key: '12 MAIN ST',
+      town: 'N HAVEN',
+    });
+  });
+
   it('is deterministic and idempotent', () => {
     const once = normalizeAddress('123 Main Street, Apt 4');
     expect(normalizeAddress('123 Main Street, Apt 4')).toEqual(once);
@@ -197,6 +229,9 @@ describe('normalizeAddress', () => {
       ['123', 'a house number alone'],
       ['123 4', 'no alphabetic street token'],
       ['123 Apt 4', 'unit-only after the number'],
+      ['12 #4 Main St', 'a "#" inside the street'],
+      ['123 Unit #4 Main St', 'a "#" inside the street'],
+      ['12 # Main St', 'a "#" inside the street'],
     ])('%s (%s) -> null', (raw) => {
       expect(normalizeAddress(raw)).toBeNull();
     });

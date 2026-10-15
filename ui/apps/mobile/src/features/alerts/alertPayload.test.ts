@@ -137,3 +137,23 @@ test('a mutual-aid prompt is marked as one and round-trips through the notificat
   });
   expect(alertPayloadFromPushData({ dispatchId: 'D-1' }, 5)).not.toHaveProperty('mutualAidPrompt');
 });
+
+test('a placeholder "Dispatch" incident type never replaces the real one already remembered (B2-222)', async () => {
+  await rememberAlertPayload({
+    dispatchId: 'D-PLACEHOLDER',
+    incidentType: 'STRUCTURE FIRE',
+    address: '12 Main St',
+    receivedAt: 1_000,
+  });
+  await rememberAlertPayload({
+    dispatchId: 'D-PLACEHOLDER',
+    incidentType: 'Dispatch',
+    address: '',
+    receivedAt: 2_000,
+  });
+
+  await expect(cachedAlertPayload('D-PLACEHOLDER')).resolves.toMatchObject({
+    incidentType: 'STRUCTURE FIRE',
+    address: '12 Main St',
+  });
+});

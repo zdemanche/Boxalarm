@@ -15,6 +15,7 @@ import {
 } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { readMemberServiceConfig } from '../config.js';
+import { normalizeEmail } from '../lib/email.js';
 import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 import {
   getCognitoClient,
@@ -23,6 +24,7 @@ import {
   syncMemberLoginEmail,
 } from '../lib/memberLogin.js';
 import { SendEmailCommand, SESv2Client } from '@aws-sdk/client-sesv2';
+import { buildAuditLogEntryItem } from '../../platform-service/audit/auditEntry.js';
 import { writeRevocationMarker } from '../../platform-service/authorizer/revocationStore.js';
 
 const UPDATABLE_FIELDS = ['phone', 'email', 'firstName', 'lastName'] as const;
@@ -135,11 +137,6 @@ interface ProfileDeps {
   readonly client?: DynamoDBDocumentClient;
   readonly cognito?: CognitoIdentityProviderClient;
   readonly ses?: SESv2Client;
-}
-
-/** Trim + lowercase: the unchanged check and what is stored agree on case and whitespace. */
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
 }
 
 /**
@@ -296,18 +293,20 @@ async function updateMemberProfile(
   const docClient = getDocClient(deps.client);
   const rowKey = { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: 'METADATA' };
 
+  const current = await docClient.send(
+    new GetCommand({ TableName: config.tableName, Key: rowKey, ConsistentRead: true }),
+  );
+  if (!current.Item) {
+    emitPersonnelMetric('MemberProfileUpdateFailed', 'NotFound');
+    return notFoundProblem(traceId, `Member ${memberId} was not found.`);
+  }
+  const storedRow = current.Item;
+
   // The previous address, when this edit really changes it (read in the caller's own
   // department: a member of another department is a 404 before Cognito is touched).
   let previousEmail: string | undefined;
   if (updates.email !== undefined) {
-    const current = await docClient.send(
-      new GetCommand({ TableName: config.tableName, Key: rowKey, ConsistentRead: true }),
-    );
-    if (!current.Item) {
-      emitPersonnelMetric('MemberProfileUpdateFailed', 'NotFound');
-      return notFoundProblem(traceId, `Member ${memberId} was not found.`);
-    }
-    const stored = typeof current.Item.email === 'string' ? current.Item.email : undefined;
+    const stored = typeof storedRow.email === 'string' ? storedRow.email : undefined;
     if (stored !== undefined && normalizeEmail(stored) === updates.email) {
       updates = Object.fromEntries(Object.entries(updates).filter(([field]) => field !== 'email'));
     } else if (mode === 'self') {
@@ -319,7 +318,7 @@ async function updateMemberProfile(
         traceId,
       );
     } else if (
-      isProtectedEmailTarget(current.Item.roles) &&
+      isProtectedEmailTarget(storedRow.roles) &&
       !principal['cognito:groups'].split(' ').includes('ADMIN')
     ) {
       logEvent('personnel.member.update.protectedEmailRefused', {
@@ -336,6 +335,17 @@ async function updateMemberProfile(
     } else {
       previousEmail = stored;
     }
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        memberId,
+        updatedAt: (storedRow.updatedAt as number | undefined) ?? now,
+      }),
+    };
   }
 
   const cognito =
@@ -386,6 +396,10 @@ async function updateMemberProfile(
   const setClauses = setFields
     .map(([field]) => `#${field} = :${field}`)
     .concat('#updatedAt = :updatedAt');
+  if (typeof updates.lastName === 'string') {
+    setClauses.push('gsi3sk = :gsi3sk');
+    valueExpressions[':gsi3sk'] = `${updates.lastName}#${memberId}`;
+  }
 
   try {
     await docClient.send(
@@ -419,6 +433,25 @@ async function updateMemberProfile(
                 payload: { deptId, memberId, ...updates },
                 createdAt: now,
               },
+            },
+          },
+          {
+            Put: {
+              TableName: config.tableName,
+              Item: buildAuditLogEntryItem({
+                deptId,
+                actorId: principal.sub,
+                mutatedEntityType: 'MEMBER',
+                mutatedEntityId: memberId,
+                action: 'UPDATE',
+                before: Object.fromEntries(
+                  Object.keys(updates).map((field) => [field, storedRow[field] ?? null]),
+                ),
+                after: updates,
+                ts: now,
+                traceId,
+              }),
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
             },
           },
         ],

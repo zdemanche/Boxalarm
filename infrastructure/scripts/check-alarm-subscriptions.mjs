@@ -10,7 +10,8 @@
 // Usage: node scripts/check-alarm-subscriptions.mjs <dev|qa|staging|prod> [--region us-east-1]
 // Read-only (SNS ListTopics / ListSubscriptionsByTopic). Exit 0 = every topic reaches someone,
 // 1 = at least one does not, 2 = usage.
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { SNSClient, ListTopicsCommand, ListSubscriptionsByTopicCommand } from "@aws-sdk/client-sns";
 
 export const alarmTopicNames = (env) => [
@@ -94,7 +95,15 @@ async function main() {
   console.log(`every alarm topic for ${env} reaches a confirmed subscriber.`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const isMain = (() => {
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   main().catch((error) => {
     console.error(`could not check subscriptions: ${error?.message ?? error}`);
     process.exit(1);

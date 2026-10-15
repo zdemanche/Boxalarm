@@ -1,4 +1,5 @@
 import { demoRequest } from './demoFixtures';
+import { reportClientError } from './telemetry';
 
 export interface AuthTokenSource {
   getAccessToken: () => Promise<string | null>;
@@ -35,8 +36,11 @@ export function problemFieldErrors(problem: ProblemDetails): ProblemFieldError[]
 }
 
 export class ApiError extends Error {
-  constructor(public readonly problem: ProblemDetails) {
-    super(problem.title);
+  constructor(
+    public readonly problem: ProblemDetails,
+    message?: string,
+  ) {
+    super(message ?? problem.title);
   }
 }
 
@@ -45,6 +49,14 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'headers'> {
 }
 
 const API_BASE = '/api/v1/';
+
+async function isGatewayRefusal(response: Response): Promise<boolean> {
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as { status?: unknown } | null;
+  return typeof body?.status !== 'number';
+}
 
 export async function apiRequest(
   path: string,
@@ -71,7 +83,7 @@ export async function apiRequest(
 
   let response = await send(await tokens.getAccessToken());
 
-  if (response.status === 401) {
+  if (response.status === 401 || (response.status === 403 && (await isGatewayRefusal(response)))) {
     const renewedToken = await tokens.renewSilently();
     if (renewedToken) {
       response = await send(renewedToken);
@@ -80,13 +92,29 @@ export async function apiRequest(
 
   if (!response.ok) {
     const problem = (await response.json().catch(() => null)) as ProblemDetails | null;
+    if (response.status >= 500) {
+      reportClientError(new Error(`${response.status} from ${path}`), {
+        status: response.status,
+        traceId: problem?.traceId,
+        endpoint: path,
+      });
+    }
+    const parsed =
+      typeof problem === 'object' && problem !== null && !Array.isArray(problem) ? problem : null;
+    if (typeof parsed?.title === 'string' && parsed.title !== '') throw new ApiError(parsed);
+    const gatewayMessage = (parsed as { message?: unknown } | null)?.message;
+    const message =
+      (typeof gatewayMessage === 'string' && gatewayMessage) ||
+      response.statusText ||
+      `Request failed (HTTP ${response.status})`;
     throw new ApiError(
-      problem ?? {
+      parsed ?? {
         type: 'about:blank',
         title: response.statusText,
         status: response.status,
         traceId: 'unknown',
       },
+      message,
     );
   }
 

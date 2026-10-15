@@ -51,6 +51,10 @@ describe('deriveReceiptStatus (AC4)', () => {
     expect(deriveReceiptStatus({ sentAt: 1000 }, 1010)).toBe('SENT');
   });
 
+  it('returns NOT_SENT for a claimed receipt that never recorded a sentAt', () => {
+    expect(deriveReceiptStatus({}, 5000)).toBe('NOT_SENT');
+  });
+
   it('returns SENT_UNCONFIRMED once past the provider window with no delivery/open/failure — distinguishable from delivered', () => {
     expect(deriveReceiptStatus({ sentAt: 1000 }, 1000 + 301)).toBe('SENT_UNCONFIRMED');
   });

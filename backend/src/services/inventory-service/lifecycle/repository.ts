@@ -1,5 +1,5 @@
-import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient, TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 
@@ -74,26 +74,57 @@ export async function transitionLifecycleStatus(
   client: DynamoDBDocumentClient,
   config: InventoryConfig,
   deptId: VerifiedDeptId,
+  actorId: string,
   assetId: string,
   from: LifecycleStatus,
   to: LifecycleStatus,
 ): Promise<EquipmentAsset> {
   const dropsAssignmentEligibility = !isAssignmentEligible(to);
+  const ts = Date.now();
+  const date = new Date(ts).toISOString().slice(0, 10);
   try {
     await client.send(
-      new UpdateCommand({
-        TableName: config.tableName,
-        Key: { pk: buildDeptScopedPk(deptId, 'ASSET', assetId), sk: 'METADATA' },
-        UpdateExpression: dropsAssignmentEligibility
-          ? 'SET lifecycleStatus = :to REMOVE gsi1pk, gsi1sk'
-          : 'SET lifecycleStatus = :to',
-        ConditionExpression: 'attribute_exists(pk) AND lifecycleStatus = :from',
-        ExpressionAttributeValues: { ':to': to, ':from': from },
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Update: {
+              TableName: config.tableName,
+              Key: { pk: buildDeptScopedPk(deptId, 'ASSET', assetId), sk: 'METADATA' },
+              UpdateExpression: dropsAssignmentEligibility
+                ? 'SET lifecycleStatus = :to REMOVE gsi1pk, gsi1sk'
+                : 'SET lifecycleStatus = :to',
+              ConditionExpression: 'attribute_exists(pk) AND lifecycleStatus = :from',
+              ExpressionAttributeValues: { ':to': to, ':from': from },
+            },
+          },
+          {
+            Put: {
+              TableName: config.tableName,
+              Item: {
+                pk: buildDeptScopedPk(deptId, 'AUDIT', date),
+                sk: `${ts}#EQUIPMENT_ASSET#${assetId}#${actorId}`,
+                entityType: 'AUDIT_LOG_ENTRY',
+                mutatedEntityType: 'EQUIPMENT_ASSET',
+                mutatedEntityId: assetId,
+                action: 'UPDATE',
+                actorId,
+                changedFields: { lifecycleStatus: { old: from, new: to } },
+                ts,
+                gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'EQUIPMENT_ASSET', assetId),
+                gsi3sk: String(ts),
+              },
+              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+            },
+          },
+        ],
       }),
     );
     return { assetId, lifecycleStatus: to };
   } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) {
+    if (
+      error instanceof TransactionCanceledException &&
+      error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
       throw new LifecycleTransitionConflictError(assetId);
     }
     throw error;

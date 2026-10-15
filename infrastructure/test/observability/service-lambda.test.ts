@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as pulumi from "@pulumi/pulumi";
 
 beforeEach(() => {
@@ -83,6 +85,7 @@ describe("ServiceLambda", () => {
 
     expect(tracing).toEqual(ACTIVE_TRACING_CONFIG);
     expect(logging?.logGroup).toBe("/aws/lambda/boxalarm-dev-platform-service");
+    expect(logging?.logFormat).toBe("Text");
     expect(envVars?.variables?.SERVICE_NAME).toBe("platform-service");
     expect(envVars?.variables?.ENVIRONMENT).toBe("dev");
     expect(envVars?.variables?.COGNITO_USER_POOL_ID).toBe("pool-id");
@@ -154,5 +157,18 @@ describe("ServiceLambda", () => {
     await settleLambda(lambda);
     const vpcConfig = await resolve(lambda.function.vpcConfig);
     expect(vpcConfig).toBeUndefined();
+  });
+});
+
+describe("Lambda log format for Embedded Metric Format (finding B2-003)", () => {
+  it("never sets logFormat JSON on a Lambda that backend code reaches with console.log EMF", () => {
+    const componentsDir = path.join(__dirname, "../../components");
+    const exempt = path.join("identity", "user-pool.ts");
+    const offenders = (fs.readdirSync(componentsDir, { recursive: true }) as string[])
+      .filter((file) => file.endsWith(".ts") && !file.endsWith(exempt))
+      .filter((file) =>
+        /logFormat:\s*"JSON"/.test(fs.readFileSync(path.join(componentsDir, file), "utf8")),
+      );
+    expect(offenders).toEqual([]);
   });
 });

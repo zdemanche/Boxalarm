@@ -77,11 +77,16 @@ const ROUTES: readonly Route[] = [
     ],
   },
   {
-    // lifecycle: GetItem (current status), then conditional UpdateItem.
+    // lifecycle: GetItem (current status), then a TransactWriteItems of the conditional
+    // UpdateItem (asset) and the PutItem (audit row).
     fn: "equipment-lifecycle",
     routeKey: "PUT /api/v1/inventory/equipment/{assetId}/lifecycle",
     table: (arn) => [
-      allow("EquipmentLifecycleWrite", ["dynamodb:GetItem", "dynamodb:UpdateItem"], [arn]),
+      allow(
+        "EquipmentLifecycleWrite",
+        ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:PutItem"],
+        [arn],
+      ),
       auditMutationDenyStatement(arn),
     ],
   },

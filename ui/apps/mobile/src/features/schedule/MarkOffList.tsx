@@ -133,7 +133,9 @@ export function MarkOffList({
           : error instanceof ApiTimeoutError
             ? // The request may have reached the server before the answer was lost (minor).
               'No answer from Boxalarm - it may or may not have ended. Check again with signal before you rely on it.'
-            : `Couldn't end it - you're still marked unavailable until ${formatWhen(markOff.endAt)}. Try again, or tell an officer.`;
+            : markOff.endAt <= Date.now() / 1000
+              ? "Couldn't end it - you're still marked unavailable. Try again, or tell an officer."
+              : `Couldn't end it - you're still marked unavailable until ${formatWhen(markOff.endAt)}. Try again, or tell an officer.`;
       setMessage({ text, danger: true });
       AccessibilityInfo.announceForAccessibility(text);
     } finally {
@@ -174,9 +176,12 @@ export function MarkOffList({
           <View>
             {markOffs.map((markOff, index) => {
               const active = markOff.startAt <= now;
-              const when = active
-                ? `Marked unavailable until ${formatWhen(markOff.endAt)}`
-                : `Unavailable from ${formatWhen(markOff.startAt)} until ${formatWhen(markOff.endAt)}`;
+              const overdue = active && markOff.endAt <= now;
+              const when = overdue
+                ? `Should have ended ${formatWhen(markOff.endAt)}`
+                : active
+                  ? `Marked unavailable until ${formatWhen(markOff.endAt)}`
+                  : `Unavailable from ${formatWhen(markOff.startAt)} until ${formatWhen(markOff.endAt)}`;
               return (
                 <View
                   key={markOff.markoffId}
@@ -189,7 +194,7 @@ export function MarkOffList({
                 >
                   <StatusChip
                     status={active ? 'warning' : 'neutral'}
-                    label={active ? 'Unavailable now' : 'Upcoming'}
+                    label={overdue ? 'Still unavailable' : active ? 'Unavailable now' : 'Upcoming'}
                   />
                   <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
                     {when}

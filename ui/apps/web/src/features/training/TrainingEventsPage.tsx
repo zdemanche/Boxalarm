@@ -3,8 +3,23 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageTraining } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, PageHeader, Skeleton, StatusChip, TextInput } from '../../components/ui';
-import { createTrainingEvent, listTrainingEvents, recordEventHours, signUpForEvent } from './api';
+import {
+  Button,
+  Card,
+  PageHeader,
+  Select,
+  Skeleton,
+  StatusChip,
+  TextInput,
+} from '../../components/ui';
+import { listMembers } from '../personnel/api';
+import {
+  createTrainingEvent,
+  errorDetail,
+  listTrainingEvents,
+  recordEventHours,
+  signUpForEvent,
+} from './api';
 import type { TrainingEvent } from './types';
 import styles from './training.module.css';
 
@@ -68,12 +83,17 @@ function HoursForm({ event }: { event: TrainingEvent }) {
   const [memberId, setMemberId] = useState('');
   const [hours, setHours] = useState('');
 
+  const membersQuery = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+  });
+
   const mutation = useMutation({
     mutationFn: () => recordEventHours(auth, event.eventId, [{ memberId, hours: Number(hours) }]),
     onSuccess: async () => {
       setMemberId('');
       setHours('');
-      await queryClient.invalidateQueries({ queryKey: ['training', 'events'] });
+      await queryClient.invalidateQueries({ queryKey: ['training'] });
     },
   });
 
@@ -86,12 +106,30 @@ function HoursForm({ event }: { event: TrainingEvent }) {
       }}
       className={styles.rowForm}
     >
-      <TextInput
-        label="Member ID"
+      <Select
+        label="Member"
         value={memberId}
         onChange={(e) => setMemberId(e.target.value)}
         required
-      />
+      >
+        <option value="">Select a member…</option>
+        {(membersQuery.data ?? [])
+          .filter((member) => member.status !== 'RETIRED')
+          .sort(
+            (a, b) =>
+              a.lastName.localeCompare(b.lastName) || a.firstName.localeCompare(b.firstName),
+          )
+          .map((member) => (
+            <option key={member.memberId} value={member.memberId}>
+              {member.lastName}, {member.firstName}
+            </option>
+          ))}
+      </Select>
+      {membersQuery.error ? (
+        <p role="alert" className={styles.error}>
+          Members could not be loaded, so hours cannot be recorded.
+        </p>
+      ) : null}
       <TextInput
         label="Hours"
         type="number"
@@ -107,7 +145,7 @@ function HoursForm({ event }: { event: TrainingEvent }) {
       </Button>
       {mutation.error ? (
         <p role="alert" className={styles.error}>
-          Hours not recorded: {mutation.error.message}
+          Hours not recorded: {errorDetail(mutation.error)}
         </p>
       ) : null}
     </form>
@@ -182,7 +220,7 @@ export function TrainingEventsPage() {
       setFormError(null);
       await queryClient.invalidateQueries({ queryKey: ['training', 'events'] });
     },
-    onError: (error: Error) => setFormError(error.message),
+    onError: (error: Error) => setFormError(errorDetail(error)),
   });
 
   const signUpMutation = useMutation({
@@ -194,6 +232,10 @@ export function TrainingEventsPage() {
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (form.endAt <= form.startAt) {
+      setFormError('End time must be after the start time.');
+      return;
+    }
     createMutation.mutate(form);
   };
 

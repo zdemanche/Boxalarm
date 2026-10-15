@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import config from './playwright.config';
 
 test('the preview server the e2e run boots matches the baseURL it asserts against', () => {
@@ -9,4 +9,13 @@ test('the preview server the e2e run boots matches the baseURL it asserts agains
 
 test('the e2e suite runs the accessibility-scanning chromium project', () => {
   expect(config.projects?.map((project) => project.name)).toContain('chromium');
+});
+
+test('a committed test.only fails the CI e2e run instead of silently narrowing it', async () => {
+  vi.stubEnv('CI', 'true');
+  vi.resetModules();
+  const { default: ciConfig } = await import('./playwright.config');
+  vi.unstubAllEnvs();
+
+  expect(ciConfig.forbidOnly).toBe(true);
 });

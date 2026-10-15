@@ -417,3 +417,115 @@ test('the page links to the occupancy change history by the id audit entries are
     '/audit-log?entityType=OCCUPANCY&entityId=occ-1',
   );
 });
+
+test('B2-050: file names with spaces or parentheses are sent and uploaded under their safe names', async () => {
+  const uploaded: string[] = [];
+  const puts: SavedPrePlan[] = [];
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(PRE_PLAN)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', async ({ request }) => {
+      const body = (await request.json()) as SavedPrePlan;
+      puts.push(body);
+      return HttpResponse.json({
+        prePlanId: 'pp-1',
+        attachmentUploadUrls: body.attachmentFilenames
+          .filter((name) => name.startsWith('Floor_'))
+          .map((filename) => ({
+            filename,
+            uploadUrl: `${window.location.origin}/uploads/${filename}`,
+            contentType: 'application/pdf',
+          })),
+        utilityShutoffs: body.utilityShutoffs,
+        hazards: body.hazards,
+      });
+    }),
+  );
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (!url.includes('/uploads/')) return realFetch(input, init);
+    uploaded.push(url.split('/uploads/')[1]!);
+    return new Response(null, { status: 200 });
+  });
+
+  const user = await openPrePlanEditor();
+  await user.upload(
+    screen.getByLabelText('Attachments'),
+    new File(['x'], 'Floor Plan (1).pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]!.attachmentFilenames).toEqual(['floor-1.pdf', 'Floor_Plan__1_.pdf']);
+  await waitFor(() => expect(uploaded).toEqual(['Floor_Plan__1_.pdf']));
+  vi.restoreAllMocks();
+});
+
+test('B2-050: two new files that sanitize to the same name are refused before the save', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+  await user.upload(screen.getByLabelText('Attachments'), [
+    new File(['x'], 'a b.pdf', { type: 'application/pdf' }),
+    new File(['y'], 'a_b.pdf', { type: 'application/pdf' }),
+  ]);
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  expect(await screen.findByText(/same name/)).toBeTruthy();
+  expect(puts).toHaveLength(0);
+});
+
+test('B2-189: a failed hazards save says it was not saved, keeps the edit, and offers no reload', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.put('/api/v1/inspections/occupancies/occ-1', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'hazards too long',
+          traceId: 't',
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  const editor = screen.getByLabelText('Hazards (one per line)') as HTMLTextAreaElement;
+  await user.type(editor, '\nOxygen cylinders');
+  await user.click(screen.getByRole('button', { name: 'Save hazards' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('The hazards was not saved: hazards too long');
+  expect(screen.queryByText('Something went wrong loading this page')).toBeNull();
+  expect(editor.value).toContain('Oxygen cylinders');
+});
+
+test('B2-189: a failed pre-plan save says it was not saved and keeps the editor', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(PRE_PLAN)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+  await screen.findByRole('form', { name: 'Save pre-plan' });
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('The pre-plan was not saved: HTTP 503');
+  expect(screen.queryByText('Something went wrong loading this page')).toBeNull();
+  expect(screen.getByRole('form', { name: 'Save pre-plan' })).toBeTruthy();
+});

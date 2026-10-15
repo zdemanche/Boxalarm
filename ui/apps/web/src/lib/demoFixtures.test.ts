@@ -249,6 +249,7 @@ test('demo audit history: every record page that links to it has rows, matched l
     ['EQUIPMENT_ASSET', 'eq-3'],
     ['DEPARTMENT_CONFIG', 'LOSAP_POINT_RULES'],
     ['OCCUPANCY', 'occ-6'],
+    ['MEMBER_QUALIFICATION', 'm-24-INTERIOR'],
   ] as const) {
     const entries = await history(type, id);
     expect(entries.length, `${type} ${id}`).toBeGreaterThan(0);

@@ -2,7 +2,7 @@ import type { AuthConfiguration, RefreshResult } from 'react-native-app-auth';
 import Config from 'react-native-config';
 import * as Keychain from 'react-native-keychain';
 import { revokePushToken } from '../features/alerts/pushTokens';
-import { ApiError } from '../lib/apiClient';
+import { ApiError, isGatewayDenial } from '../lib/apiClient';
 
 /**
  * A sign-out whose push revoke did not land (M3): no signal, or the server refused it. Until the
@@ -236,6 +236,8 @@ async function retryOne(
     );
   } catch (error) {
     // 403/404: the member no longer exists here or the path is not theirs - nothing to revoke.
+    // A gateway 403 (authorizer trouble) is not a backend refusal: keep the revoke and retry.
+    if (error instanceof ApiError && isGatewayDenial(error)) return 'failed';
     const status = error instanceof ApiError ? error.problem.status : null;
     if (status === 403 || status === 404)
       return drop(`the server answered ${status}`, refreshToken);

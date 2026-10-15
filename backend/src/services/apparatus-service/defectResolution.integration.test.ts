@@ -32,9 +32,7 @@ describe('defect resolution against real DynamoDB', () => {
       region: 'us-east-1',
       credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
     });
-    docClient = DynamoDBDocumentClient.from(lowLevel, {
-      marshallOptions: { removeUndefinedValues: true },
-    });
+    docClient = DynamoDBDocumentClient.from(lowLevel);
     await lowLevel.send(
       new CreateTableCommand({
         TableName: TABLE,

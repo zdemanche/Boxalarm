@@ -51,7 +51,7 @@ export class OutboxPublisher extends pulumi.ComponentResource {
 
     this.onFailureQueue = new aws.sqs.Queue(
       `${name}-onfailure`,
-      { name: `boxalarm-${env}-outbox-publisher-onfailure` },
+      { name: `boxalarm-${env}-outbox-publisher-onfailure`, messageRetentionSeconds: 1_209_600 },
       { parent: this },
     );
 
@@ -121,6 +121,7 @@ export class OutboxPublisher extends pulumi.ComponentResource {
           filters: [
             {
               pattern: JSON.stringify({
+                eventName: ["INSERT"],
                 dynamodb: { NewImage: { entityType: { S: ["OUTBOX_ENTRY"] } } },
               }),
             },

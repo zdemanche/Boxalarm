@@ -76,11 +76,25 @@ function apparatusItem() {
 function fakeDynamoClient(options: {
   readonly apparatusExists?: boolean;
   readonly onTransact?: (command: TransactWriteCommand) => Promise<unknown>;
-  readonly existingIdempotency?: { defectId: string; photoS3Key?: string };
+  readonly oosStartAt?: number;
+  readonly existingIdempotency?: {
+    defectId: string;
+    photoS3Key?: string;
+    severity?: string;
+    status?: string;
+  };
 }): DynamoDBDocumentClient {
   const send = vi.fn(async (command: unknown) => {
     if (command instanceof QueryCommand && command.input.IndexName === 'GSI3') {
       return options.apparatusExists === false ? { Items: [] } : { Items: [apparatusItem()] };
+    }
+    if (
+      command instanceof QueryCommand &&
+      command.input.ExpressionAttributeValues?.[':prefix'] === 'OOS#'
+    ) {
+      return options.oosStartAt === undefined
+        ? { Items: [] }
+        : { Items: [{ sk: `OOS#${options.oosStartAt}`, startAt: options.oosStartAt }] };
     }
     if (command instanceof QueryCommand) {
       if (options.existingIdempotency) {
@@ -107,8 +121,8 @@ function fakeDynamoClient(options: {
             apparatusId: 'APP-E1',
             unitId: 'E1',
             description: 'existing',
-            severity: 'MINOR',
-            status: 'OPEN',
+            severity: options.existingIdempotency.severity ?? 'MINOR',
+            status: options.existingIdempotency.status ?? 'OPEN',
             reportedBy: 'MBR-0012',
             reportedAt: 1798050000,
             photoS3Key: options.existingIdempotency.photoS3Key ?? null,
@@ -398,6 +412,7 @@ describe('reportDefect handler', () => {
         unitId: 'E1',
         status: 'OUT_OF_SERVICE',
         reason: 'Pump failure',
+        origin: 'DEFECT',
       }),
     );
     const body = JSON.parse((result as { body: string }).body) as { outOfService: boolean };
@@ -429,6 +444,242 @@ describe('reportDefect handler', () => {
       (call) => call[0] instanceof TransactWriteCommand,
     );
     expect(transactCalls).toHaveLength(0);
+  });
+
+  it('re-applies OUT_OF_SERVICE when an OPEN OUT_OF_SERVICE defect is replayed', async () => {
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'OUT_OF_SERVICE' },
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(setServiceStatus).toHaveBeenCalledWith(
+      expect.anything(),
+      'platform-table',
+      expect.objectContaining({
+        unitId: 'E1',
+        status: 'OUT_OF_SERVICE',
+        reason: 'existing',
+        origin: 'DEFECT',
+      }),
+    );
+  });
+
+  it('still answers 200 when the replayed OUT_OF_SERVICE finds the unit already out of service', async () => {
+    const { ServiceStatusConflictError } = await import('./repository.js');
+    const setServiceStatus = vi.fn().mockRejectedValue(new ServiceStatusConflictError('already'));
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'OUT_OF_SERVICE' },
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(setServiceStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-apply OUT_OF_SERVICE on replay when the unit already went out of service after the report and was returned to service', async () => {
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'OUT_OF_SERVICE' },
+        oosStartAt: 1798050000,
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(setServiceStatus).not.toHaveBeenCalled();
+  });
+
+  it('re-applies OUT_OF_SERVICE on replay when the only out-of-service record predates the defect', async () => {
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'OUT_OF_SERVICE' },
+        oosStartAt: 1798049999,
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(setServiceStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch service status when a replayed OUT_OF_SERVICE defect is RESOLVED', async () => {
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: {
+          defectId: 'DEF-EXISTING',
+          severity: 'OUT_OF_SERVICE',
+          status: 'RESOLVED',
+        },
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(setServiceStatus).not.toHaveBeenCalled();
+  });
+
+  it('answers 200 and emits DefectOosTransitionFailed when the replayed OUT_OF_SERVICE hits a generic failure', async () => {
+    const setServiceStatus = vi.fn().mockRejectedValue(new Error('boom'));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'OUT_OF_SERVICE' },
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(
+      logSpy.mock.calls.some((call) => String(call[0]).includes('DefectOosTransitionFailed')),
+    ).toBe(true);
+    vi.restoreAllMocks();
+  });
+
+  it('re-applies OUT_OF_SERVICE when the replay is reached through DuplicateDefectReportError', async () => {
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const base = fakeDynamoClient({
+      existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'OUT_OF_SERVICE' },
+    });
+    let lookups = 0;
+    const send = vi.fn(async (command: unknown) => {
+      if (
+        command instanceof QueryCommand &&
+        command.input.ExpressionAttributeValues?.[':prefix'] !== 'OOS#' &&
+        command.input.IndexName !== 'GSI3' &&
+        lookups++ === 0
+      ) {
+        return { Items: [] };
+      }
+      if (command instanceof TransactWriteCommand) {
+        throw new TransactionCanceledException({
+          message: 'cancelled',
+          $metadata: {},
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+        });
+      }
+      return base.send(command as never);
+    });
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: { send } as unknown as DynamoDBDocumentClient,
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'OUT_OF_SERVICE',
+          clientMutationId: 'offline-1',
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(setServiceStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch service status when a replayed defect is not an OPEN OUT_OF_SERVICE', async () => {
+    const setServiceStatus = vi.fn().mockResolvedValue(undefined);
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({
+      client: fakeDynamoClient({
+        existingIdempotency: { defectId: 'DEF-EXISTING', severity: 'MINOR' },
+      }),
+      setServiceStatus,
+      authzClient: fakeAuthzClient('ALLOW'),
+    });
+
+    await handler(
+      buildEvent(
+        JSON.stringify({ description: 'x', severity: 'MINOR', clientMutationId: 'offline-1' }),
+      ),
+    );
+
+    expect(setServiceStatus).not.toHaveBeenCalled();
   });
 
   // The offline outbox replays the POST when the first 10-minute link expired before the photo
@@ -463,6 +714,31 @@ describe('reportDefect handler', () => {
     expect(body.photoS3Key).toBe('NICHOLS/defect/DEF-EXISTING/photo.jpg');
     expect(body.uploadUrl).toContain('NICHOLS/defect/DEF-EXISTING/photo.jpg');
     expect(body.uploadUrl).toContain('X-Amz-Expires=600');
+  });
+
+  it("never re-signs a stored photo key that belongs to another defect's prefix", async () => {
+    const client = fakeDynamoClient({
+      existingIdempotency: {
+        defectId: 'DEF-EXISTING',
+        photoS3Key: 'NICHOLS/defect/DEF-A/brake.jpg',
+      },
+    });
+    const { createReportDefectHandler } = await import('./reportDefectHandler.js');
+    const handler = createReportDefectHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
+
+    const result = await handler(
+      buildEvent(
+        JSON.stringify({
+          description: 'x',
+          severity: 'MINOR',
+          clientMutationId: 'offline-1',
+          photo: { filename: 'a.jpg' },
+        }),
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(JSON.parse((result as { body: string }).body)).not.toHaveProperty('uploadUrl');
   });
 
   it('does not sign anything on a replay without a photo', async () => {

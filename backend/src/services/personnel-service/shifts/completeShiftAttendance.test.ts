@@ -3,7 +3,7 @@ import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildAttendanceKeys } from '../attendance/handler.js';
 import {
   completeShiftAttendance,
-  findEndedShiftsWithClaims,
+  sweepEndedShifts,
   zeroLosapCalculator,
   type LosapPointsCalculator,
 } from './completeShiftAttendance.js';
@@ -48,6 +48,7 @@ describe('completeShiftAttendance', () => {
     );
     expect(attendance).toMatchObject({
       entityType: 'ATTENDANCE_RECORD',
+      deptId: DEPT_ID,
       activityType: 'STANDBY',
       refId: SHIFT_ID,
       occurredAt: END_AT_SECONDS,
@@ -231,6 +232,84 @@ describe('completeShiftAttendance', () => {
     });
   });
 
+  describe('B1-104: LOSAP year is the department-zone year of the shift end', () => {
+    const NEW_YEARS_EVE_EVENING_END_AT = 1_798_770_600_000;
+    const NEW_YEARS_EVE_EVENING_START_AT = NEW_YEARS_EVE_EVENING_END_AT - 3 * 3_600_000;
+    const awardingCalculator: LosapPointsCalculator = {
+      compute: () => Promise.resolve({ points: 2, ruleVersionId: 'RULE-v1' }),
+    };
+
+    function seedShift(extra: readonly Record<string, unknown>[] = []) {
+      return createFakeDocumentClient([
+        buildDutyShift(DEPT_ID, SHIFT_ID, {
+          startAt: NEW_YEARS_EVE_EVENING_START_AT,
+          endAt: NEW_YEARS_EVE_EVENING_END_AT,
+          activityType: 'STANDBY',
+        }),
+        buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+          claimedByMemberId: MEMBER_ID,
+          claimedAt: NEW_YEARS_EVE_EVENING_START_AT,
+        }),
+        ...extra,
+      ]);
+    }
+
+    function losapEntry(doc: ReturnType<typeof createFakeDocumentClient>) {
+      return [...doc.all()].find((item) => item.entityType === 'LOSAP_POINT_ENTRY');
+    }
+
+    it('files a 21:30 EST December 31 shift under the department year, not the UTC year', async () => {
+      const doc = seedShift();
+
+      await completeShiftAttendance(doc, TABLE, DEPT_ID, SHIFT_ID, {
+        now: NEW_YEARS_EVE_EVENING_END_AT + 60_000,
+        losapCalculator: awardingCalculator,
+      });
+
+      expect(losapEntry(doc)).toMatchObject({
+        year: 2026,
+        gsi1sk: 'LOSAP_POINT_ENTRY#2026',
+      });
+      expect(String(losapEntry(doc)?.sk)).toMatch(/^LOSAP#2026#/);
+    });
+
+    it('uses the configured NERIS time zone of the department', async () => {
+      const doc = seedShift([
+        {
+          pk: buildDeptScopedPk(DEPT_ID),
+          sk: 'CONFIG#NERIS',
+          value: { timeZone: 'Pacific/Auckland' },
+        },
+      ]);
+
+      await completeShiftAttendance(doc, TABLE, DEPT_ID, SHIFT_ID, {
+        now: NEW_YEARS_EVE_EVENING_END_AT + 60_000,
+        losapCalculator: awardingCalculator,
+      });
+
+      expect(losapEntry(doc)).toMatchObject({ year: 2027 });
+    });
+
+    it('writes nothing and leaves the shift incomplete when the department time zone cannot be read', async () => {
+      const doc = seedShift();
+      const send = doc.send.bind(doc);
+      vi.spyOn(doc, 'send').mockImplementation(((command: { constructor: { name: string } }) =>
+        command.constructor.name === 'GetCommand'
+          ? Promise.reject(new Error('throttled'))
+          : send(command as never)) as never);
+
+      await expect(
+        completeShiftAttendance(doc, TABLE, DEPT_ID, SHIFT_ID, {
+          now: NEW_YEARS_EVE_EVENING_END_AT + 60_000,
+          losapCalculator: awardingCalculator,
+        }),
+      ).rejects.toThrow();
+
+      expect(losapEntry(doc)).toBeUndefined();
+      expect([...doc.all()].some((item) => item.entityType === 'ATTENDANCE_RECORD')).toBe(false);
+    });
+  });
+
   it('calls the default zero LOSAP calculator and still emits personnel.attendance.recorded outbox', async () => {
     const compute = vi.spyOn(zeroLosapCalculator, 'compute');
     const doc = createFakeDocumentClient([
@@ -410,9 +489,34 @@ describe('completeShiftAttendance', () => {
     const shift = doc.peek(buildDeptScopedPk(DEPT_ID, 'SHIFT', SHIFT_ID), 'METADATA');
     expect(shift?.attendanceCompletedAt).toBeUndefined();
   });
+  it('B1-017: a member holding two positions gets one attendance record and the shift still completes', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, SHIFT_ID, { startAt: START_AT, endAt: END_AT }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+        claimedByMemberId: MEMBER_ID,
+        claimedAt: START_AT,
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'FF', {
+        claimedByMemberId: MEMBER_ID,
+        claimedAt: START_AT,
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'OFFICER', {
+        claimedByMemberId: 'MBR-0034',
+        claimedAt: START_AT,
+      }),
+    ]);
+
+    const outcome = await completeShiftAttendance(doc, TABLE, DEPT_ID, SHIFT_ID, {
+      now: NOW_AFTER_END,
+    });
+
+    expect(outcome).toEqual({ kind: 'COMPLETED', recordsCreated: 2 });
+    const records = [...doc.all()].filter((item) => item.entityType === 'ATTENDANCE_RECORD');
+    expect(records).toHaveLength(2);
+  });
 });
 
-describe('findEndedShiftsWithClaims', () => {
+describe('sweepEndedShifts', () => {
   it('PR #150 review finding #1 regression: queries the real uppercase GSI3 index rather than a locally-shadowed lowercase name', async () => {
     const doc = createFakeDocumentClient([
       buildDutyShift(DEPT_ID, 'SHIFT-REGRESSION', {
@@ -430,7 +534,7 @@ describe('findEndedShiftsWithClaims', () => {
     // (see testDynamoFake.ts) with a ResourceNotFoundException, exactly as real DynamoDB would
     // for a query against a nonexistent index — so this only resolves when the sweep queries the
     // actual physical 'GSI3' index rather than a mismatched local constant.
-    await expect(findEndedShiftsWithClaims(doc, TABLE, DEPT_ID, NOW_AFTER_END)).resolves.toEqual([
+    await expect(sweepEndedShifts(doc, TABLE, DEPT_ID, NOW_AFTER_END)).resolves.toEqual([
       'SHIFT-REGRESSION',
     ]);
   });
@@ -470,8 +574,40 @@ describe('findEndedShiftsWithClaims', () => {
       }),
     ]);
 
-    const found = await findEndedShiftsWithClaims(doc, TABLE, DEPT_ID, NOW_AFTER_END);
+    const found = await sweepEndedShifts(doc, TABLE, DEPT_ID, NOW_AFTER_END);
 
     expect(found).toEqual(['SHIFT-ENDED']);
+  });
+  it('B1-075: marks an unclaimed shift that ended past the grace window complete so later sweeps skip it', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, 'SHIFT-UNCLAIMED', {
+        startAt: START_AT,
+        endAt: END_AT,
+        status: 'OPEN',
+      }),
+      buildShiftPosition(DEPT_ID, 'SHIFT-UNCLAIMED', 'DRIVER'),
+    ]);
+    const afterGrace = END_AT + 2 * 86_400_000;
+
+    await expect(sweepEndedShifts(doc, TABLE, DEPT_ID, afterGrace)).resolves.toEqual([]);
+
+    const shift = doc.peek(buildDeptScopedPk(DEPT_ID, 'SHIFT', 'SHIFT-UNCLAIMED'), 'METADATA');
+    expect(shift?.attendanceCompletedAt).toBe(afterGrace);
+  });
+
+  it('B1-075: leaves a just-ended unclaimed shift unmarked inside the grace window', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, 'SHIFT-UNCLAIMED', {
+        startAt: START_AT,
+        endAt: END_AT,
+        status: 'OPEN',
+      }),
+      buildShiftPosition(DEPT_ID, 'SHIFT-UNCLAIMED', 'DRIVER'),
+    ]);
+
+    await sweepEndedShifts(doc, TABLE, DEPT_ID, NOW_AFTER_END);
+
+    const shift = doc.peek(buildDeptScopedPk(DEPT_ID, 'SHIFT', 'SHIFT-UNCLAIMED'), 'METADATA');
+    expect(shift?.attendanceCompletedAt).toBeUndefined();
   });
 });

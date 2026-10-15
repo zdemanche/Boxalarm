@@ -137,7 +137,7 @@ export const mobileUserPoolClient = new BoxalarmUserPoolClient("identity-client-
   userPoolId: identity.userPool.id,
   clientName: `boxalarm-${env}-mobile`,
   standardWriteAttributes: SELF_SERVICE_WRITE_ATTRIBUTES,
-  callbackUrls: ["boxalarm://auth"],
+  callbackUrls: ["boxalarm://auth", "boxalarm://sign-in"],
   logoutUrls: ["boxalarm://auth"],
   ...SESSION_TOKEN_POLICY,
 });
@@ -146,8 +146,13 @@ export const webUserPoolClient = new BoxalarmUserPoolClient("identity-client-web
   userPoolId: identity.userPool.id,
   clientName: `boxalarm-${env}-web`,
   standardWriteAttributes: SELF_SERVICE_WRITE_ATTRIBUTES,
-  // silent-renew.html is required for the iframe fallback path (#6 comment).
-  callbackUrls: [`${webOrigin}/auth/callback`, `${webOrigin}/silent-renew.html`],
+  // silent-renew.html is required for the iframe fallback path (#6 comment); /login is the
+  // forgot-password return URI.
+  callbackUrls: [
+    `${webOrigin}/auth/callback`,
+    `${webOrigin}/silent-renew.html`,
+    `${webOrigin}/login`,
+  ],
   logoutUrls: [webOrigin],
   ...SESSION_TOKEN_POLICY,
 });
@@ -588,6 +593,9 @@ export const auditRoute = new AuditRoute("audit-route", {
   env,
   platformTableName: platformTable.tableName,
   platformTableArn: platformTable.tableArn,
+  incidentTableName: incidentTable.tableName,
+  incidentTableArn: incidentTable.tableArn,
+  incidentCmkArn: incidentTable.cmkArn,
   policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
   logGroup: platformLogGroup,
@@ -786,6 +794,7 @@ export const routesCore = new RoutesCore("routes-core", {
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
+  policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
   ...(alertingHomeLocality !== undefined ? { homeLocality: alertingHomeLocality } : {}),
@@ -799,6 +808,7 @@ export const routesOps = new RoutesOps("routes-ops", {
   alertingCmkArn: alertingTable.cmkArn,
   alertingTableName: alertingTable.tableName,
   logGroup: alertingLogGroup,
+  policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
   permissionsBoundaryArn: alertingBoundaryArn,
 });
@@ -836,6 +846,7 @@ export const pushTokens = new PushTokens("push-tokens", {
   alertingTableName: alertingTable.tableName,
   personnelLogGroup,
   alertingLogGroup,
+  policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
   busName: platformBus.busName,
   alertingPermissionsBoundaryArn: alertingBoundaryArn,
@@ -849,6 +860,7 @@ export const ridingBoard = new RidingBoard("riding-board", {
   platformTableArn: platformTable.tableArn,
   platformTableName: platformTable.tableName,
   logGroup: apparatusLogGroup,
+  policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
   platformBus,
   alertingTableArn: alertingTable.tableArn,
@@ -863,6 +875,7 @@ export const ridingBoard = new RidingBoard("riding-board", {
 export const alertingAlarms = new AlertingAlarms("alerting-alarms", {
   env,
   channelQueues: messagingAlerting.channelQueues,
+  alertingTopic: messagingAlerting.topic,
   fanOutFunctionName: fanOut.lambda.function.name,
   fanOutOnFailureQueue: fanOut.onFailureQueue,
   escalationFunctionName: escalation.lambda.function.name,
@@ -884,6 +897,7 @@ export const routesLadderControls = new RoutesLadderControls("routes-ladder-cont
   alertingTopicArn: messagingAlerting.topic.arn,
   escalation,
   logGroup: alertingLogGroup,
+  policyStoreArn: policyStore.policyStoreArn,
   policyStoreId: policyStore.policyStoreId,
   pageTopicArn: alertingAlarms.pageTopic.arn,
   permissionsBoundaryArn: alertingBoundaryArn,
@@ -958,6 +972,7 @@ export const cadSources = new CadSources("cad-sources", {
   httpApi,
   webhookUrl: cadIngress.webhookUrl,
   webhookUsagePlanId: cadIngress.webhookUsagePlan.id,
+  pageTopicArn: alertingPageTopic.topicArn,
   ...(cadIngressEmailDomain !== undefined ? { emailDomain: cadIngressEmailDomain } : {}),
 });
 
@@ -971,6 +986,11 @@ export const eligibilityStaleness = new EligibilityStaleness("eligibility-stalen
   pageTopicArn: alertingAlarms.pageTopic.arn,
   logGroup: alertingLogGroup,
   permissionsBoundaryArn: alertingBoundaryArn,
+  eligibilityFeedQueueNames: {
+    "member-updated": pushTokens.memberUpdatedQueue.name,
+    "availability-snapshot": personnelAvailability.availabilityChangedQueueConsumer.queue.name,
+    "eligibility-changed": personnelQuals.eligibilityChangedQueueConsumer.queue.name,
+  },
 });
 
 // E1-S10-INFRA #230/#35: continuous production canary + on-call escalation alarms.
@@ -1077,4 +1097,8 @@ httpApi.sealRouteSettings({ requireAll: true });
 export const httpApiAlarms = httpApi.addAlarms(
   chiefNotificationTopic.topicArn,
   alertingPageTopic.topicArn,
+);
+export const identityAlarms = identity.addAlarms(
+  alertingPageTopic.topicArn,
+  chiefNotificationTopic.topicArn,
 );

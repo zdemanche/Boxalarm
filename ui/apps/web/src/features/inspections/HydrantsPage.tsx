@@ -16,6 +16,7 @@ import { ApiError } from '../../lib/apiClient';
 import { daysUntil, dueLabel, formatCalendarDate, toCalendarDate } from '../../lib/dates';
 import { createHydrant, listHydrants, updateHydrant } from './api';
 import type { Hydrant } from './types';
+import { hasInspectionsWrite } from './writeRoles';
 import styles from './Inspections.module.css';
 
 /** Inside this many days a flow test reads as due soon. */
@@ -75,7 +76,7 @@ function FlowTestDue({ isoDate }: { isoDate: string }) {
 export function HydrantsPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = hasInspectionsWrite(auth.roles);
   const [form, setForm] = useState<HydrantForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);

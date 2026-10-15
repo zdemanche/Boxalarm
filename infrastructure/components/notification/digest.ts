@@ -118,6 +118,7 @@ export class Digest extends pulumi.ComponentResource {
         lambdaRole: this.certExpiryConsumerLambda.role,
         alarmTopicArn: args.opsAlarmTopicArn,
         maxReceiveCount: 5,
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );
@@ -163,7 +164,12 @@ export class Digest extends pulumi.ComponentResource {
               {
                 Sid: "NotificationDigestTableAccess" as const,
                 Effect: "Allow" as const,
-                Action: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+                Action: [
+                  "dynamodb:GetItem",
+                  "dynamodb:PutItem",
+                  "dynamodb:DeleteItem",
+                  "dynamodb:ConditionCheckItem",
+                ],
                 Resource: [tableArn],
               },
               auditMutationDenyStatement(tableArn),

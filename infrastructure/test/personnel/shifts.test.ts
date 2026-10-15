@@ -116,4 +116,16 @@ describe("Shifts — shift-completion schedule (#213)", () => {
     expect(policyJson).toContain("dynamodb:UpdateItem");
     expect(policyJson).not.toContain("table/alerting");
   });
+
+  it("grants the completion role GetItem on the platform table only, for the LOSAP rules read", async () => {
+    const shifts = await build();
+    const policy = JSON.parse(await resolve(shifts.completionLambda.rolePolicy.policy));
+    const statement = policy.Statement.find(
+      (entry: { Sid?: string }) => entry.Sid === "ShiftCompletionLosapRulesRead",
+    );
+    expect(statement.Action).toEqual(["dynamodb:GetItem"]);
+    expect(statement.Resource).toHaveLength(1);
+    expect(statement.Resource[0]).not.toContain("/index/");
+    expect(statement.Resource[0]).not.toContain("alerting");
+  });
 });

@@ -2,6 +2,7 @@ import { targetSize, typeScale } from '@boxalarm/design-tokens';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { NavigatorScreenParams } from '@react-navigation/native';
 import { Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../components/ui/theme';
 import { AlertsStack, type AlertsStackParamList } from './AlertsStack';
 import { ChecksStack } from './ChecksStack';
@@ -21,6 +22,8 @@ export type AppTabsParamList = {
   Me: NavigatorScreenParams<MeStackParamList> | undefined;
 };
 
+const TAB_BAR_PADDING_TOP = 8;
+
 const Tab = createBottomTabNavigator<AppTabsParamList>();
 
 // Text glyphs, not an icon library — see components/ui/README.md (no react-native-svg link
@@ -34,6 +37,7 @@ const TAB_GLYPH: Record<keyof AppTabsParamList, string> = {
 
 export function AppTabs() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -46,10 +50,10 @@ export function AppTabs() {
         tabBarStyle: {
           backgroundColor: theme.shell.bg,
           borderTopColor: theme.shell.border,
-          // Glove-sized targets (N3.5): taller bar than the platform default so each tab's
-          // hit area clears the field floor with room to spare.
-          height: targetSize.field + 24,
-          paddingTop: 8,
+          // Glove-sized targets (N3.5): the tab row itself clears the field floor, with the
+          // home-indicator inset (which the bar pads below) added on top of it.
+          height: targetSize.field + TAB_BAR_PADDING_TOP + insets.bottom,
+          paddingTop: TAB_BAR_PADDING_TOP,
         },
         tabBarLabelStyle: { fontSize: typeScale.caption.size, fontWeight: '600' },
         tabBarIcon: ({ color }) => (

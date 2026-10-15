@@ -1,4 +1,4 @@
-import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { assertNoDelimiter, buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
@@ -65,12 +65,18 @@ function toChecklistTemplate(item: Record<string, unknown>): ChecklistTemplate |
   };
 }
 
-export async function resolveApparatusIdByUnitId(
+export interface ResolvedApparatus {
+  readonly apparatusId: string;
+  /** The CHECKLIST_TEMPLATE this unit's sheet is, when one is assigned; absent means the department default. */
+  readonly checklistTemplateId?: string;
+}
+
+export async function resolveApparatusByUnitId(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
   unitId: string,
-): Promise<string | undefined> {
+): Promise<ResolvedApparatus | undefined> {
   const result = await client.send(
     new QueryCommand({
       TableName: tableName,
@@ -83,38 +89,23 @@ export async function resolveApparatusIdByUnitId(
       Limit: 1,
     }),
   );
-  const partitionKey = readString(result.Items?.[0], 'pk');
-  return partitionKey ? apparatusIdFromPartitionKey(partitionKey) : undefined;
+  const item = result.Items?.[0];
+  const partitionKey = readString(item, 'pk');
+  const apparatusId = partitionKey ? apparatusIdFromPartitionKey(partitionKey) : undefined;
+  if (!apparatusId) {
+    return undefined;
+  }
+  const checklistTemplateId = readString(item, 'checklistTemplateId');
+  return checklistTemplateId ? { apparatusId, checklistTemplateId } : { apparatusId };
 }
 
-export async function resolveChecklistTemplateForUnit(
+export async function resolveApparatusIdByUnitId(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  apparatusId: string,
-): Promise<ChecklistTemplate | undefined> {
-  let exclusiveStartKey: Record<string, unknown> | undefined;
-  do {
-    const result = await client.send(
-      new ScanCommand({
-        TableName: tableName,
-        FilterExpression:
-          'begins_with(pk, :pkPrefix) AND sk = :sk AND contains(applicableApparatusIds, :apparatusId)',
-        ExpressionAttributeValues: {
-          ':pkPrefix': buildDeptScopedPk(deptId, 'CHECKLIST_TEMPLATE'),
-          ':sk': 'METADATA',
-          ':apparatusId': apparatusId,
-        },
-        ExclusiveStartKey: exclusiveStartKey,
-      }),
-    );
-    const item = result.Items?.[0];
-    if (item) {
-      return toChecklistTemplate(item);
-    }
-    exclusiveStartKey = result.LastEvaluatedKey;
-  } while (exclusiveStartKey);
-  return undefined;
+  unitId: string,
+): Promise<string | undefined> {
+  return (await resolveApparatusByUnitId(client, tableName, deptId, unitId))?.apparatusId;
 }
 
 /** templateId prefix of the department-wide sheet: `department-default-v{version}`. */

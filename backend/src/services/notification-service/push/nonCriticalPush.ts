@@ -39,7 +39,8 @@ export interface NonCriticalPush {
   readonly notificationCategory: string;
   /**
    * Stable per logical notification per member: a redelivered SQS record carries the same
-   * apns-id and collapse id, so the device shows one notification, re-attempted.
+   * apns-id, collapse id and data notificationId, so the device shows one notification,
+   * re-attempted.
    */
   readonly idempotencyKey: string;
 }
@@ -84,14 +85,16 @@ function boundedBody(push: NonCriticalPush): string {
 
 /**
  * Custom keys the app reads (pushChannel.ts categoryFromPushData, pushNotificationDisplay.ts):
- * `category` routes to the non-critical channel, `path` is the in-app destination of a tap.
- * FCM data values must be strings.
+ * `category` routes to the non-critical channel, `path` is the in-app destination of a tap,
+ * `notificationId` is stable per logical notification so a redelivered record replaces the
+ * Android notification it already posted. FCM data values must be strings.
  */
 export function nonCriticalDataFields(push: NonCriticalPush): Record<string, string> {
   return {
     category: NON_CRITICAL_PUSH_CATEGORY,
     notificationCategory: push.notificationCategory,
     path: NOTIFICATION_DEEP_LINK_PATH,
+    notificationId: apnsIdFor(push.idempotencyKey),
     title: boundedTitle(push),
     body: boundedBody(push),
   };

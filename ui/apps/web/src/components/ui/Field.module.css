@@ -48,7 +48,7 @@ textarea.control {
 
 .help {
   font-size: 12px;
-  color: var(--bx-fg-faint);
+  color: var(--bx-fg-muted);
 }
 
 .error {

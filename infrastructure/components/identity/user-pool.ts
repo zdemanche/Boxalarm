@@ -4,6 +4,14 @@ import * as aws from "@pulumi/aws";
 import { RETENTION_DAYS_BY_ENV } from "../observability/service-log-group";
 import { ACTIVE_TRACING_CONFIG } from "../observability/xray-sampling";
 
+const PRE_TOKEN_METRIC_NAMESPACE = "Boxalarm/identity";
+
+export interface PreTokenAlarms {
+  readonly throttles: aws.cloudwatch.MetricAlarm;
+  readonly errors: aws.cloudwatch.MetricAlarm;
+  readonly statusLookupFailed: aws.cloudwatch.MetricAlarm;
+}
+
 export interface BoxalarmUserPoolArgs {
   env: string;
   /**
@@ -29,6 +37,9 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
   public readonly invokePermission: aws.lambda.Permission;
   public readonly smsRole: aws.iam.Role;
 
+  private readonly env: string;
+  private readonly name: string;
+
   constructor(name: string, args: BoxalarmUserPoolArgs, opts?: pulumi.ComponentResourceOptions) {
     if (typeof args.env !== "string" || args.env.length === 0) {
       throw new Error(`BoxalarmUserPool: env is required (received ${JSON.stringify(args.env)})`);
@@ -40,6 +51,8 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
 
     super("boxalarm:identity:UserPool", name, {}, opts);
     const { env } = args;
+    this.env = env;
+    this.name = name;
 
     this.functionLogGroup = new aws.cloudwatch.LogGroup(
       `${name}-fn-log-group`,
@@ -287,5 +300,137 @@ export class BoxalarmUserPool extends pulumi.ComponentResource {
       domainName: this.domainName,
       preTokenGenerationFunction: this.preTokenGenerationFunction,
     });
+  }
+
+  /**
+   * Alarms on the pre-token trigger, which sits under every sign-in and every silent refresh:
+   * a failing or throttled trigger signs every responder out (an alerting failure), and a
+   * failing member-status lookup fails open, leaving the LOA/RETIRED backstop off. All page
+   * alerting-page; the lookup alarm also tells the ops topic. Called from index.ts once the
+   * topics exist.
+   */
+  addAlarms(
+    alertingPageTopicArn: pulumi.Input<string>,
+    opsTopicArn: pulumi.Input<string>,
+  ): PreTokenAlarms {
+    const { env } = this;
+    const FunctionName = this.preTokenGenerationFunction.name;
+    const logGroupName = this.functionLogGroup.name;
+
+    new aws.cloudwatch.LogMetricFilter(
+      `${this.name}-status-lookup-failed-filter`,
+      {
+        name: `boxalarm-${env}-identity-pre-token-status-lookup-failed`,
+        logGroupName,
+        pattern: `"preTokenGeneration.statusLookupFailed"`,
+        metricTransformation: {
+          name: "StatusLookupFailed",
+          namespace: PRE_TOKEN_METRIC_NAMESPACE,
+          value: "1",
+          defaultValue: "0",
+        },
+      },
+      { parent: this },
+    );
+    new aws.cloudwatch.LogMetricFilter(
+      `${this.name}-inactive-member-refused-filter`,
+      {
+        name: `boxalarm-${env}-identity-pre-token-inactive-member-refused`,
+        logGroupName,
+        pattern: `"preTokenGeneration.inactiveMemberRefused"`,
+        metricTransformation: {
+          name: "InactiveMemberRefused",
+          namespace: PRE_TOKEN_METRIC_NAMESPACE,
+          value: "1",
+          defaultValue: "0",
+        },
+      },
+      { parent: this },
+    );
+
+    const throttles = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-pre-token-throttles-alarm`,
+      {
+        name: `boxalarm-${env}-identity-pre-token-throttles`,
+        alarmDescription:
+          "The pre-token trigger is being throttled: sign-ins and silent token refreshes fail.",
+        namespace: "AWS/Lambda",
+        metricName: "Throttles",
+        dimensions: { FunctionName },
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [alertingPageTopicArn],
+      },
+      { parent: this },
+    );
+    // A refused LOA/RETIRED member throws on purpose and counts as an Errors datapoint, so
+    // those are subtracted: what is left is the trigger itself failing.
+    const errors = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-pre-token-errors-alarm`,
+      {
+        name: `boxalarm-${env}-identity-pre-token-errors`,
+        alarmDescription:
+          "The pre-token trigger is failing (beyond refusing inactive members): sign-ins and silent token refreshes fail.",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0,
+        evaluationPeriods: 1,
+        treatMissingData: "notBreaching",
+        metricQueries: [
+          {
+            id: "errors",
+            returnData: false,
+            metric: {
+              namespace: "AWS/Lambda",
+              metricName: "Errors",
+              dimensions: { FunctionName },
+              stat: "Sum",
+              period: 60,
+            },
+          },
+          {
+            id: "refused",
+            returnData: false,
+            metric: {
+              namespace: PRE_TOKEN_METRIC_NAMESPACE,
+              metricName: "InactiveMemberRefused",
+              stat: "Sum",
+              period: 60,
+            },
+          },
+          {
+            id: "unexpected",
+            label: "Trigger errors other than inactive-member refusals",
+            expression: "errors - FILL(refused, 0)",
+            returnData: true,
+          },
+        ],
+        alarmActions: [alertingPageTopicArn],
+      },
+      { parent: this },
+    );
+    const statusLookupFailed = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-pre-token-status-lookup-failed-alarm`,
+      {
+        name: `boxalarm-${env}-identity-pre-token-status-lookup-failed`,
+        alarmDescription:
+          "The pre-token trigger could not read a member's status and let the token through (fail open): " +
+          "while this lasts, an LOA/RETIRED member whose login disable did not land can keep refreshing tokens.",
+        namespace: PRE_TOKEN_METRIC_NAMESPACE,
+        metricName: "StatusLookupFailed",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [alertingPageTopicArn, opsTopicArn],
+      },
+      { parent: this },
+    );
+    return { throttles, errors, statusLookupFailed };
   }
 }

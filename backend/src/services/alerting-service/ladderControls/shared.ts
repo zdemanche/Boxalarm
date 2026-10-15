@@ -140,6 +140,13 @@ export function readLadderState(item: Record<string, unknown>): LadderState {
   };
 }
 
+export const TEST_DISPATCH_DETAIL =
+  'Self-test and canary dispatches have no tone ladder. Nothing was sent.';
+
+export function isTestDispatch(item: Record<string, unknown>): boolean {
+  return item.isTest === true || typeof item.targetMemberId === 'string';
+}
+
 /** Strongly consistent: every control decides on the ladder's committed state. */
 export async function getDispatchMetadata(
   ddb: DynamoDBDocumentClient,

@@ -19,6 +19,25 @@ beforeEach(() => {
 });
 
 describe(
+  "route Lambdas scope Verified Permissions to the policy store",
+  { timeout: 30_000 },
+  () => {
+    it("never grants IsAuthorizedWithToken on *", async () => {
+      await buildSchedulingChain();
+      const statements = statementsForRole(INGRESS);
+      expect(isGranted(statements, "verifiedpermissions:IsAuthorizedWithToken", "*")).toBe(false);
+      expect(
+        isGranted(
+          statements,
+          "verifiedpermissions:IsAuthorizedWithToken",
+          "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
+        ),
+      ).toBe(true);
+    });
+  },
+);
+
+describe(
   "RoutesCore dispatch-ingress IAM: the DISPATCH_ALERT transaction only (design review C1)",
   { timeout: 30_000 },
   () => {

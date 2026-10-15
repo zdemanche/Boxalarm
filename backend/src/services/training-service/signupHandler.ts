@@ -23,6 +23,7 @@ import {
 import {
   createSignupAttendance,
   DuplicateSignupError,
+  findUnknownMemberIds,
   getTrainingEvent,
   recordAttendanceHours,
   type AttendeeHoursInput,
@@ -52,11 +53,17 @@ function parseBody(event: GuardEvent): SignupBody | undefined {
   return typeof parsed === 'object' && parsed !== null ? parsed : undefined;
 }
 
+const MAX_ATTENDEES = 100;
+
 function parseAttendees(raw: unknown): readonly AttendeeHoursInput[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) {
     return undefined;
   }
+  if (raw.length > MAX_ATTENDEES) {
+    return undefined;
+  }
   const attendees: AttendeeHoursInput[] = [];
+  const seen = new Set<string>();
   for (const entry of raw as readonly unknown[]) {
     if (typeof entry !== 'object' || entry === null) {
       return undefined;
@@ -71,6 +78,10 @@ function parseAttendees(raw: unknown): readonly AttendeeHoursInput[] | undefined
     ) {
       return undefined;
     }
+    if (seen.has(memberId)) {
+      return undefined;
+    }
+    seen.add(memberId);
     attendees.push({ memberId, hours });
   }
   return attendees;
@@ -126,7 +137,7 @@ async function recordAttendance(
   if (!attendees) {
     return badRequestProblem(
       traceId,
-      'attendees must be a non-empty array of { memberId: string, hours: a non-negative number }.',
+      'attendees must be a non-empty array of at most 100 entries with distinct memberIds, each { memberId: string, hours: a non-negative number }.',
     );
   }
 
@@ -138,6 +149,19 @@ async function recordAttendance(
   const config = readTrainingConfig(process.env);
   const client = createDocumentClient(process.env);
   try {
+    const unknownMemberIds = await findUnknownMemberIds(
+      client,
+      config,
+      deptId,
+      attendees.map((attendee) => attendee.memberId),
+    );
+    if (unknownMemberIds.length > 0) {
+      emitTrainingMetric('TrainingAttendanceRecordFailed', 'UnknownMember');
+      return badRequestProblem(
+        traceId,
+        `Unknown memberIds for this department: ${unknownMemberIds.join(', ')}.`,
+      );
+    }
     await recordAttendanceHours(client, config, deptId, trainingEvent, attendees);
   } catch (error) {
     logError('training.attendance.record_failed', error, {

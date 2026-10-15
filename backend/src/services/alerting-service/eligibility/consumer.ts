@@ -1,7 +1,7 @@
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitEmf, emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent, SQSRecord } from 'aws-lambda';
 import { createDynamoClient, readAlertingConfig } from './dynamoClient.js';
 import type { AvailabilityState } from './selector.js';
 
@@ -78,95 +78,111 @@ function logError(
   );
 }
 
-export const handler = async (event: SQSEvent): Promise<void> => {
-  const { tableName } = readAlertingConfig(process.env);
-  const ddb = createDynamoClient(process.env);
+async function applyRecord(
+  ddb: ReturnType<typeof createDynamoClient>,
+  tableName: string,
+  record: SQSRecord,
+): Promise<void> {
+  let envelope: AvailabilityChangedEnvelope;
+  try {
+    envelope = parseEnvelope(record.body);
+  } catch (error) {
+    logError('eligibility.malformed_event', error, record.messageId);
+    throw error;
+  }
 
-  for (const record of event.Records) {
-    let envelope: AvailabilityChangedEnvelope;
-    try {
-      envelope = parseEnvelope(record.body);
-    } catch (error) {
-      logError('eligibility.malformed_event', error, record.messageId);
-      throw error;
-    }
+  const { eventId, eventTime, memberId, availabilityState } = envelope;
+  const deptId = toVerifiedDeptId({ deptId: envelope.deptId });
 
-    const { eventId, eventTime, memberId, availabilityState } = envelope;
-    const deptId = toVerifiedDeptId({ deptId: envelope.deptId });
-
-    try {
-      await ddb.send(
-        new TransactWriteCommand({
-          TransactItems: [
-            {
-              Put: {
-                TableName: tableName,
-                Item: {
-                  pk: buildDeptScopedPk(deptId, 'DEDUP', CONSUMER_NAME, memberId),
-                  sk: `EVT#${eventId}`,
-                  entityType: 'EVENT_DEDUP',
-                  ttl: Math.floor(Date.now() / 1000) + DEDUP_TTL_SECONDS,
-                },
-                ConditionExpression: 'attribute_not_exists(sk)',
+  try {
+    await ddb.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: tableName,
+              Item: {
+                pk: buildDeptScopedPk(deptId, 'DEDUP', CONSUMER_NAME, memberId),
+                sk: `EVT#${eventId}`,
+                entityType: 'EVENT_DEDUP',
+                ttl: Math.floor(Date.now() / 1000) + DEDUP_TTL_SECONDS,
               },
+              ConditionExpression: 'attribute_not_exists(sk)',
             },
-            {
-              Update: {
-                TableName: tableName,
-                Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${memberId}` },
-                // Availability has its own clock (availabilityUpdatedAt), shared only with the
-                // member-updated consumer's availabilityState writes; snapshotUpdatedAt is just
-                // "last applied write" and guards nothing, so this can never make a retirement
-                // or LOA look stale (review CRITICAL-1).
-                UpdateExpression:
-                  'SET availabilityState = :state, availabilityUpdatedAt = :now, snapshotUpdatedAt = :now',
-                ConditionExpression:
-                  'attribute_exists(pk) AND (attribute_not_exists(availabilityUpdatedAt) OR :now > availabilityUpdatedAt)',
-                ExpressionAttributeValues: { ':state': availabilityState, ':now': eventTime },
-              },
+          },
+          {
+            Update: {
+              TableName: tableName,
+              Key: { pk: buildDeptScopedPk(deptId, 'ELIGIBILITY'), sk: `MEMBER#${memberId}` },
+              // Availability has its own clock (availabilityUpdatedAt), shared only with the
+              // member-updated consumer's availabilityState writes; snapshotUpdatedAt is just
+              // "last applied write" and guards nothing, so this can never make a retirement
+              // or LOA look stale (review CRITICAL-1).
+              UpdateExpression:
+                'SET availabilityState = :state, availabilityUpdatedAt = :now, snapshotUpdatedAt = :now',
+              ConditionExpression:
+                'attribute_exists(pk) AND (attribute_not_exists(availabilityUpdatedAt) OR :now > availabilityUpdatedAt)',
+              ExpressionAttributeValues: { ':state': availabilityState, ':now': eventTime },
             },
-          ],
-        }),
-      );
-    } catch (error) {
-      const cancellation = asTransactionCancellation(error);
-      if (cancellation) {
-        const reasons = cancellation.CancellationReasons ?? [];
-        if (reasons[0]?.Code === 'ConditionalCheckFailed') {
-          emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped');
-          continue;
-        }
-        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
-          logError('eligibility.snapshot_update_skipped', error, eventId, {
-            cancellationReasons: reasons.map((r) => r.Code),
-          });
-          emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdateSkipped');
-          continue;
-        }
-        logError('eligibility.snapshot_update_failed', error, eventId, {
+          },
+        ],
+      }),
+    );
+  } catch (error) {
+    const cancellation = asTransactionCancellation(error);
+    if (cancellation) {
+      const reasons = cancellation.CancellationReasons ?? [];
+      if (reasons[0]?.Code === 'ConditionalCheckFailed') {
+        emitOutcomeMetric(METRIC_NAMESPACE, 'DuplicateSkipped');
+        return;
+      }
+      if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+        logError('eligibility.snapshot_update_skipped', error, eventId, {
           cancellationReasons: reasons.map((r) => r.Code),
         });
-        emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdateFailed');
-        throw error;
+        emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdateSkipped');
+        return;
       }
-      logError('eligibility.snapshot_update_failed', error, eventId);
+      logError('eligibility.snapshot_update_failed', error, eventId, {
+        cancellationReasons: reasons.map((r) => r.Code),
+      });
       emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdateFailed');
       throw error;
     }
-
-    emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdated');
-
-    const latencyMs = Date.now() - eventTime;
-    if (latencyMs < 0) {
-      logError(
-        'eligibility.snapshot_propagation_future_event_time',
-        new Error('clock skew'),
-        eventId,
-        {
-          latencyMs,
-        },
-      );
-    }
-    emitEmf(METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [[]]);
+    logError('eligibility.snapshot_update_failed', error, eventId);
+    emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdateFailed');
+    throw error;
   }
+
+  emitOutcomeMetric(METRIC_NAMESPACE, 'SnapshotUpdated');
+
+  const latencyMs = Date.now() - eventTime;
+  if (latencyMs < 0) {
+    logError(
+      'eligibility.snapshot_propagation_future_event_time',
+      new Error('clock skew'),
+      eventId,
+      {
+        latencyMs,
+      },
+    );
+  }
+  emitEmf(METRIC_NAMESPACE, 'SnapshotPropagationLatencyMs', Math.max(latencyMs, 0), [[]]);
+}
+
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
+  const { tableName } = readAlertingConfig(process.env);
+  const ddb = createDynamoClient(process.env);
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
+
+  for (const record of event.Records) {
+    try {
+      await applyRecord(ddb, tableName, record);
+    } catch (error) {
+      logError('eligibility.record_failed', error, record.messageId);
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+    }
+  }
+
+  return { batchItemFailures };
 };

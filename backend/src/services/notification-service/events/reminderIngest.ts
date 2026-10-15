@@ -1,7 +1,7 @@
 import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent, SQSRecord } from 'aws-lambda';
 import { createDynamoClient, readNotificationConfig } from '../dynamoClient.js';
 import { categoryConfig, deliveryCategory, type ReminderItem } from '../reminders/categories.js';
 import {
@@ -165,6 +165,27 @@ export async function recordReminder(
   return 'Recorded';
 }
 
+/**
+ * Runs `handleRecord` over every record and reports only the failing messageIds, so one bad
+ * record neither stops the records behind it nor redelivers the ones already handled. The
+ * queue's event source mapping must opt into ReportBatchItemFailures, or the failures are lost.
+ */
+export async function handleRecords(
+  event: SQSEvent,
+  handleRecord: (record: SQSRecord) => Promise<void>,
+): Promise<SQSBatchResponse> {
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
+  for (const record of event.Records) {
+    try {
+      await handleRecord(record);
+    } catch (error) {
+      logError('notification.reminder.record_failed', error, record.messageId);
+      batchItemFailures.push({ itemIdentifier: record.messageId });
+    }
+  }
+  return { batchItemFailures };
+}
+
 export interface ReminderConsumerSpec {
   /** The event name used in error messages, e.g. `apparatus.test.due`. */
   readonly label: string;
@@ -178,18 +199,18 @@ export interface ReminderConsumerSpec {
 }
 
 /**
- * An SQS handler that records each record's reminder for the daily digest. It throws on the
- * first malformed or failed record, so SQS redelivers the batch (every write is idempotent)
- * and a poison message ends in the queue's DLQ rather than being dropped.
+ * An SQS handler that records each record's reminder for the daily digest. A malformed or
+ * failed record is reported in batchItemFailures, so SQS redelivers only that record (every
+ * write is idempotent) and a poison message ends in the queue's DLQ rather than being dropped.
  */
 export function createReminderConsumer(
   spec: ReminderConsumerSpec,
-): (event: SQSEvent) => Promise<void> {
+): (event: SQSEvent) => Promise<SQSBatchResponse> {
   return async (event) => {
     const { tableName } = readNotificationConfig(process.env);
     const ddb = createDynamoClient(process.env);
 
-    for (const record of event.Records) {
+    return handleRecords(event, async (record) => {
       let envelope: EventEnvelope;
       let reminder: ReminderRecord;
       try {
@@ -227,6 +248,6 @@ export function createReminderConsumer(
         emitOutcomeMetric(METRIC_NAMESPACE, `${spec.metricPrefix}PendingFailed`);
         throw error;
       }
-    }
+    });
   };
 }

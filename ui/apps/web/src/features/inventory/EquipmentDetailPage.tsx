@@ -4,10 +4,12 @@ import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageInventory } from '../../auth/roles';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { ApiError } from '../../lib/apiClient';
 import { AuditHistoryLink } from '../../components/AuditHistoryLink';
 import {
   Button,
   Card,
+  ConfirmDialog,
   PageHeader,
   Select,
   Skeleton,
@@ -41,6 +43,7 @@ export function EquipmentDetailPage() {
   const [assignedToType, setAssignedToType] = useState<AssignedToType>('MEMBER');
   const [assignedToId, setAssignedToId] = useState('');
   const [location, setLocation] = useState('');
+  const [confirmingRetire, setConfirmingRetire] = useState(false);
 
   const assignmentLabel = useAssignmentLabel();
 
@@ -98,6 +101,12 @@ export function EquipmentDetailPage() {
     );
   }
 
+  const resetSaveErrors = () => {
+    assignMutation.reset();
+    locationMutation.reset();
+    lifecycleMutation.reset();
+  };
+
   const asset = assetQuery.data;
   const retired = asset?.lifecycleStatus === 'RETIRED';
   const saveError = assignMutation.error ?? locationMutation.error ?? lifecycleMutation.error;
@@ -135,9 +144,18 @@ export function EquipmentDetailPage() {
       ) : (
         <div className={styles.stack}>
           {saveError ? (
-            <ApiForbiddenGate error={saveError} embedded>
-              <p role="alert">Unable to save changes</p>
-            </ApiForbiddenGate>
+            saveError instanceof ApiError && saveError.problem.status === 403 ? (
+              <ApiForbiddenGate error={saveError} embedded>
+                <></>
+              </ApiForbiddenGate>
+            ) : (
+              <p role="alert">
+                Unable to save changes:{' '}
+                {saveError instanceof ApiError
+                  ? (saveError.problem.detail ?? saveError.problem.title)
+                  : saveError.message}
+              </p>
+            )
           ) : null}
 
           <div className={canWrite ? styles.layout : styles.stack}>
@@ -157,6 +175,7 @@ export function EquipmentDetailPage() {
                     aria-label="Assign asset"
                     onSubmit={(event: FormEvent) => {
                       event.preventDefault();
+                      resetSaveErrors();
                       assignMutation.mutate();
                     }}
                     className={styles.formGrid}
@@ -217,6 +236,7 @@ export function EquipmentDetailPage() {
                     aria-label="Change location"
                     onSubmit={(event: FormEvent) => {
                       event.preventDefault();
+                      resetSaveErrors();
                       locationMutation.mutate();
                     }}
                     className={styles.formGrid}
@@ -253,7 +273,11 @@ export function EquipmentDetailPage() {
                           type="button"
                           variant="secondary"
                           loading={lifecycleMutation.isPending}
-                          onClick={() => lifecycleMutation.mutate(target)}
+                          onClick={() => {
+                            resetSaveErrors();
+                            if (target === 'RETIRED') setConfirmingRetire(true);
+                            else lifecycleMutation.mutate(target);
+                          }}
                         >
                           Move to {humanize(target)}
                         </Button>
@@ -264,6 +288,18 @@ export function EquipmentDetailPage() {
               </div>
             ) : null}
           </div>
+
+          <ConfirmDialog
+            open={confirmingRetire}
+            onOpenChange={setConfirmingRetire}
+            title={`Retire ${asset.serialNumber}?`}
+            consequence="A retired asset can't be assigned or returned to service. This is recorded in the audit log."
+            confirmLabel="Retire asset"
+            danger
+            onConfirm={async () => {
+              await lifecycleMutation.mutateAsync('RETIRED');
+            }}
+          />
         </div>
       )}
     </main>

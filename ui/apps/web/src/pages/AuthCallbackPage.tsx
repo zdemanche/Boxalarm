@@ -1,36 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { safeReturnPath } from '../routing/returnTo';
 
 export function AuthCallbackPage() {
-  const { completeSignIn } = useAuth();
+  const { completeSignIn, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [status, setStatus] = useState('Completing sign-in…');
+  const [failed, setFailed] = useState(false);
   const hasRunRef = useRef(false);
 
   useEffect(() => {
     if (hasRunRef.current) return;
     hasRunRef.current = true;
-    let cancelled = false;
 
     completeSignIn()
       .then((user) => {
-        if (!cancelled && user) navigate('/', { replace: true });
+        if (user) navigate(safeReturnPath(user.state), { replace: true });
       })
-      .catch(() => {
-        if (!cancelled) setStatus('Sign-in could not be completed.');
-      });
-
-    return () => {
-      cancelled = true;
-    };
+      .catch(() => setFailed(true));
   }, [completeSignIn, navigate]);
+
+  if (failed && isAuthenticated) return <Navigate to="/" replace />;
 
   return (
     <main>
       <p role="status" aria-live="polite">
-        {status}
+        {failed ? 'Sign-in could not be completed.' : 'Completing sign-in…'}
       </p>
+      {failed && <Link to="/login">Sign in again</Link>}
     </main>
   );
 }

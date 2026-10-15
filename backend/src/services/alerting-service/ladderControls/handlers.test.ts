@@ -93,6 +93,10 @@ function createFakeDdb(seed: readonly FakeItem[], options: { failGets?: boolean 
           if (put?.ConditionExpression && items.has(keyOf(put.Item))) {
             return { Code: 'ConditionalCheckFailed' };
           }
+          const check = txItem.ConditionCheck as { Key: { pk: string; sk: string } } | undefined;
+          if (check && items.has(keyOf(check.Key))) {
+            return { Code: 'ConditionalCheckFailed' };
+          }
           const update = txItem.Update as
             | {
                 Key: { pk: string; sk: string };
@@ -326,6 +330,38 @@ describe('POST /tone-ladder/advance', () => {
     expect(result.body.detail).toMatch(/Tone 2 may not have reached every member/);
   });
 
+  it('tells the officer mutual aid may not have been requested when the request failed after the tone went out', async () => {
+    const { result } = await run(
+      [metadata({ currentToneSequence: 2 })],
+      { expectedCurrentToneSequence: 2 },
+      { functionError: 'Unhandled', errorType: 'MutualAidRequestIncompleteError' },
+    );
+
+    expect(result.statusCode).toBe(502);
+    expect(result.body.detail).toMatch(/Tone 3 was sent to every eligible member/);
+    expect(result.body.detail).toMatch(/mutual aid may not have been requested/);
+  });
+
+  it('409s when the evaluator reports a test dispatch', async () => {
+    const { result } = await run(
+      [metadata()],
+      { expectedCurrentToneSequence: 1 },
+      'SKIPPED_TEST_DISPATCH',
+    );
+
+    expect(result.statusCode).toBe(409);
+    expect(result.body).toMatchObject({ outcome: 'SKIPPED_TEST_DISPATCH' });
+  });
+
+  it('409s a self-test or canary dispatch without invoking the evaluator', async () => {
+    const { result, lambda } = await run([metadata({ isTest: true, targetMemberId: 'mbr-1' })], {
+      expectedCurrentToneSequence: 1,
+    });
+
+    expect(result.statusCode).toBe(409);
+    expect(lambda.send).not.toHaveBeenCalled();
+  });
+
   // Review MINOR-R3: tone 3 reached everyone and committed; only an officer prompt failed.
   it('tells the officer the tone went out when only a mutual-aid prompt failed', async () => {
     const { result } = await run(
@@ -456,6 +492,63 @@ describe('POST /tone-ladder/halt', () => {
     expect(audits[0]).toMatchObject({ toneSequence: 3 });
   });
 
+  it('names tone 3 as suppressed when tone 2 was already skipped by the predicate', async () => {
+    const { result, ddb } = await run([
+      metadata(),
+      { pk: PK, sk: 'TONE#2', entityType: 'TONE_EVENT_GUARD', skipped: true },
+    ]);
+
+    expect(result.statusCode).toBe(200);
+    const audits = [...ddb.items.values()].filter((item) => item.entityType === 'TONE_EVENT');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({ toneSequence: 3, outcome: 'SKIPPED_MANUALLY_HALTED' });
+    expect(audits[0]!.sk).toMatch(/^TONE#3#\d+#SKIPPED_MANUALLY_HALTED$/);
+  });
+
+  it('re-reads when a predicate skip of the suppressed tone lands between read and write', async () => {
+    const ddb = createFakeDdb([metadata()]);
+    const realSend = ddb.send.getMockImplementation()!;
+    let raced = false;
+    ddb.send.mockImplementation((command: unknown) => {
+      const name = (command as { constructor: { name: string } }).constructor.name;
+      if (name === 'TransactWriteCommand' && !raced) {
+        raced = true;
+        ddb.items.set(`${PK}#TONE#2`, { pk: PK, sk: 'TONE#2', skipped: true });
+      }
+      return realSend(command);
+    });
+    const { createHandler } = await import('./haltHandler.js');
+    const handler = createHandler({ authzClient: authz('ALLOW').client, docClient: ddb.client });
+
+    const result = parse(await handler(buildEvent('tone-ladder/halt')));
+
+    expect(result.statusCode).toBe(200);
+    const audits = [...ddb.items.values()].filter((item) => item.entityType === 'TONE_EVENT');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({ toneSequence: 3 });
+  });
+
+  it('halts with no audit row when every remaining tone was already skipped', async () => {
+    const { result, ddb } = await run([
+      metadata(),
+      { pk: PK, sk: 'TONE#2', skipped: true },
+      { pk: PK, sk: 'TONE#3', skipped: true },
+    ]);
+
+    expect(result.statusCode).toBe(200);
+    expect(ddb.items.get(`${PK}#METADATA`)).toMatchObject({ toneLadderStatus: 'HALTED_MANUAL' });
+    expect([...ddb.items.values()].filter((item) => item.entityType === 'TONE_EVENT')).toHaveLength(
+      0,
+    );
+  });
+
+  it('409s a self-test or canary dispatch and leaves it untouched', async () => {
+    const { result, ddb } = await run([metadata({ isTest: true })]);
+
+    expect(result.statusCode).toBe(409);
+    expect(ddb.items.get(`${PK}#METADATA`)?.toneLadderStatus).toBe('ACTIVE');
+  });
+
   it('409s a completed ladder and leaves it COMPLETED', async () => {
     const { result, ddb } = await run([
       metadata({ toneLadderStatus: 'COMPLETED', currentToneSequence: 3 }),
@@ -536,6 +629,15 @@ describe('POST /mutual-aid/trigger', () => {
 
     expect(retry).toMatchObject({ statusCode: 200, body: { created: false, officersNotified: 1 } });
     expect(snsSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('409s a self-test or canary dispatch and prompts nobody', async () => {
+    const { handler, snsSend } = await build([metadata({ isTest: true }), officerSnapshot]);
+
+    const result = parse(await handler(buildEvent('mutual-aid/trigger')));
+
+    expect(result.statusCode).toBe(409);
+    expect(snsSend).not.toHaveBeenCalled();
   });
 
   it('records a MANUAL trigger through the mutual-aid port and prompts officers', async () => {

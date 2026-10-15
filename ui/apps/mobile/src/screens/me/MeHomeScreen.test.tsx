@@ -25,7 +25,7 @@ jest.mock('@react-navigation/native', () => ({
     mockUseFocusEffect(callback);
     // jest.mock factories may not reference out-of-scope imports; require() is the workaround.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require('react').useEffect(() => callback(), []);
+    require('react').useEffect(() => callback(), [callback]);
   },
 }));
 
@@ -117,7 +117,37 @@ test('sign-out asks first and warns that the phone will stop receiving pages', a
 
 test('without a phone number on file, sign-out does not promise text or voice pages', () => {
   expect(signOutWarning('')).toMatch(/no phone number is on file/i);
+  expect(signOutWarning(null)).toMatch(/no phone number is on file/i);
   expect(signOutWarning('203-555-0100')).toMatch(/to 203-555-0100 continue only if/);
+});
+
+test('while the phone is unknown, sign-out does not claim no phone is on file', () => {
+  expect(signOutWarning(undefined)).not.toMatch(/no phone number is on file/i);
+  expect(signOutWarning(undefined)).toMatch(/continue only if they are set up for you/i);
+});
+
+test('loads that fail show an error, and Try again reloads them', async () => {
+  const profileSpy = jest
+    .spyOn(mockMeRepository, 'getProfile')
+    .mockRejectedValueOnce(new TypeError('Network request failed'));
+  const { findByRole, findByText } = await render(<MeHomeScreen />);
+
+  expect(await findByRole('alert')).toBeTruthy();
+  fireEvent.press(await findByText('Try again'));
+
+  expect(await findByText('Jamie Rios')).toBeTruthy();
+  profileSpy.mockRestore();
+});
+
+test('a qualifications failure keeps the error up when the profile loads', async () => {
+  const qualsSpy = jest
+    .spyOn(mockMeRepository, 'getQualifications')
+    .mockRejectedValueOnce(new TypeError('Network request failed'));
+  const { findByRole, findByText } = await render(<MeHomeScreen />);
+
+  expect(await findByText('Jamie Rios')).toBeTruthy();
+  expect(await findByRole('alert')).toBeTruthy();
+  qualsSpy.mockRestore();
 });
 
 test('the Sign out button names the consequence for this phone', async () => {

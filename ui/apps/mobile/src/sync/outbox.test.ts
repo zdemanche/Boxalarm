@@ -192,6 +192,8 @@ test('recoverOrphanedSyncing returns rows stranded in SYNCING (app killed mid-up
 
   const recovered = await store.find('ORPHAN-1');
   expect(recovered?.status).toBe('QUEUED');
+  expect(recovered?.attempts).toBe(1);
+  expect(await outbox.discardIfUnattempted('ORPHAN-1')).toBe(false);
   expect((await outbox.listDrainable(Date.now(), 'm-test')).map((row) => row.id)).toContain(
     'ORPHAN-1',
   );
@@ -295,4 +297,21 @@ test("an ownerless answer answered as a member is superseded by that member's ne
   expect((await outbox.olderSiblings(owned)).map((row) => row.id)).toEqual(['response-hinted']);
   await expect(outbox.isSuperseded(hinted)).resolves.toBe(true);
   await expect(outbox.isSuperseded(other)).resolves.toBe(false);
+});
+
+test('nextDueAt is the earliest due row of the signed-in member, ignoring REJECTED, SYNCING and other members', async () => {
+  const base = { ownerDeptId: null, kind: 'DEFECT' as const, label: 'x', path: 'p', body: {} };
+  await outbox.enqueue({ ...base, ownerMemberId: 'm-test', id: 'DUE-LATE' });
+  await outbox.enqueue({ ...base, ownerMemberId: 'm-test', id: 'DUE-EARLY' });
+  await outbox.enqueue({ ...base, ownerMemberId: 'm-test', id: 'DUE-REJECTED' });
+  await outbox.enqueue({ ...base, ownerMemberId: 'm-test', id: 'DUE-SYNCING' });
+  await outbox.enqueue({ ...base, ownerMemberId: 'm-other', id: 'DUE-OTHER' });
+  await store.update('DUE-LATE', { nextAttemptAt: 5_000 });
+  await store.update('DUE-EARLY', { nextAttemptAt: 3_000 });
+  await store.update('DUE-REJECTED', { status: 'REJECTED', nextAttemptAt: 1_000 });
+  await store.update('DUE-SYNCING', { status: 'SYNCING', nextAttemptAt: 1_000 });
+  await store.update('DUE-OTHER', { nextAttemptAt: 1_000 });
+
+  await expect(outbox.nextDueAt(0, 'm-test')).resolves.toBe(3_000);
+  await expect(outbox.nextDueAt(0, 'm-nobody')).resolves.toBeNull();
 });

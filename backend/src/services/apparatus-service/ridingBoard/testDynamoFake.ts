@@ -83,7 +83,12 @@ function applyUpdate(
 }
 
 interface TransactItem {
-  readonly Put?: { readonly Item: FakeItem };
+  readonly Put?: {
+    readonly Item: FakeItem;
+    readonly ConditionExpression?: string;
+    readonly ExpressionAttributeValues?: Record<string, unknown>;
+    readonly ExpressionAttributeNames?: Record<string, string>;
+  };
   readonly Update?: {
     readonly Key: FakeItem;
     readonly ConditionExpression?: string;
@@ -170,11 +175,16 @@ export function createRidingBoardFakeClient(seed: readonly FakeItem[] = []): Fak
           reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
           if (!ok) anyFailed = true;
         } else if (item.Put) {
-          const ok = evaluateCondition(
-            'attribute_not_exists(pk)',
-            store.get(itemKey(item.Put.Item)),
-            {},
-          );
+          const { Item, ConditionExpression, ExpressionAttributeValues, ExpressionAttributeNames } =
+            item.Put;
+          const ok =
+            !ConditionExpression ||
+            evaluateCondition(
+              ConditionExpression,
+              store.get(itemKey(Item)),
+              ExpressionAttributeValues ?? {},
+              ExpressionAttributeNames ?? {},
+            );
           reasons.push(ok ? 'None' : 'ConditionalCheckFailed');
           if (!ok) anyFailed = true;
         } else {

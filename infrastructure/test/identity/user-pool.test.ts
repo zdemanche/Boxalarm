@@ -10,14 +10,19 @@ interface MockSchema {
 }
 
 const rolePolicies: Record<string, unknown>[] = [];
+const metricFilters: Record<string, unknown>[] = [];
 
 beforeEach(() => {
   rolePolicies.length = 0;
+  metricFilters.length = 0;
   pulumi.runtime.setMocks({
     newResource: (args: pulumi.runtime.MockResourceArgs) => {
       const state: Record<string, unknown> = { ...args.inputs };
       if (args.type === "aws:iam/rolePolicy:RolePolicy") {
         rolePolicies.push(args.inputs);
+      }
+      if (args.type === "aws:cloudwatch/logMetricFilter:LogMetricFilter") {
+        metricFilters.push(args.inputs);
       }
       if (args.type === "aws:lambda/function:Function") {
         state.arn = `arn:aws:lambda:us-east-1:123456789012:function:${args.name}`;
@@ -287,5 +292,87 @@ describe("BoxalarmUserPool", () => {
           ...TABLE,
         }),
     ).toThrow(/env is required/);
+  });
+
+  describe("addAlarms", () => {
+    const PAGE = "arn:aws:sns:us-east-1:123456789012:alerting-page";
+    const OPS = "arn:aws:sns:us-east-1:123456789012:chief";
+
+    it("pages alerting-page on any pre-token throttle", async () => {
+      const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+      const identity = new BoxalarmUserPool("test-identity-alarm-throttles", {
+        env: "dev",
+        ...TABLE,
+      });
+      const { throttles } = identity.addAlarms(PAGE, OPS);
+      await settle(identity);
+
+      const [metric, namespace, dimensions, fnName, threshold, actions] = await Promise.all([
+        resolve(throttles.metricName),
+        resolve(throttles.namespace),
+        resolve(throttles.dimensions),
+        resolve(identity.preTokenGenerationFunction.name),
+        resolve(throttles.threshold),
+        resolve(throttles.alarmActions),
+      ]);
+      expect([metric, namespace, threshold]).toEqual(["Throttles", "AWS/Lambda", 0]);
+      expect(dimensions).toEqual({ FunctionName: fnName });
+      expect(actions).toEqual([PAGE]);
+    });
+
+    it("pages alerting-page on trigger errors other than deliberate inactive-member refusals", async () => {
+      const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+      const identity = new BoxalarmUserPool("test-identity-alarm-errors", { env: "dev", ...TABLE });
+      const { errors } = identity.addAlarms(PAGE, OPS);
+      await settle(identity);
+
+      const [queries, fnName, threshold, actions] = await Promise.all([
+        resolve(errors.metricQueries),
+        resolve(identity.preTokenGenerationFunction.name),
+        resolve(errors.threshold),
+        resolve(errors.alarmActions),
+      ]);
+      const errorsQuery = queries?.find((q) => q.id === "errors");
+      const unexpected = queries?.find((q) => q.returnData);
+      expect(errorsQuery?.metric?.metricName).toBe("Errors");
+      expect(errorsQuery?.metric?.dimensions).toEqual({ FunctionName: fnName });
+      expect(queries?.find((q) => q.id === "refused")?.metric?.metricName).toBe(
+        "InactiveMemberRefused",
+      );
+      expect(unexpected?.expression).toBe("errors - FILL(refused, 0)");
+      expect(threshold).toBe(0);
+      expect(actions).toEqual([PAGE]);
+    });
+
+    it("alarms on the fail-open status lookup, which a log-only catch would leave silent", async () => {
+      const { BoxalarmUserPool } = await import("../../components/identity/user-pool");
+      const identity = new BoxalarmUserPool("test-identity-alarm-lookup", { env: "dev", ...TABLE });
+      const { statusLookupFailed } = identity.addAlarms(PAGE, OPS);
+      await settle(identity);
+
+      const [metric, namespace, threshold, actions] = await Promise.all([
+        resolve(statusLookupFailed.metricName),
+        resolve(statusLookupFailed.namespace),
+        resolve(statusLookupFailed.threshold),
+        resolve(statusLookupFailed.alarmActions),
+      ]);
+      expect([metric, namespace, threshold]).toEqual([
+        "StatusLookupFailed",
+        "Boxalarm/identity",
+        0,
+      ]);
+      expect(actions).toEqual([PAGE, OPS]);
+      const filter = metricFilters.find(
+        (f) => (f.metricTransformation as { name: string }).name === "StatusLookupFailed",
+      );
+      expect(filter?.pattern).toBe('"preTokenGeneration.statusLookupFailed"');
+      expect(
+        metricFilters.some(
+          (f) =>
+            (f.metricTransformation as { name: string }).name === "InactiveMemberRefused" &&
+            f.pattern === '"preTokenGeneration.inactiveMemberRefused"',
+        ),
+      ).toBe(true);
+    });
   });
 });

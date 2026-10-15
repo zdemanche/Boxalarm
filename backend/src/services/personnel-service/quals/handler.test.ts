@@ -32,13 +32,17 @@ vi.mock('../awsClients.js', () => ({
   createDynamoDocClient: vi.fn(() => ({})),
 }));
 
-const CertNotFoundError = vi.hoisted(() => class CertNotFoundError extends Error {});
+const { CertNotFoundError, CertChangedError } = vi.hoisted(() => ({
+  CertNotFoundError: class CertNotFoundError extends Error {},
+  CertChangedError: class CertChangedError extends Error {},
+}));
 
 vi.mock('./repository.js', () => ({
   memberExists: vi.fn(),
   putQual: vi.fn(),
   readQuals: vi.fn(),
   CertNotFoundError,
+  CertChangedError,
 }));
 
 import { memberExists, putQual, readQuals } from './repository.js';
@@ -131,6 +135,17 @@ describe('putQualsHandler', () => {
     expect(result.statusCode).toBe(404);
   });
 
+  it('returns 409 when the cert changed status during the write and the retry lost too', async () => {
+    vi.mocked(memberExists).mockResolvedValue(true);
+    vi.mocked(putQual).mockRejectedValue(new CertChangedError('CERT-0091'));
+    const result = (await putQualsHandler(
+      buildEvent({
+        body: JSON.stringify({ qualCode: 'INTERIOR', grantedByCertId: 'CERT-0091' }),
+      }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(409);
+  });
+
   it('writes a qual with currentlyEligible=true and grantedByCertId null when not cert-backed (AC1)', async () => {
     vi.mocked(memberExists).mockResolvedValue(true);
     vi.mocked(putQual).mockResolvedValue({
@@ -150,6 +165,7 @@ describe('putQualsHandler', () => {
       'INTERIOR',
       null,
       expect.any(String),
+      'member-0012',
     );
     expect(JSON.parse(result.body)).toEqual({
       qualCode: 'INTERIOR',
@@ -179,6 +195,17 @@ describe('putQualsHandler', () => {
     )) as { statusCode: number };
     expect(result.statusCode).toBe(422);
   });
+
+  it.each(['A#B', 'A,B'])(
+    'returns 422 when qualCode %s would write an audit id the audit endpoint cannot look up',
+    async (qualCode) => {
+      const result = (await putQualsHandler(
+        buildEvent({ body: JSON.stringify({ qualCode }) }),
+      )) as { statusCode: number };
+      expect(result.statusCode).toBe(422);
+      expect(putQual).not.toHaveBeenCalled();
+    },
+  );
 
   it('returns 404 when the member does not exist', async () => {
     vi.mocked(memberExists).mockResolvedValue(false);

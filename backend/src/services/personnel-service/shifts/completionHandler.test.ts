@@ -18,6 +18,7 @@ const originalEnv = { ...process.env };
 
 beforeEach(() => {
   vi.resetModules();
+  vi.doUnmock('../losap/configRepository.js');
   process.env.PLATFORM_TABLE_NAME = 'platform-table';
 });
 
@@ -62,6 +63,110 @@ describe('completionHandler (entrypoint)', () => {
     expect(doc.peek(`DEPT#NICHOLS#MEMBER#MBR-0012`, `ATTENDANCE#${END_AT_SECONDS}`)?.refId).toBe(
       SHIFT_ID,
     );
+  });
+
+  it('awards the department LOSAP points for a shift when rules are configured and Lambda passes a context as the second argument', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, SHIFT_ID, {
+        startAt: START_AT,
+        endAt: END_AT,
+        activityType: 'STANDBY',
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+        claimedByMemberId: 'MBR-0012',
+        claimedAt: START_AT,
+      }),
+      {
+        pk: buildDeptScopedPk(DEPT_ID),
+        sk: 'CONFIG#LOSAP_POINT_RULES',
+        version: 1,
+        value: { ruleVersionId: 'rv-1', pointsByActivityType: { STANDBY: 2 } },
+      },
+    ]);
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, getDocClient: () => doc as unknown as DynamoDBDocumentClient };
+    });
+
+    const { handler } = await import('./completionHandler.js');
+    const lambdaHandler = handler as (
+      payload: unknown,
+      context: unknown,
+    ) => ReturnType<typeof handler>;
+    await lambdaHandler(
+      { deptId: 'NICHOLS', shiftId: SHIFT_ID, asOf: NOW },
+      { awsRequestId: 'r-1' },
+    );
+
+    expect(doc.peek(`DEPT#NICHOLS#MEMBER#MBR-0012`, `ATTENDANCE#${END_AT_SECONDS}`)).toMatchObject({
+      losapPointsAwarded: 2,
+    });
+  });
+
+  it('completes no shift and emits CompletionFailed when the LOSAP rules read fails', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, SHIFT_ID, {
+        startAt: START_AT,
+        endAt: END_AT,
+        activityType: 'STANDBY',
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+        claimedByMemberId: 'MBR-0012',
+        claimedAt: START_AT,
+      }),
+    ]);
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, getDocClient: () => doc as unknown as DynamoDBDocumentClient };
+    });
+    vi.doMock('../losap/configRepository.js', () => ({
+      getLosapPointRules: vi.fn().mockRejectedValue(new Error('AccessDeniedException')),
+    }));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { handler } = await import('./completionHandler.js');
+    await expect(handler({ deptId: 'NICHOLS', shiftId: SHIFT_ID, asOf: NOW })).rejects.toThrow(
+      'AccessDeniedException',
+    );
+
+    expect(
+      doc.peek(`DEPT#NICHOLS#MEMBER#MBR-0012`, `ATTENDANCE#${END_AT_SECONDS}`),
+    ).toBeUndefined();
+    expect(errors.mock.calls.map(([line]) => String(line)).join('\n')).toContain(
+      'shifts.completion.losap_rules_failed',
+    );
+    errors.mockRestore();
+  });
+
+  it('awards zero points and warns, not errors, when the department has no LOSAP rules', async () => {
+    const doc = createFakeDocumentClient([
+      buildDutyShift(DEPT_ID, SHIFT_ID, {
+        startAt: START_AT,
+        endAt: END_AT,
+        activityType: 'STANDBY',
+      }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+        claimedByMemberId: 'MBR-0012',
+        claimedAt: START_AT,
+      }),
+    ]);
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, getDocClient: () => doc as unknown as DynamoDBDocumentClient };
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const { handler } = await import('./completionHandler.js');
+    await handler({ deptId: 'NICHOLS', shiftId: SHIFT_ID, asOf: NOW });
+
+    expect(doc.peek(`DEPT#NICHOLS#MEMBER#MBR-0012`, `ATTENDANCE#${END_AT_SECONDS}`)).toMatchObject({
+      losapPointsAwarded: 0,
+    });
+    expect(warns).toHaveBeenCalledTimes(1);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+    warns.mockRestore();
   });
 
   it('sweeps ended claimed shifts when shiftId is omitted', async () => {

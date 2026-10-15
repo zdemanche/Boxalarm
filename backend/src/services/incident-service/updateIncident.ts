@@ -48,7 +48,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
 
   try {
     const repository = getIncidentRepository(process.env);
-    const incident = await repository.getIncident(deptId, incidentId);
+    const incident = await repository.getIncident(deptId, incidentId, { consistent: true });
     if (!incident) {
       return problemResponse(
         404,
@@ -126,7 +126,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     const updated = await repository.updateCorePayload(
       deptId,
       incidentId,
-      mergedFields,
+      fields,
       nextStatus,
       nowEpochSeconds(),
       traceId,

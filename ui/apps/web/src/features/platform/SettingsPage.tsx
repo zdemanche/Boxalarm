@@ -28,11 +28,6 @@ const CONFIG_SECTIONS: {
     helpText: 'Ranks, e.g. {"ranks":["Firefighter","Captain","Chief"]}',
   },
   {
-    configType: 'LOSAP_POINT_RULES',
-    label: 'LOSAP point rules',
-    helpText: 'Points per activity type, e.g. {"pointsByActivityType":{"DRILL":1}}',
-  },
-  {
     configType: 'ALERT_RULES',
     label: 'Alert rule timing',
     helpText:

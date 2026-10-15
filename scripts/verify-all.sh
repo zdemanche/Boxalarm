@@ -25,6 +25,7 @@ run backend        typecheck npm run typecheck
 run backend        lint      npm run lint
 run backend        format    npm run format
 run backend        tests     npx vitest run
+run backend        bundle    npm run bundle
 run infrastructure typecheck npm run typecheck
 run infrastructure lint      npm run lint
 run infrastructure format    npm run format
@@ -32,9 +33,8 @@ run infrastructure tests     npx vitest run
 run ui             typecheck npm run typecheck
 run ui             lint      npm run lint
 run ui             format    npm run format
-run ui/apps/web    tests     npx vitest run
-run ui/apps/mobile tests     npx jest
-run ui/apps/web    e2e       npm run test:e2e
+run ui             tests     npm test
+run ui/apps/web    e2e       env CI=1 npm run test:e2e -- --forbid-only
 
 if [ "$fail" -ne 0 ]; then
   echo "verify-all: FAILED (see ** lines above; re-run LocalStack timeouts alone first)"

@@ -77,6 +77,7 @@ describe('listDevicesHandler', () => {
     );
     const options = withAuthorization.mock.calls[0]?.[1];
     expect(options?.resourceId(buildEvent('mbr-102'))).toBe('mbr-102');
+    expect(options?.resourceId(buildEvent(''))).not.toBe('');
   });
 
   it("lists the member's devices from the caller's department", async () => {

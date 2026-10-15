@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { mockAlertsRepository } from '../../features/alerts/mockAlertsRepository';
+import { resetMemberNamesCache } from '../../features/alerts/useMemberNames';
 import { ApiError } from '../../lib/apiClient';
 import { RidingBoardScreen } from './RidingBoardScreen';
 
@@ -31,6 +32,7 @@ const mockRepository = {
   getRoster: jest.fn((...args: Parameters<typeof mockAlertsRepository.getRoster>) =>
     mockAlertsRepository.getRoster(...args),
   ),
+  listMemberNames: jest.fn(() => mockAlertsRepository.listMemberNames()),
   submitResponse: jest.fn((...args: Parameters<typeof mockAlertsRepository.submitResponse>) =>
     mockAlertsRepository.submitResponse(...args),
   ),
@@ -54,6 +56,7 @@ jest.mock('../../features/alerts/apiAlertsRepository', () => ({
 }));
 
 beforeEach(async () => {
+  resetMemberNamesCache();
   const { dispatchId } = await mockAlertsRepository.triggerSelfTest();
   await mockAlertsRepository.submitResponse(dispatchId, 'RESPONDING', {
     minutes: 10,
@@ -62,6 +65,8 @@ beforeEach(async () => {
   mockRouteParams.dispatchId = dispatchId;
   mockConnectivity.isOnline = true;
   mockIsFocused.current = true;
+  mockRepository.listMemberNames.mockReset();
+  mockRepository.listMemberNames.mockImplementation(() => mockAlertsRepository.listMemberNames());
   mockRepository.assignRidingSeat.mockReset();
   mockRepository.assignRidingSeat.mockImplementation((...args) =>
     mockAlertsRepository.assignRidingSeat(...args),
@@ -242,4 +247,124 @@ test('polling stops while the screen is unfocused and resumes immediately once i
   } finally {
     jest.useRealTimers();
   }
+});
+
+test('a vacated seat is reassigned with the seat version the board returned, not 0', async () => {
+  mockRepository.getRidingBoard.mockResolvedValue({
+    dispatchId: mockRouteParams.dispatchId,
+    apparatus: [
+      {
+        apparatusId: 'a-301',
+        unitId: 'Engine 301',
+        type: 'Engine',
+        status: 'IN_SERVICE',
+        assignable: true,
+        positions: [{ code: 'OFF', label: 'Officer', version: 2 }],
+      },
+    ],
+  });
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  await attemptAssignment(screen);
+
+  await waitFor(() => {
+    expect(mockRepository.assignRidingSeat).toHaveBeenCalledWith(
+      mockRouteParams.dispatchId,
+      expect.objectContaining({ positionCode: 'OFF', expectedVersion: 2 }),
+    );
+  });
+});
+
+test('a queued assignment is re-sent with the same clientAssignmentId after a failed flush', async () => {
+  mockConnectivity.isOnline = false;
+  mockRepository.assignRidingSeat.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  await attemptAssignment(screen);
+
+  for (const isOnline of [true, false, true]) {
+    mockConnectivity.isOnline = isOnline;
+    await act(async () => {
+      screen.rerender(<RidingBoardScreen />);
+    });
+    if (isOnline && mockRepository.assignRidingSeat.mock.calls.length === 1) {
+      await waitFor(() => expect(mockRepository.assignRidingSeat).toHaveBeenCalledTimes(1));
+    }
+  }
+
+  await waitFor(() => expect(mockRepository.assignRidingSeat).toHaveBeenCalledTimes(2));
+  const [first, second] = mockRepository.assignRidingSeat.mock.calls.map(
+    (call) => call[1].clientAssignmentId,
+  );
+  expect(first).toBeTruthy();
+  expect(second).toBe(first);
+});
+
+test('a queued assignment the server now refuses with 400 is dropped, not replayed on every reconnect', async () => {
+  mockConnectivity.isOnline = false;
+  mockRepository.assignRidingSeat.mockRejectedValueOnce(
+    new ApiError({
+      type: 'about:blank',
+      title: 'Bad Request',
+      status: 400,
+      detail: 'Unknown position',
+      traceId: 'trace-400',
+    }),
+  );
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  await attemptAssignment(screen);
+  expect(await screen.findByText(/pending sync/i)).toBeTruthy();
+
+  mockConnectivity.isOnline = true;
+  await act(async () => {
+    screen.rerender(<RidingBoardScreen />);
+  });
+
+  await waitFor(() => expect(screen.queryByText(/pending sync/i)).toBeNull());
+  expect(mockRepository.assignRidingSeat).toHaveBeenCalledTimes(1);
+});
+
+const nameless = (memberId: string) => ({
+  memberId,
+  name: memberId,
+  ackStatus: 'RESPONDING' as const,
+  eta: null,
+  assignedApparatusId: null,
+  quals: [],
+  lastAnsweredTone: null,
+});
+
+test('picker rows and the seat label show the directory name, with an explicit button label', async () => {
+  mockRepository.getRoster.mockResolvedValue([nameless('sub-1')]);
+  mockRepository.listMemberNames.mockResolvedValue({ 'sub-1': 'Jamie Rios' });
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  const assignButtons = await screen.findAllByRole('button', { name: 'Assign' });
+  await act(async () => {
+    fireEvent.press(assignButtons[0] as never);
+  });
+
+  expect(await screen.findByText('Jamie Rios')).toBeTruthy();
+  expect(screen.queryByText('sub-1')).toBeNull();
+  expect(screen.getByLabelText(/^Assign Jamie Rios to /)).toBeTruthy();
+});
+
+test('a failed name lookup still shows rows by member ID and says names could not load', async () => {
+  mockRepository.getRoster.mockResolvedValue([nameless('sub-1')]);
+  mockRepository.listMemberNames.mockRejectedValue(new Error('personnel down'));
+
+  const screen = await render(<RidingBoardScreen />);
+  await screen.findByText('Engine 301');
+  const assignButtons = await screen.findAllByRole('button', { name: 'Assign' });
+  await act(async () => {
+    fireEvent.press(assignButtons[0] as never);
+  });
+
+  expect(await screen.findByText('sub-1')).toBeTruthy();
+  expect(await screen.findByText(/names couldn't load/i)).toBeTruthy();
 });

@@ -44,8 +44,8 @@ describe('personnel.eligibility.changed contract', () => {
   it('carries the standard envelope and MEMBER_ELIGIBILITY_SNAPSHOT-required payload on a grant (AC1)', async () => {
     const send = vi.fn().mockResolvedValue({});
     const client = fakeClient(send);
-    await putQual(client, TABLE, DEPT_ID, 'MBR-0012', 'INTERIOR', null, randomUUID());
-    const envelope = outboxEnvelopeFrom(send.mock.calls[0]?.[0]);
+    await putQual(client, TABLE, DEPT_ID, 'MBR-0012', 'INTERIOR', null, randomUUID(), 'actor-1');
+    const envelope = outboxEnvelopeFrom(send.mock.calls[1]?.[0]);
 
     expect(envelope.eventType).toBe('personnel.eligibility.changed');
     expect(typeof envelope.eventId).toBe('string');

@@ -43,24 +43,31 @@ async function queryAttendanceFor(
       return notFoundProblem(traceId, 'Member was not found');
     }
 
-    const result = await client.send(
-      new QueryCommand({
-        TableName: tableName,
-        IndexName: 'GSI1',
-        KeyConditionExpression: 'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
-        FilterExpression: 'deptId = :deptId',
-        ExpressionAttributeValues: {
-          ':gsi1pk': `MEMBER#${memberId}`,
-          ':prefix': 'ATTENDANCE_RECORD#',
-          ':deptId': deptId,
-        },
-        ScanIndexForward: true,
-      }),
-    );
+    const records: Record<string, unknown>[] = [];
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const result = await client.send(
+        new QueryCommand({
+          TableName: tableName,
+          IndexName: 'GSI1',
+          KeyConditionExpression: 'gsi1pk = :gsi1pk AND begins_with(gsi1sk, :prefix)',
+          FilterExpression: 'deptId = :deptId',
+          ExpressionAttributeValues: {
+            ':gsi1pk': `MEMBER#${memberId}`,
+            ':prefix': 'ATTENDANCE_RECORD#',
+            ':deptId': deptId,
+          },
+          ScanIndexForward: true,
+          ExclusiveStartKey: exclusiveStartKey,
+        }),
+      );
+      records.push(...(result.Items ?? []));
+      exclusiveStartKey = result.LastEvaluatedKey;
+    } while (exclusiveStartKey);
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ records: result.Items ?? [] }),
+      body: JSON.stringify({ records }),
     };
   } catch (error) {
     const reason = error instanceof Error ? error.constructor.name : 'UnknownError';

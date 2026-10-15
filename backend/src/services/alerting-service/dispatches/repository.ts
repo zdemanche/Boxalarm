@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import {
-  GetCommand,
-  TransactWriteCommand,
-  type DynamoDBDocumentClient,
-} from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildBridgeOutboxRecord } from '../platformBusBridge.js';
+import { TEST_AUDIT_TTL_SECONDS } from '../channels/channelEnvelope.js';
 import type { DispatchReceived, SourceSystem } from './dispatchIngressPort.js';
 import { logError, logInfo } from './logger.js';
+
+export type ReplayMarkerItem = Record<string, unknown> & {
+  readonly pk: string;
+  readonly sk: string;
+};
 
 export interface CreateManualDispatchInput {
   readonly deptId: VerifiedDeptId;
@@ -23,16 +25,17 @@ export interface CreateManualDispatchInput {
   /** CAD ingress only (cadIngress/ingest.ts): which authenticated source and how it parsed. */
   readonly cad?: CadDispatchTags;
   /**
-   * CAD ingress only: the replay marker (cadIngress/replayGuard.ts), written as a conditional
-   * item of THIS transaction so marker and dispatch commit together or not at all - a failed
-   * write can never leave a marker behind that refuses the sender's retry (chain review M3).
+   * CAD ingress only: the replay markers (cadIngress/replayGuard.ts), each written as a
+   * conditional item of THIS transaction so markers and dispatch commit together or not at all -
+   * a failed write can never leave a marker behind that refuses the sender's retry (chain review
+   * M3), and two copies of one message racing each other cannot both commit.
    */
-  readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
+  readonly replayMarkers?: readonly ReplayMarkerItem[];
   /**
    * CAD ingress only: when the idempotency lock stops counting (epoch seconds). A later message
    * with the same identity after this time is a NEW dispatch (chain review C1: a text-only
    * identity must never swallow a genuine repeat call forever). Absent = the lock never expires
-   * (manual and self-test submissions, unchanged).
+   * (self-test submissions, unchanged).
    */
   readonly lockExpiresAt?: number;
 }
@@ -66,7 +69,6 @@ export type CreateManualDispatchResult =
   | { readonly outcome: 'replay' };
 
 const LOCK_ITEM_INDEX = 0;
-const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 function mintDispatchId(
   deptId: VerifiedDeptId,
@@ -86,6 +88,7 @@ export async function createManualDispatch(
   const { deptId, dispatch, idempotencyKey, dispatchedAt } = input;
   const dispatchId = mintDispatchId(deptId, dispatchedAt, dispatch.sourceSystem);
   const isTest = dispatch.sourceSystem === 'SELF_TEST';
+  const replayMarkers = input.replayMarkers ?? [];
 
   const command = new TransactWriteCommand({
     TransactItems: [
@@ -114,9 +117,14 @@ export async function createManualDispatch(
           },
           ...(input.lockExpiresAt !== undefined
             ? {
-                // An expired lock is no lock: the same identity is now a new dispatch.
-                ConditionExpression: 'attribute_not_exists(idempotencyKey) OR expiresAt <= :now',
-                ExpressionAttributeValues: { ':now': dispatchedAt },
+                // An expired lock is no lock: the same identity is now a new dispatch. A lock
+                // written before locks carried expiresAt expires by its age.
+                ConditionExpression:
+                  'attribute_not_exists(idempotencyKey) OR expiresAt <= :now OR (attribute_not_exists(expiresAt) AND createdAt <= :cutoff)',
+                ExpressionAttributeValues: {
+                  ':now': dispatchedAt,
+                  ':cutoff': dispatchedAt - (input.lockExpiresAt - dispatchedAt),
+                },
               }
             : { ConditionExpression: 'attribute_not_exists(idempotencyKey)' }),
         },
@@ -224,23 +232,19 @@ export async function createManualDispatch(
             },
           ]
         : []),
-      ...(input.replayMarker
-        ? [
-            {
-              Put: {
-                TableName: tableName,
-                Item: input.replayMarker,
-                // An expired marker the TTL sweeper has not deleted yet is no marker.
-                ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
-                ExpressionAttributeNames: { '#ttl': 'ttl' },
-                ExpressionAttributeValues: { ':replayNow': input.replayMarker.createdAt },
-              },
-            },
-          ]
-        : []),
+      ...replayMarkers.map((marker) => ({
+        Put: {
+          TableName: tableName,
+          Item: marker,
+          // An expired marker the TTL sweeper has not deleted yet is no marker.
+          ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
+          ExpressionAttributeNames: { '#ttl': 'ttl' },
+          ExpressionAttributeValues: { ':replayNow': marker.createdAt },
+        },
+      })),
     ],
   });
-  const replayIndex = (command.input.TransactItems?.length ?? 0) - 1;
+  const firstReplayIndex = (command.input.TransactItems?.length ?? 0) - replayMarkers.length;
 
   try {
     await client.send(command);
@@ -248,8 +252,10 @@ export async function createManualDispatch(
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
       if (
-        input.replayMarker &&
-        error.CancellationReasons?.[replayIndex]?.Code === 'ConditionalCheckFailed'
+        replayMarkers.length > 0 &&
+        error.CancellationReasons?.slice(firstReplayIndex).some(
+          (reason) => reason.Code === 'ConditionalCheckFailed',
+        )
       ) {
         return { outcome: 'replay' };
       }
@@ -268,44 +274,5 @@ export async function createManualDispatch(
       externalDispatchId: dispatch.externalDispatchId,
     });
     throw error;
-  }
-}
-
-export interface DispatchAlertItem {
-  readonly dispatchId: string;
-  // TODO(E1-S2): joined onto DISPATCH_ALERT by fan-out ingress (architecture Backend
-  // §1.4); createManualDispatch below does not write it — no ingress path in this repo
-  // does yet.
-  readonly occupancyId?: string;
-}
-
-export class DispatchLookupDependencyError extends Error {
-  readonly reason: string;
-
-  constructor(cause: unknown) {
-    super('DynamoDB is unavailable or returned an unexpected error');
-    this.name = 'DispatchLookupDependencyError';
-    this.cause = cause;
-    this.reason = cause instanceof Error ? cause.constructor.name : 'UnknownError';
-  }
-}
-
-export async function getDispatchById(
-  client: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  dispatchId: string,
-): Promise<DispatchAlertItem | undefined> {
-  try {
-    const output = await client.send(
-      new GetCommand({
-        TableName: tableName,
-        Key: { pk: buildDeptScopedPk(deptId, 'DISPATCH', dispatchId), sk: 'METADATA' },
-      }),
-    );
-    return output.Item as DispatchAlertItem | undefined;
-  } catch (error) {
-    logError('dispatches.get.failed', error, { deptId, dispatchId });
-    throw new DispatchLookupDependencyError(error);
   }
 }

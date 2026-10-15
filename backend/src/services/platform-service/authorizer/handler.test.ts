@@ -480,7 +480,7 @@ describe('handler: server-side revocation check (M1)', () => {
     );
 
     expect(result).toEqual({ isAuthorized: false });
-    expect(readRevokedAt).toHaveBeenCalledWith({}, 'platform-table', DEPT_ID, 'member-0012');
+    expect(readRevokedAt).toHaveBeenCalledWith({}, 'platform-table', DEPT_ID, 'member-0012', false);
   });
 
   it('denies a revoked token on the alerting respond route too - revocation is not an outage', async () => {
@@ -584,5 +584,74 @@ describe('handler: server-side revocation check (M1)', () => {
     }
 
     expect(readRevokedAt).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the stale cached answer after the window, logs the read error and emits RevocationCheckStale', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler, keyPair } = await loadWithKey();
+    const token = signAccessToken(keyPair, baseAccessTokenPayload());
+    const route = 'GET /api/v1/personnel/members';
+    await handler(eventFor(token, route), {} as never, () => undefined);
+    const realNow = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(realNow + 31_000);
+    readRevokedAt.mockRejectedValue(new Error('denied'));
+
+    const result = await handler(eventFor(token, route), {} as never, () => undefined);
+    await handler(eventFor(token, route), {} as never, () => undefined);
+
+    expect(result).toMatchObject({ isAuthorized: true });
+    expect(readRevokedAt).toHaveBeenCalledTimes(2);
+    expect(
+      logSpy.mock.calls.filter(([line]) => String(line).includes('"RevocationCheckStale":1')),
+    ).toHaveLength(1);
+    expect(
+      errorSpy.mock.calls.some(
+        ([line]) =>
+          String(line).includes('authorizer.revocationCheck.readFailed') &&
+          String(line).includes('"errorName":"Error"') &&
+          String(line).includes('"staleUsed":true'),
+      ),
+    ).toBe(true);
+  });
+
+  it('reads the marker consistently, bypassing a cached allow, when a push token is registered', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    const token = signAccessToken(keyPair, baseAccessTokenPayload({ iat: nowSeconds() - 30 }));
+    const register = 'POST /api/v1/personnel/members/{memberId}/push-tokens';
+    await handler(eventFor(token, 'GET /api/v1/personnel/members'), {} as never, () => undefined);
+    readRevokedAt.mockResolvedValue(nowSeconds());
+
+    const result = await handler(eventFor(token, register), {} as never, () => undefined);
+
+    expect(result).toEqual({ isAuthorized: false });
+    expect(readRevokedAt).toHaveBeenLastCalledWith(
+      {},
+      'platform-table',
+      DEPT_ID,
+      'member-0012',
+      true,
+    );
+  });
+
+  it('passes the token iat in the context of the push-token route only, so the write can re-check the marker', async () => {
+    const { handler, keyPair } = await loadWithKey();
+    const iat = nowSeconds() - 30;
+    const token = signAccessToken(keyPair, baseAccessTokenPayload({ iat }));
+
+    const register = await handler(
+      eventFor(token, 'POST /api/v1/personnel/members/{memberId}/push-tokens'),
+      {} as never,
+      () => undefined,
+    );
+    const other = await handler(
+      eventFor(token, 'GET /api/v1/personnel/members'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(register).toMatchObject({ isAuthorized: true, context: { iat: String(iat) } });
+    expect(other).toMatchObject({ isAuthorized: true });
+    expect((other as { context: object }).context).not.toHaveProperty('iat');
   });
 });

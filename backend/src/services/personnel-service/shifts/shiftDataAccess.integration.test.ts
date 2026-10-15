@@ -53,7 +53,7 @@ describe('shifts data-access layer (real DynamoDB via LocalStack)', () => {
   it('AC1: releaseShiftPosition clears the claim via TransactWriteCommand ConditionExpression', async () => {
     const shiftId = `SHIFT-${Date.now()}-release`;
     await seed([
-      buildDutyShift(DEPT_ID, shiftId),
+      buildDutyShift(DEPT_ID, shiftId, { startAt: Date.now(), endAt: Date.now() + 3_600_000 }),
       {
         ...buildShiftPosition(DEPT_ID, shiftId, 'DRIVER', { claimedByMemberId: 'MBR-1' }),
         gsi1pk: 'MEMBER#MBR-1',
@@ -84,7 +84,7 @@ describe('shifts data-access layer (real DynamoDB via LocalStack)', () => {
   it('core-harm: releaseShiftPosition rejects a release from a member who does not hold the position (ConditionExpression fails against real DynamoDB)', async () => {
     const shiftId = `SHIFT-${Date.now()}-release-conflict`;
     await seed([
-      buildDutyShift(DEPT_ID, shiftId),
+      buildDutyShift(DEPT_ID, shiftId, { startAt: Date.now(), endAt: Date.now() + 3_600_000 }),
       buildShiftPosition(DEPT_ID, shiftId, 'DRIVER', { claimedByMemberId: 'MBR-1' }),
     ]);
 
@@ -110,7 +110,7 @@ describe('shifts data-access layer (real DynamoDB via LocalStack)', () => {
   it('AC2: proposeShiftSwap creates a PENDING SHIFT_SWAP_REQUEST via TransactWriteCommand ConditionCheck', async () => {
     const shiftId = `SHIFT-${Date.now()}-propose`;
     await seed([
-      buildDutyShift(DEPT_ID, shiftId),
+      buildDutyShift(DEPT_ID, shiftId, { startAt: Date.now(), endAt: Date.now() + 3_600_000 }),
       buildShiftPosition(DEPT_ID, shiftId, 'DRIVER', { claimedByMemberId: 'MBR-1' }),
     ]);
 
@@ -138,7 +138,7 @@ describe('shifts data-access layer (real DynamoDB via LocalStack)', () => {
   it('core-harm: proposeShiftSwap rejects a swap from a member who does not hold the position', async () => {
     const shiftId = `SHIFT-${Date.now()}-propose-conflict`;
     await seed([
-      buildDutyShift(DEPT_ID, shiftId),
+      buildDutyShift(DEPT_ID, shiftId, { startAt: Date.now(), endAt: Date.now() + 3_600_000 }),
       buildShiftPosition(DEPT_ID, shiftId, 'DRIVER', { claimedByMemberId: 'MBR-1' }),
     ]);
 
@@ -159,7 +159,7 @@ describe('shifts data-access layer (real DynamoDB via LocalStack)', () => {
     const shiftId = `SHIFT-${Date.now()}-approve`;
     const requestedAt = Date.now();
     await seed([
-      buildDutyShift(DEPT_ID, shiftId),
+      buildDutyShift(DEPT_ID, shiftId, { startAt: Date.now(), endAt: Date.now() + 3_600_000 }),
       buildShiftPosition(DEPT_ID, shiftId, 'DRIVER', { claimedByMemberId: 'MBR-1' }),
       {
         pk: buildDeptScopedPk(DEPT_ID, 'SHIFT', shiftId),
@@ -190,7 +190,7 @@ describe('shifts data-access layer (real DynamoDB via LocalStack)', () => {
     const shiftId = `SHIFT-${Date.now()}-approve-not-pending`;
     const requestedAt = Date.now();
     await seed([
-      buildDutyShift(DEPT_ID, shiftId),
+      buildDutyShift(DEPT_ID, shiftId, { startAt: Date.now(), endAt: Date.now() + 3_600_000 }),
       buildShiftPosition(DEPT_ID, shiftId, 'DRIVER', { claimedByMemberId: 'MBR-2' }),
       {
         pk: buildDeptScopedPk(DEPT_ID, 'SHIFT', shiftId),

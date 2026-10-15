@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
@@ -10,6 +10,7 @@ import {
   isAssignmentEligible,
   readInventoryConfig,
   transitionLifecycleStatus,
+  type LifecycleStatus,
 } from './repository.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'dept-001' });
@@ -82,70 +83,104 @@ describe('getEquipmentAsset', () => {
   });
 });
 
+type TransactInput = {
+  TransactItems: {
+    Update?: {
+      ConditionExpression: string;
+      ExpressionAttributeValues: Record<string, string>;
+      UpdateExpression: string;
+    };
+    Put?: { Item: Record<string, unknown>; ConditionExpression: string };
+  }[];
+};
+
+function sentTransaction(client: DynamoDBDocumentClient): TransactInput {
+  return ((client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as { input: TransactInput })
+    .input;
+}
+
+function transition(client: DynamoDBDocumentClient, from: LifecycleStatus, to: LifecycleStatus) {
+  return transitionLifecycleStatus(
+    client,
+    { tableName: 'platform' },
+    DEPT_ID,
+    'admin-1',
+    'AS-0055',
+    from,
+    to,
+  );
+}
+
 describe('transitionLifecycleStatus', () => {
   it('conditionally updates lifecycleStatus and returns the new state (AC2)', async () => {
     const client = fakeClient(() => Promise.resolve({}));
 
-    const updated = await transitionLifecycleStatus(
-      client,
-      { tableName: 'platform' },
-      DEPT_ID,
-      'AS-0055',
-      'ACQUIRED',
-      'IN_SERVICE',
-    );
+    const updated = await transition(client, 'ACQUIRED', 'IN_SERVICE');
 
     expect(updated).toEqual({ assetId: 'AS-0055', lifecycleStatus: 'IN_SERVICE' });
-    const sentCommand = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      input: {
-        ConditionExpression: string;
-        ExpressionAttributeValues: Record<string, string>;
-        UpdateExpression: string;
-      };
-    };
-    expect(sentCommand.input.ConditionExpression).toContain('lifecycleStatus = :from');
-    expect(sentCommand.input.ExpressionAttributeValues).toEqual({
-      ':to': 'IN_SERVICE',
-      ':from': 'ACQUIRED',
-    });
-    expect(sentCommand.input.UpdateExpression).toBe('SET lifecycleStatus = :to');
+    const update = sentTransaction(client).TransactItems[0]?.Update;
+    expect(update?.ConditionExpression).toContain('lifecycleStatus = :from');
+    expect(update?.ExpressionAttributeValues).toEqual({ ':to': 'IN_SERVICE', ':from': 'ACQUIRED' });
+    expect(update?.UpdateExpression).toBe('SET lifecycleStatus = :to');
   });
 
   it('removes gsi1pk/gsi1sk on transition to RETIRED so the asset drops out of the assignment-eligible GSI1 projection (AC2, core-harm)', async () => {
     const client = fakeClient(() => Promise.resolve({}));
 
-    await transitionLifecycleStatus(
-      client,
-      { tableName: 'platform' },
-      DEPT_ID,
-      'AS-0055',
-      'IN_SERVICE',
-      'RETIRED',
-    );
+    await transition(client, 'IN_SERVICE', 'RETIRED');
 
-    const sentCommand = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      input: { UpdateExpression: string };
-    };
-    expect(sentCommand.input.UpdateExpression).toBe(
+    expect(sentTransaction(client).TransactItems[0]?.Update?.UpdateExpression).toBe(
       'SET lifecycleStatus = :to REMOVE gsi1pk, gsi1sk',
     );
   });
 
-  it('throws LifecycleTransitionConflictError, not the raw SDK error, when the conditional update loses a race', async () => {
+  it('writes an AUDIT_LOG_ENTRY with actor and old/new status in the same transaction (F9.4)', async () => {
+    const client = fakeClient(() => Promise.resolve({}));
+
+    await transition(client, 'IN_SERVICE', 'RETIRED');
+
+    const audit = sentTransaction(client).TransactItems[1]?.Put;
+    expect(audit?.Item).toMatchObject({
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'EQUIPMENT_ASSET',
+      mutatedEntityId: 'AS-0055',
+      action: 'UPDATE',
+      actorId: 'admin-1',
+      changedFields: { lifecycleStatus: { old: 'IN_SERVICE', new: 'RETIRED' } },
+      gsi3pk: 'DEPT#dept-001#AUDIT#ENTITY#EQUIPMENT_ASSET#AS-0055',
+    });
+    expect(audit?.Item.pk).toMatch(/^DEPT#dept-001#AUDIT#\d{4}-\d{2}-\d{2}$/);
+    expect(audit?.ConditionExpression).toBe(
+      'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+    );
+  });
+
+  it('throws LifecycleTransitionConflictError, not the raw SDK error, when the status condition loses a race', async () => {
     const client = fakeClient(() => {
-      throw new ConditionalCheckFailedException({ message: 'conflict', $metadata: {} });
+      throw new TransactionCanceledException({
+        message: 'canceled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+      });
     });
 
-    await expect(
-      transitionLifecycleStatus(
-        client,
-        { tableName: 'platform' },
-        DEPT_ID,
-        'AS-0055',
-        'IN_SERVICE',
-        'RETIRED',
-      ),
-    ).rejects.toThrow(LifecycleTransitionConflictError);
+    await expect(transition(client, 'IN_SERVICE', 'RETIRED')).rejects.toThrow(
+      LifecycleTransitionConflictError,
+    );
+  });
+
+  it('does not report an audit-row collision as a lifecycle conflict', async () => {
+    const client = fakeClient(() => {
+      throw new TransactionCanceledException({
+        message: 'canceled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+      });
+    });
+
+    await expect(transition(client, 'IN_SERVICE', 'RETIRED')).rejects.toBeInstanceOf(
+      TransactionCanceledException,
+    );
   });
 
   it('propagates a DynamoDB outage rather than silently no-opping the transition (core-harm, fail-closed)', async () => {
@@ -153,16 +188,9 @@ describe('transitionLifecycleStatus', () => {
       throw new Error('ProvisionedThroughputExceededException');
     });
 
-    await expect(
-      transitionLifecycleStatus(
-        client,
-        { tableName: 'platform' },
-        DEPT_ID,
-        'AS-0055',
-        'IN_SERVICE',
-        'RETIRED',
-      ),
-    ).rejects.toThrow('ProvisionedThroughputExceededException');
+    await expect(transition(client, 'IN_SERVICE', 'RETIRED')).rejects.toThrow(
+      'ProvisionedThroughputExceededException',
+    );
   });
 });
 

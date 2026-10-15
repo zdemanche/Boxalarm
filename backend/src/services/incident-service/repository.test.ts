@@ -31,6 +31,7 @@ interface TransactUpdateItem {
     readonly Key: Record<string, string>;
     readonly ConditionExpression: string;
     readonly UpdateExpression: string;
+    readonly ExpressionAttributeNames?: Record<string, string>;
     readonly ExpressionAttributeValues: Record<string, unknown>;
   };
 }
@@ -450,6 +451,35 @@ describe('createIncidentRepository', () => {
     },
   );
 
+  it('writes only the submitted fields under corePayload so concurrent module saves survive', async () => {
+    const send = vi.fn().mockResolvedValue({
+      Item: {
+        pk: 'DEPT#NICHOLS#INCIDENT#NICHOLS-4471-1798000000',
+        sk: 'METADATA',
+        incidentId: 'NICHOLS-4471-1798000000',
+        deptId: 'NICHOLS',
+        corePayload: { action_taken: 'EXTINGUISH' },
+        status: 'DRAFT',
+      },
+    });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    await repository.updateCorePayload(
+      DEPT_ID,
+      'NICHOLS-4471-1798000000',
+      { action_taken: 'EXTINGUISH' },
+      'DRAFT',
+      2,
+      TRACE_ID,
+    );
+
+    const update = entityUpdate(send);
+    expect(update.UpdateExpression).toContain('corePayload.#f0 = :f0');
+    expect(update.UpdateExpression).not.toContain('corePayload = :corePayload');
+    expect(update.ExpressionAttributeNames?.['#f0']).toBe('action_taken');
+    expect(update.ExpressionAttributeValues[':f0']).toBe('EXTINGUISH');
+  });
+
   it('leaves the denormalized top-level fields untouched when corePayload has no matching keys', async () => {
     const send = vi.fn().mockResolvedValue({
       Item: {
@@ -583,6 +613,24 @@ describe('createIncidentRepository', () => {
     await expect(
       repository.updateCorePayload(DEPT_ID, 'NICHOLS-4471-1798000000', {}, 'DRAFT', 2, TRACE_ID),
     ).rejects.toThrow('DynamoDB unavailable');
+  });
+
+  it('follows LastEvaluatedKey so a result larger than one Query page is not truncated', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        Items: [{ incidentId: 'A', alarmAt: 100, status: 'DRAFT' }],
+        LastEvaluatedKey: { pk: 'x' },
+      })
+      .mockResolvedValueOnce({ Items: [{ incidentId: 'B', alarmAt: 200, status: 'DRAFT' }] });
+    const repository = createIncidentRepository(fakeClient(send), TABLE_NAME);
+
+    const results = await repository.searchIncidents(DEPT_ID, { fromAlarmAt: 0, toAlarmAt: 300 });
+
+    expect(results.map((incident) => incident.incidentId)).toEqual(['A', 'B']);
+    expect(send).toHaveBeenCalledTimes(2);
+    const [second] = send.mock.calls[1] as [{ input: Record<string, unknown> }];
+    expect(second.input.ExclusiveStartKey).toEqual({ pk: 'x' });
   });
 
   it('searches incidents by alarm-time range via GSI1, ordered by alarm time (E6-S10 AC1)', async () => {

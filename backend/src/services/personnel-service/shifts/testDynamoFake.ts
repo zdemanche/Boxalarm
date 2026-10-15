@@ -214,6 +214,12 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
       return Promise.resolve({ Items: items });
     }
 
+    if (name === 'PutCommand') {
+      const item = input.Item as FakeItem;
+      store.set(itemKey(item), item);
+      return Promise.resolve({});
+    }
+
     if (name === 'UpdateCommand') {
       const key = input.Key as FakeItem;
       const lookupKey = itemKey(key);
@@ -237,6 +243,18 @@ export function createFakeDocumentClient(seed: readonly FakeItem[] = []): FakeDo
       const items = (input.TransactItems ?? []) as readonly TransactItem[];
       const reasons: string[] = [];
       let anyFailed = false;
+
+      const keys = items.map((item) =>
+        itemKey(item.Put?.Item ?? item.Update?.Key ?? item.ConditionCheck?.Key ?? {}),
+      );
+      if (new Set(keys).size !== keys.length) {
+        return Promise.reject(
+          Object.assign(
+            new Error('Transaction request cannot include multiple operations on one item'),
+            { name: 'ValidationException' },
+          ),
+        );
+      }
 
       for (const item of items) {
         if (item.ConditionCheck) {

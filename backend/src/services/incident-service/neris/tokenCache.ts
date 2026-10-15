@@ -72,6 +72,19 @@ function basicAuthHeader(clientId: string, clientSecret: string): string {
   return `Basic ${Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64')}`;
 }
 
+export class NerisCredentialsRejectedError extends Error {
+  readonly #config: NerisConfig;
+
+  constructor(status: number, config: NerisConfig) {
+    super(`NERIS token endpoint returned HTTP ${status}`);
+    this.#config = config;
+  }
+
+  get rejectedConfig(): NerisConfig {
+    return this.#config;
+  }
+}
+
 async function requestAccessToken(
   config: NerisConfig,
   fetchFn: FetchFn,
@@ -94,6 +107,9 @@ async function requestAccessToken(
       correlationId: randomUUID(),
       status: response.status,
     });
+    if (response.status === 400 || response.status === 401) {
+      throw new NerisCredentialsRejectedError(response.status, config);
+    }
     throw new Error(`NERIS token endpoint returned HTTP ${response.status}`);
   }
 

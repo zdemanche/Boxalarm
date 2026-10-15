@@ -11,7 +11,7 @@ import { extractTraceparent } from '@boxalarm/logging';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { getDocClient, readInventoryConfig } from '../../lib/dynamoDb.js';
 import { emitMetric, logEvent } from '../../lib/logger.js';
-import { ValidationError, toProblemResponse } from '../../lib/problemDetails.js';
+import { ValidationError, parseJsonBody, toProblemResponse } from '../../lib/problemDetails.js';
 import { createEquipmentAsset } from '../equipmentRepository.js';
 
 export function createCreateEquipmentHandler(docClient?: DynamoDBDocumentClient) {
@@ -29,7 +29,7 @@ export function createCreateEquipmentHandler(docClient?: DynamoDBDocumentClient)
       const deptId = toVerifiedDeptId(principal);
       const actorId = principal.sub;
 
-      const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+      const body = parseJsonBody(event.body);
       const serialNumber = typeof body.serialNumber === 'string' ? body.serialNumber.trim() : '';
       if (!serialNumber) {
         throw new ValidationError('serialNumber is required and must be a non-empty string');

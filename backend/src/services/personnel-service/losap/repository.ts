@@ -103,36 +103,3 @@ export async function getMemberLosapTotal(
     throw new LosapRepositoryUnavailableError(error);
   }
 }
-
-export interface YearEndMemberTotal {
-  readonly memberId: string;
-  readonly totalPoints: number;
-}
-
-const YEAR_END_REPORT_CHUNK_SIZE = 25;
-
-export async function getYearEndReport(
-  client: DynamoDBDocumentClient,
-  tableName: string,
-  deptId: VerifiedDeptId,
-  memberIds: readonly string[],
-  year: number,
-): Promise<readonly YearEndMemberTotal[]> {
-  try {
-    const report: YearEndMemberTotal[] = [];
-    for (let start = 0; start < memberIds.length; start += YEAR_END_REPORT_CHUNK_SIZE) {
-      const chunk = memberIds.slice(start, start + YEAR_END_REPORT_CHUNK_SIZE);
-      const chunkResults = await Promise.all(
-        chunk.map(async (memberId) => {
-          const points = await queryMemberLosapPoints(client, tableName, deptId, memberId, year);
-          return { memberId, totalPoints: points.reduce((sum, entry) => sum + entry, 0) };
-        }),
-      );
-      report.push(...chunkResults);
-    }
-    return report;
-  } catch (error) {
-    logLosapError('losap.repository.getYearEndReport.failed', error, { deptId, year });
-    throw new LosapRepositoryUnavailableError(error);
-  }
-}

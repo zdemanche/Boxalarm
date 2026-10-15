@@ -96,6 +96,7 @@ export function createLifecycleHandler(dynamoClient?: DynamoDBDocumentClient) {
         client,
         config,
         deptId,
+        principal.sub,
         assetId,
         asset.lifecycleStatus,
         target,

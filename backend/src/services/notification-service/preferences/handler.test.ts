@@ -23,7 +23,11 @@ const PRINCIPAL: CedarPrincipalContext = {
   'cognito:groups': 'member',
 };
 
-function buildEvent(routeKey: string, body: unknown): GuardEvent {
+function buildEvent(
+  routeKey: string,
+  body: unknown,
+  queryStringParameters?: Record<string, string>,
+): GuardEvent {
   return {
     version: '2.0',
     routeKey,
@@ -31,6 +35,7 @@ function buildEvent(routeKey: string, body: unknown): GuardEvent {
     rawQueryString: '',
     headers: { authorization: 'Bearer token' },
     pathParameters: undefined,
+    queryStringParameters,
     body: body === undefined ? undefined : JSON.stringify(body),
     requestContext: { authorizer: { lambda: PRINCIPAL } },
   } as unknown as GuardEvent;
@@ -211,5 +216,36 @@ describe('preferences handler (entrypoint-test + authz-wiring obligations)', () 
     expect(result.statusCode).toBe(404);
     expect(send).not.toHaveBeenCalled();
     expect(dynamoSend).not.toHaveBeenCalled();
+  });
+
+  it("keys every read and write on the caller's own member partition, ignoring a spoofed memberId", async () => {
+    send.mockResolvedValue({ decision: Decision.ALLOW });
+    const dynamoSend = vi.fn().mockResolvedValue({ Items: [] });
+    mockDdb(dynamoSend);
+
+    const { putHandler, getHandler } = await import('./handler.js');
+    await putHandler(
+      buildEvent('PUT /api/v1/notifications/preferences', {
+        category: 'cert-expiry',
+        channels: { push: true, email: false },
+        memberId: 'MBR-2',
+      }),
+    );
+    await getHandler(
+      buildEvent('GET /api/v1/notifications/preferences', undefined, { memberId: 'MBR-2' }),
+    );
+
+    const [put, query] = dynamoSend.mock.calls.map(
+      (call) => call[0] as { input: Record<string, unknown> },
+    );
+    expect(put!.input.Item).toMatchObject({
+      pk: 'DEPT#NICHOLS#MEMBER#MBR-1',
+      sk: 'NOTIFPREF#MBR-1#cert-expiry',
+      memberId: 'MBR-1',
+    });
+    expect(query!.input.ExpressionAttributeValues).toEqual({
+      ':pk': 'DEPT#NICHOLS#MEMBER#MBR-1',
+      ':prefix': 'NOTIFPREF#MBR-1#',
+    });
   });
 });

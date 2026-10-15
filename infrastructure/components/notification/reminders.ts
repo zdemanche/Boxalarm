@@ -66,7 +66,7 @@ const pendingWriteOnly = ({ tableArn }: GrantContext): IamPolicyStatement[] => [
  *   apparatus.defect.reported (apparatus-service outbox) -> apparatusDefectConsumer.ts
  *   inventory.reorder.due     (consumable scanner)       -> inventoryReorderDueConsumer.ts
  *   ppe.expiry.due            (PPE expiry scanner)       -> ppeExpiryConsumer.ts
- *   neris.incident.rejected|failed (NERIS status poller) -> nerisReportConsumer.ts
+ *   neris.incident.rejected|failed|deleted (NERIS status poller) -> nerisReportConsumer.ts
  *   neris.no_activity.due     (NERIS reconciliation)     -> nerisNoActivityConsumer.ts
  *
  * The defect consumer also delivers an out-of-service defect immediately: it reads the
@@ -79,6 +79,7 @@ export class Reminders extends pulumi.ComponentResource {
   public readonly consumerLambdas: Record<string, ServiceLambda> = {};
   public readonly consumers: Record<string, QueueConsumer> = {};
   public readonly outOfServiceUnheardAlarm: aws.cloudwatch.MetricAlarm;
+  public readonly apparatusStatusUnheardAlarm: aws.cloudwatch.MetricAlarm;
 
   constructor(name: string, args: RemindersArgs, opts?: pulumi.ComponentResourceOptions) {
     requireEnv("Reminders", args.env);
@@ -209,6 +210,8 @@ export class Reminders extends pulumi.ComponentResource {
           "neris.submission.failed",
           // Reconciliation gave up on a record NERIS stopped listing (round 2, N6).
           "neris.incident.missing",
+          // NERIS deleted a record it had accepted: the report is re-creatable, so say so.
+          "neris.incident.deleted",
         ],
         // Digest rows + an immediate inbox item per recipient (PutItem), after reading the
         // roster for the officers (GSI3).
@@ -287,12 +290,13 @@ export class Reminders extends pulumi.ComponentResource {
           lambdaRole: lambda.role,
           alarmTopicArn: args.chiefNotificationTopicArn,
           maxReceiveCount: 5,
+          reportBatchItemFailures: true,
         },
         { parent: this },
       );
     }
 
-    // apparatusDefectConsumer.ts emits ApparatusDefectImmediateNoRecipients when a unit is
+    // immediateDelivery.ts emits ApparatusDefectImmediateNoRecipients when a unit is
     // reported out of service and no active APPARATUS or OFFICER holder exists to tell. The
     // handler succeeds, so neither the DLQ nor the Errors metric would ever show it.
     this.outOfServiceUnheardAlarm = new aws.cloudwatch.MetricAlarm(
@@ -303,6 +307,25 @@ export class Reminders extends pulumi.ComponentResource {
           "An apparatus was reported out of service and no active APPARATUS or OFFICER member exists to notify.",
         namespace: NOTIFICATION_METRIC_NAMESPACE,
         metricName: "ApparatusDefectImmediateNoRecipients",
+        statistic: "Sum",
+        period: 300,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.chiefNotificationTopicArn],
+      },
+      { parent: this },
+    );
+
+    this.apparatusStatusUnheardAlarm = new aws.cloudwatch.MetricAlarm(
+      `${name}-status-no-recipients-alarm`,
+      {
+        name: `boxalarm-${env}-notification-apparatus-status-no-recipients`,
+        alarmDescription:
+          "An apparatus status change was reported and no active APPARATUS or OFFICER member exists to notify.",
+        namespace: NOTIFICATION_METRIC_NAMESPACE,
+        metricName: "ApparatusStatusImmediateNoRecipients",
         statistic: "Sum",
         period: 300,
         evaluationPeriods: 1,

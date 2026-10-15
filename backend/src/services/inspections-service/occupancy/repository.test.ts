@@ -1,13 +1,20 @@
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import { LocalstackContainer, type StartedLocalStackContainer } from '@testcontainers/localstack';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createOccupancy,
   getOccupancyById,
   listOccupancies,
+  OccupancyNotFoundError,
   updateOccupancy,
 } from './repository.js';
+import { coveringCells } from '../map/geohash.js';
 import type { OccupancyServiceConfig } from './config.js';
 import type { CreateOccupancyInput } from './validation.js';
 
@@ -163,6 +170,25 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     });
   });
 
+  it('creates an occupancy whose address contains # with an encoded ADDR index partition', async () => {
+    const occupancyId = `OCC-${Date.now()}-hash`;
+    await createOccupancy(
+      config,
+      PRINCIPAL,
+      occupancyId,
+      { ...sampleCreateInput(), address: '12 Oak St #3', normalizedAddress: '12 OAK ST #3' },
+      'MBR-0001',
+      'trace-hash',
+    );
+    const addrIndex = await documentClientForTest().send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${DEPT_ID}#OCCUPANCY#${occupancyId}`, sk: 'ADDR#12 OAK ST #3' },
+      }),
+    );
+    expect(addrIndex.Item?.gsi3pk).toBe(`DEPT#${DEPT_ID}#OCCUPANCY#ADDR#12 OAK ST %233`);
+  });
+
   it('creates an occupancy without coordinates and omits the GEO gsi3pk/gsi3sk pair', async () => {
     const occupancyId = `OCC-${Date.now()}-nogeo`;
     const { latitude, longitude, ...noCoords } = sampleCreateInput();
@@ -289,6 +315,78 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
     expect(auditQuery.Items?.some((entry) => entry.action === 'CREATE')).toBe(true);
   });
 
+  it('files an occupancy on a geohash split in the cell the map covering set returns for a bbox starting there', async () => {
+    const occupancyId = `OCC-${Date.now()}-boundary`;
+    await createOccupancy(
+      config,
+      PRINCIPAL,
+      occupancyId,
+      sampleCreateInput({ latitude: 41.23, longitude: -73.125 }),
+      'MBR-0001',
+      'trace-boundary',
+    );
+    const raw = await documentClientForTest().send(
+      new GetCommand({
+        TableName: TABLE_NAME,
+        Key: { pk: `DEPT#${DEPT_ID}#OCCUPANCY#${occupancyId}`, sk: 'METADATA' },
+      }),
+    );
+    const cells = coveringCells({ minLat: 41.2, minLng: -73.125, maxLat: 41.26, maxLng: -73.05 });
+    expect(cells.map((cell) => `DEPT#${DEPT_ID}#OCCUPANCY#GEO#${cell}`)).toContain(
+      raw.Item?.gsi3pk,
+    );
+  });
+
+  it('rejects an update to an archived occupancy without writing or auditing (read-only once archived)', async () => {
+    const occupancyId = `OCC-${Date.now()}-archived`;
+    const created = await createOccupancy(
+      config,
+      PRINCIPAL,
+      occupancyId,
+      sampleCreateInput(),
+      'MBR-0001',
+      'trace-archived-create',
+    );
+    const doc = documentClientForTest();
+    const pk = `DEPT#${DEPT_ID}#OCCUPANCY#${occupancyId}`;
+    await doc.send(
+      new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { pk, sk: 'METADATA' },
+        UpdateExpression: 'SET archivedAt = :now',
+        ExpressionAttributeValues: { ':now': 1 },
+      }),
+    );
+
+    await expect(
+      updateOccupancy(
+        config,
+        PRINCIPAL,
+        occupancyId,
+        created,
+        { hazards: ['FLAMMABLE_STORAGE'] },
+        'MBR-0034',
+        'trace-archived-update',
+      ),
+    ).rejects.toBeInstanceOf(OccupancyNotFoundError);
+
+    const stored = await doc.send(
+      new GetCommand({ TableName: TABLE_NAME, Key: { pk, sk: 'METADATA' } }),
+    );
+    expect(stored.Item?.hazards).toEqual(['PROPANE_TANK']);
+    const auditQuery = await doc.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: 'GSI3',
+        KeyConditionExpression: 'gsi3pk = :gsi3pk',
+        ExpressionAttributeValues: {
+          ':gsi3pk': `DEPT#${DEPT_ID}#AUDIT#ENTITY#OCCUPANCY#${occupancyId}`,
+        },
+      }),
+    );
+    expect(auditQuery.Items?.some((entry) => entry.action === 'UPDATE')).toBe(false);
+  });
+
   it('rejects an update to a non-existent occupancy without writing an orphaned audit entry (core-harm)', async () => {
     const missingId = `OCC-${Date.now()}-missing`;
     const fakeExisting = {
@@ -311,7 +409,7 @@ describe('occupancy repository (real DynamoDB via LocalStack)', () => {
         'MBR-1',
         'trace-missing',
       ),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(OccupancyNotFoundError);
 
     const doc = documentClientForTest();
     const auditQuery = await doc.send(

@@ -3,6 +3,8 @@ import { DynamoDBDocumentClient, PutCommand, QueryCommand } from '@aws-sdk/lib-d
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import type { OutOfServiceSummary } from './repository.js';
+import type { TestType } from './testRecord.js';
 
 export type ApparatusStatus = 'IN_SERVICE' | 'OUT_OF_SERVICE';
 
@@ -11,6 +13,7 @@ export interface Apparatus {
   readonly unitId: string;
   readonly type: string;
   readonly status: ApparatusStatus;
+  readonly outOfService?: OutOfServiceSummary;
 }
 
 export interface CreateApparatusInput {
@@ -76,11 +79,22 @@ function toApparatusId(unitId: string): string {
 }
 
 function toApparatus(item: Record<string, unknown>): Apparatus {
+  const status = item.status as ApparatusStatus;
+  const startAt = item.outOfServiceStartAt;
   return {
     apparatusId: item.apparatusId as string,
     unitId: item.unitId as string,
     type: item.type as string,
-    status: item.status as ApparatusStatus,
+    status,
+    ...(status === 'OUT_OF_SERVICE' && typeof startAt === 'number'
+      ? {
+          outOfService: {
+            reason: item.outOfServiceReason as string,
+            startAt,
+            elapsedSeconds: Math.max(0, Math.floor(Date.now() / 1000) - startAt),
+          },
+        }
+      : {}),
   };
 }
 
@@ -94,6 +108,14 @@ function toOpenDefectSummary(item: Record<string, unknown>): OpenDefectSummary {
     itemCode: typeof item.itemCode === 'string' ? item.itemCode : null,
   };
 }
+
+const TEST_TYPE_REGISTRY: Record<TestType, true> = {
+  HOSE: true,
+  LADDER: true,
+  PUMP: true,
+  AERIAL: true,
+};
+const TEST_TYPES = Object.keys(TEST_TYPE_REGISTRY) as TestType[];
 
 function latestFailedTestsPerType(
   items: readonly Record<string, unknown>[],
@@ -186,7 +208,7 @@ export function createApparatusRepository(
         return undefined;
       }
       try {
-        const [defectsResult, testsResult] = await Promise.all([
+        const [defectsResult, ...testResults] = await Promise.all([
           client.send(
             new QueryCommand({
               TableName: tableName,
@@ -200,27 +222,28 @@ export function createApparatusRepository(
               },
             }),
           ),
-          client.send(
-            new QueryCommand({
-              TableName: tableName,
-              KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
-              ExpressionAttributeValues: {
-                ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
-                ':prefix': 'TEST#',
-              },
-              ScanIndexForward: false,
-              // Newest-first + a small bound is enough to find the latest result per test
-              // type (at most 4: HOSE/LADDER/PUMP/AERIAL) without scanning a unit's entire
-              // lifetime test history on every hot GET /apparatus/{unitId} call.
-              Limit: 20,
-            }),
+          ...TEST_TYPES.map((testType) =>
+            client.send(
+              new QueryCommand({
+                TableName: tableName,
+                KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+                ExpressionAttributeValues: {
+                  ':pk': buildDeptScopedPk(deptId, 'APPARATUS', apparatus.apparatusId),
+                  ':prefix': `TEST#${testType}#`,
+                },
+                ScanIndexForward: false,
+                Limit: 1,
+              }),
+            ),
           ),
         ]);
 
         return {
           ...apparatus,
           openDefects: (defectsResult.Items ?? []).map(toOpenDefectSummary),
-          failedTests: latestFailedTestsPerType(testsResult.Items ?? []),
+          failedTests: latestFailedTestsPerType(
+            testResults.flatMap((result) => result.Items ?? []),
+          ),
         };
       } catch (error) {
         console.error(

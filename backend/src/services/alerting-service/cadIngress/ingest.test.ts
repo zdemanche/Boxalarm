@@ -11,6 +11,7 @@ import {
   ingestCadDispatch,
 } from './ingest.js';
 import { fakeDynamo as fakeDynamoTable, type FakeTable } from './__fixtures__/fakeTable.js';
+import { readWebhookBody } from './webhookHandler.js';
 import type { CadSourceCopy } from './sourceCopy.js';
 
 const DEPT = toVerifiedDeptId({ deptId: 'nichols-fd' });
@@ -287,6 +288,19 @@ describe('text-only identities expire (chain review C1)', () => {
     );
   });
 
+  it('X-003: a lock written before locks carried expiresAt expires by its age', async () => {
+    const table: FakeTable = { items: new Map() };
+    await send(table, 1_800_000_000);
+    const lock = [...table.items.values()].find(
+      (i) => i.entityType === 'DISPATCH_IDEMPOTENCY_LOCK',
+    )!;
+    delete lock.expiresAt;
+    expect((await send(table, 1_800_000_000 + TEXT_IDENTITY_SECONDS - 1)).outcome).toBe(
+      'duplicate',
+    );
+    expect((await send(table, 1_800_000_000 + TEXT_IDENTITY_SECONDS)).outcome).toBe('created');
+  });
+
   it('a source with no template never swallows a repeat call past the window', async () => {
     const table: FakeTable = { items: new Map() };
     const bare: CadSourceCopy = { sourceId: 'county', label: 'County CAD', enabled: true };
@@ -352,8 +366,18 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
         { field: 'unitsRequested', from: 'E1, L2', to: 'E1, L2, R1' },
       ]) as unknown,
     });
-    // No second bridge event / incident draft.
-    expect([...table.items.values()].filter((i) => i.eventType).length).toBe(outboxBefore);
+    // One more bridge event: the refreshed dispatch copy for incident-service (an upsert
+    // keyed by dispatchId, never a second incident draft).
+    const outbox = [...table.items.values()].filter((i) => i.eventType);
+    expect(outbox).toHaveLength(outboxBefore + 1);
+    expect(outbox.at(-1)).toMatchObject({
+      eventType: 'dispatch.alert.received',
+      payload: {
+        address: '123 MAIN ST, NICHOLS',
+        dispatchedAt: 1_800_000_000,
+        revision: 1,
+      },
+    });
   });
 
   it('notifier gap: an update leaves a pending marker; a retry of an unnotified update hands it off again', async () => {
@@ -523,6 +547,230 @@ describe('CAD updates to an incident already paged (decision 2026-09-30)', () =>
   });
 });
 
+describe('a CAD correction reaches incident-service (B1-020)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const bridged = (table: FakeTable) =>
+    [...table.items.values()].filter((i) => i.eventType === 'dispatch.alert.received');
+  const send = (table: FakeTable, text: string, receivedAt: number) =>
+    ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text,
+      receivedAt,
+    });
+
+  it('a corrected address is re-emitted with the merged fields, the original time and a revision', async () => {
+    const table: FakeTable = { items: new Map() };
+    await send(table, 'INC: 2026-7\nADDR: 12 ELM ST, NICHOLS\nXST: OAK', 1_800_000_000);
+    await send(table, 'INC: 2026-7\nADDR: 21 ELM ST, NICHOLS', 1_800_000_060);
+    const [original, correction] = bridged(table);
+    expect(original?.payload).not.toHaveProperty('revision');
+    expect(correction?.payload).toMatchObject({
+      address: '21 ELM ST, NICHOLS',
+      crossStreets: 'OAK',
+      dispatchedAt: 1_800_000_000,
+      revision: 1,
+      incidentType: 'CAD DISPATCH',
+      narrative: expect.stringContaining('21 ELM ST') as string,
+    });
+    expect(correction?.payload).not.toHaveProperty('verifyRequired');
+  });
+
+  it('two updates racing for one revision: the loser re-reads and takes the next one', async () => {
+    const table: FakeTable = { items: new Map() };
+    await send(table, 'INC: 2026-9\nADDR: 1 ELM ST, NICHOLS', 1_800_000_000);
+    const real = fakeDynamoTable(table);
+    let raced = false;
+    const racing = {
+      send: (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+        const entries = (command.input.TransactItems ?? []) as {
+          Update?: { Key: { pk: string } };
+        }[];
+        const update = entries.find((entry) => entry.Update)?.Update;
+        if (update && !raced) {
+          raced = true;
+          const key = `${update.Key.pk}|METADATA`;
+          table.items.set(key, { ...table.items.get(key), updateCount: 1 });
+        }
+        return (real.send as (c: unknown) => Promise<unknown>)(command);
+      },
+    } as unknown as DynamoDBDocumentClient;
+    await ingestCadDispatch(racing, 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text: 'INC: 2026-9\nADDR: 2 ELM ST, NICHOLS',
+      receivedAt: 1_800_000_060,
+    });
+    expect(bridged(table).at(-1)?.payload).toMatchObject({
+      address: '2 ELM ST, NICHOLS',
+      revision: 2,
+    });
+  });
+
+  it('a RAW call later structured is re-emitted without VERIFY', async () => {
+    const table: FakeTable = { items: new Map() };
+    await send(table, 'INC: 2026-8\nunreadable', 1_800_000_000);
+    expect(bridged(table)[0]?.payload).toMatchObject({ verifyRequired: true });
+    await send(table, 'INC: 2026-8\nADDR: 5 MILL RD, NICHOLS', 1_800_000_060);
+    expect(bridged(table)[1]?.payload).toMatchObject({ address: '5 MILL RD, NICHOLS' });
+    expect(bridged(table)[1]?.payload).not.toHaveProperty('verifyRequired');
+  });
+});
+
+describe('an update that changes nothing pushes nobody (B1-125)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const withNotes: CadSourceCopy = {
+    sourceId: 'county',
+    label: 'County',
+    enabled: true,
+    parser: {
+      version: 1,
+      fields: {
+        incidentNumber: { label: 'INC' },
+        address: { label: 'ADDR' },
+        narrative: { label: 'NOTES' },
+      },
+    },
+  };
+  const send = (table: FakeTable, text: string, receivedAt: number) =>
+    ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: withNotes,
+      channel: 'cad-webhook',
+      text,
+      receivedAt,
+    });
+
+  it('a resend that differs only in its timestamp records history, no pending notice, no push', async () => {
+    const table: FakeTable = { items: new Map() };
+    const at = (time: string) =>
+      `INC: 9\nTIME: ${time}\nADDR: 3 PINE ST, NICHOLS\nNOTES: SMOKE SEEN`;
+    expect((await send(table, at('0312'), 1_800_000_000)).outcome).toBe('created');
+    expect((await send(table, at('0314'), 1_800_000_120)).outcome).toBe('duplicate');
+    const types = (type: string) => [...table.items.values()].filter((i) => i.entityType === type);
+    expect(types('CAD_UPDATE_PENDING')).toHaveLength(0);
+    expect(types('DISPATCH_UPDATE')[0]).toMatchObject({ changes: [], notifiedAt: 1_800_000_120 });
+    expect([...table.items.values()].filter((i) => i.eventType)).toHaveLength(1);
+    // The sender's retry of that resend is still a duplicate, never a push.
+    expect((await send(table, at('0314'), 1_800_000_150)).outcome).toBe('duplicate');
+    const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
+    expect(logged.some((l) => l.includes('"CadIngressUpdated"'))).toBe(false);
+    expect(logged.some((l) => l.includes('"CadUpdateNoticeRedriven"'))).toBe(false);
+  });
+});
+
+describe('a call is never merged into another (B1-060 backed out)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const NO_INCIDENT: CadSourceCopy = {
+    sourceId: 'county',
+    label: 'County CAD',
+    enabled: true,
+    parser: { version: 1, fields: { incidentType: { label: 'TYPE' }, address: { label: 'ADDR' } } },
+  };
+  const send = (
+    table: FakeTable,
+    source: CadSourceCopy,
+    channel: 'cad-email' | 'cad-webhook',
+    text: string,
+    receivedAt: number,
+  ) =>
+    ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source,
+      channel,
+      text,
+      receivedAt,
+    });
+  const alertCount = (table: FakeTable) =>
+    [...table.items.values()].filter((i) => i.entityType === 'DISPATCH_ALERT').length;
+
+  it('two calls to one address that differ only in a line the template does not extract both page', async () => {
+    const table: FakeTable = { items: new Map() };
+    const call = (time: string, caller: string) =>
+      `TYPE: MEDICAL\nADDR: 1 CARE LN, NICHOLS\nTIME: ${time}\nCALLER: ${caller}`;
+    expect(
+      (await send(table, NO_INCIDENT, 'cad-webhook', call('0312', 'ROOM 4'), 1_800_000_000))
+        .outcome,
+    ).toBe('created');
+    expect(
+      (await send(table, NO_INCIDENT, 'cad-webhook', call('0317', 'ROOM 9'), 1_800_000_300))
+        .outcome,
+    ).toBe('created');
+    expect(alertCount(table)).toBe(2);
+  });
+
+  it('a remark put in front of the stored text and sent only by email is an update, not a copy', async () => {
+    const withNotes: CadSourceCopy = {
+      sourceId: 'county',
+      label: 'County CAD',
+      enabled: true,
+      parser: {
+        version: 1,
+        fields: {
+          incidentNumber: { label: 'INC' },
+          address: { label: 'ADDR' },
+          narrative: { label: 'NOTES' },
+        },
+      },
+    };
+    const table: FakeTable = { items: new Map() };
+    await send(
+      table,
+      withNotes,
+      'cad-webhook',
+      'INC: 5\nADDR: 9 OAK ST, NICHOLS\nNOTES: SMOKE SEEN',
+      1_800_000_000,
+    );
+    const front = await send(
+      table,
+      withNotes,
+      'cad-email',
+      'INC: 5\nADDR: 9 OAK ST, NICHOLS\nNOTES: 14:05 PERSON TRAPPED SMOKE SEEN',
+      1_800_000_060,
+    );
+    expect(front.outcome).toBe('updated');
+  });
+
+  it('two calls to one address with different NOTES both page', async () => {
+    const withNotes: CadSourceCopy = {
+      sourceId: 'county',
+      label: 'County CAD',
+      enabled: true,
+      parser: {
+        version: 1,
+        fields: {
+          incidentType: { label: 'TYPE' },
+          address: { label: 'ADDR' },
+          narrative: { label: 'NOTES' },
+        },
+      },
+    };
+    const table: FakeTable = { items: new Map() };
+    const call = (notes: string) => `TYPE: MEDICAL\nADDR: 1 CARE LN, NICHOLS\nNOTES: ${notes}`;
+    expect((await send(table, withNotes, 'cad-webhook', call('FALL'), 1_800_000_000)).outcome).toBe(
+      'created',
+    );
+    expect(
+      (await send(table, withNotes, 'cad-email', call('CHEST PAIN'), 1_800_000_060)).outcome,
+    ).toBe('created');
+    expect(alertCount(table)).toBe(2);
+  });
+});
+
 describe('template deadline (security review M3)', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -547,4 +795,109 @@ describe('template deadline (security review M3)', () => {
     const logged = vi.mocked(console.log).mock.calls.map(([l]) => String(l));
     expect(logged.some((l) => l.includes('"CadParseTimeout":1'))).toBe(true);
   }, 10_000);
+
+  it('B1-070: an update whose template times out is still an update of the paged incident', async () => {
+    const table: FakeTable = { items: new Map() };
+    const slow: CadSourceCopy = {
+      sourceId: 'county',
+      label: 'County',
+      enabled: true,
+      parser: {
+        version: 3,
+        fields: { incidentNumber: { label: 'INC' }, address: { pattern: '^(a|a)*$' } },
+      },
+    };
+    const send = (text: string, receivedAt: number) =>
+      ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+        deptId: DEPT,
+        source: slow,
+        channel: 'cad-webhook',
+        text,
+        receivedAt,
+      });
+    expect((await send(`INC: 7\n${'a'.repeat(40)}!`, 1_800_000_000)).outcome).toBe('created');
+    expect((await send(`INC: 7\n${'a'.repeat(39)}!`, 1_800_000_060)).outcome).toBe('updated');
+    expect([...table.items.values()].filter((i) => i.entityType === 'DISPATCH_ALERT')).toHaveLength(
+      1,
+    );
+  }, 15_000);
+});
+
+describe('webhook bodies with structured fields and a text key', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const post = (table: FakeTable, body: Record<string, unknown>, receivedAt: number) => {
+    const read = readWebhookBody(JSON.stringify(body));
+    return ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text: read.text,
+      ...(read.structured ? { structured: read.structured } : {}),
+      ...(read.identityText ? { identityText: read.identityText } : {}),
+      receivedAt,
+    });
+  };
+  const alertOfTable = (table: FakeTable) =>
+    [...table.items.values()].find((i) => i.entityType === 'DISPATCH_ALERT')!;
+
+  it('two calls with no incident number, the same text and different addresses both page', async () => {
+    const table: FakeTable = { items: new Map() };
+    const first = await post(table, { address: '5 OAK AVE', text: '' }, 1_800_000_000);
+    const second = await post(table, { address: '99 PINE RD', text: '' }, 1_800_000_120);
+    expect([first.outcome, second.outcome]).toEqual(['created', 'created']);
+  });
+
+  it('an address correction with the same text is an update; an exact resend is a duplicate', async () => {
+    const table: FakeTable = { items: new Map() };
+    const body = { incidentNumber: '2026-5', address: '12 ELM ST', text: 'STRUCTURE FIRE' };
+    expect((await post(table, body, 1_800_000_000)).outcome).toBe('created');
+    expect((await post(table, body, 1_800_000_030)).outcome).toBe('duplicate');
+    const corrected = await post(table, { ...body, address: '21 ELM ST' }, 1_800_000_060);
+    expect(corrected.outcome).toBe('updated');
+    expect(alertOfTable(table)).toMatchObject({ address: '21 ELM ST' });
+  });
+});
+
+describe('a PARSED update that carries no TYPE keeps the paged type', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const at = (table: FakeTable, text: string, receivedAt: number) =>
+    ingestCadDispatch(fakeDynamoTable(table), 'alerting', {
+      deptId: DEPT,
+      source: SOURCE,
+      channel: 'cad-webhook',
+      text,
+      receivedAt,
+    });
+  const alertOfTable = (table: FakeTable) =>
+    [...table.items.values()].find((i) => i.entityType === 'DISPATCH_ALERT')!;
+
+  it('adding units without a TYPE line leaves STRUCTURE FIRE and summarizes only the units', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, TEXT, 1_800_000_000);
+    const update = ['INC: 2026-4471', 'ADDR: 123 MAIN ST, NICHOLS', 'UNITS: E1, L2, R1'].join('\n');
+    expect((await at(table, update, 1_800_000_060)).outcome).toBe('updated');
+    expect(alertOfTable(table)).toMatchObject({ incidentType: 'STRUCTURE FIRE' });
+    const history = [...table.items.values()].find((i) => i.entityType === 'DISPATCH_UPDATE')!;
+    expect(history.summary).toBe('Units: E1, L2, R1');
+  });
+
+  it('a structured update with a TYPE still replaces the VERIFY placeholder of a RAW page', async () => {
+    const table: FakeTable = { items: new Map() };
+    await at(table, 'INC: 2026-4471\nunreadable text', 1_800_000_000);
+    expect(alertOfTable(table)).toMatchObject({ incidentType: RAW_INCIDENT_TYPE });
+    const update = ['INC: 2026-4471', 'ADDR: 123 MAIN ST, NICHOLS'].join('\n');
+    await at(table, update, 1_800_000_060);
+    expect(alertOfTable(table)).toMatchObject({
+      incidentType: 'CAD DISPATCH',
+      verifyRequired: false,
+    });
+  });
 });

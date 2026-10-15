@@ -37,21 +37,34 @@ function buildTranscriptLines(transcript: Transcript): readonly string[] {
   return lines;
 }
 
+const LINES_PER_PAGE = 60;
+
 function buildContentStream(lines: readonly string[]): string {
   const body = lines.map((line) => `(${pdfEscape(line)}) Tj T*`).join('\n');
   return `BT\n/F1 10 Tf\n12 TL\n50 780 Td\n${body}\nET`;
 }
 
+function chunkLines(lines: readonly string[]): readonly (readonly string[])[] {
+  const pages: (readonly string[])[] = [];
+  for (let i = 0; i < lines.length; i += LINES_PER_PAGE) {
+    pages.push(lines.slice(i, i + LINES_PER_PAGE));
+  }
+  return pages;
+}
+
 export function renderTranscriptPdf(transcript: Transcript): Buffer {
-  const contentStream = buildContentStream(buildTranscriptLines(transcript));
-  const contentLength = Buffer.byteLength(contentStream, 'latin1');
+  const streams = chunkLines(buildTranscriptLines(transcript)).map(buildContentStream);
+  const firstPageObject = 4;
+  const pageRefs = streams.map((_, i) => `${firstPageObject + i * 2} 0 R`);
 
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Pages /Kids [${pageRefs.join(' ')}] /Count ${streams.length} >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${contentLength} >>\nstream\n${contentStream}\nendstream`,
+    ...streams.flatMap((stream, i) => [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${firstPageObject + i * 2 + 1} 0 R >>`,
+      `<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}\nendstream`,
+    ]),
   ];
 
   let pdf = '%PDF-1.4\n';

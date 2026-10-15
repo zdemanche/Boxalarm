@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { ErrorResponse, UserManager, WebStorageStateStore, type User } from 'oidc-client-ts';
-import { buildOidcConfig } from './config';
+import { buildLogoutUrl, buildOidcConfig, buildRevokeRequest } from './config';
 import { rolesFromProfile, type Role } from './roles';
 
 interface DemoRoleContextValue {
@@ -65,12 +65,16 @@ function scheduleRetry(
   retryTimerRef: { current: ReturnType<typeof setTimeout> | undefined },
   renew: () => void,
 ): void {
+  if (retryTimerRef.current) return;
   const delay = Math.min(
     RENEW_RETRY_MAX_DELAY_MS,
     RENEW_RETRY_BASE_DELAY_MS * 2 ** retryCountRef.current,
   );
   retryCountRef.current += 1;
-  retryTimerRef.current = setTimeout(renew, delay);
+  retryTimerRef.current = setTimeout(() => {
+    retryTimerRef.current = undefined;
+    renew();
+  }, delay);
 }
 
 interface AuthState {
@@ -84,7 +88,7 @@ export interface AuthContextValue extends AuthState {
   /** The signed-in member's id (the Cognito `sub`, which personnel-service keys members on);
    * null while signed out. Own-record routes (`personnel/members/{memberId}/...`) use it. */
   memberId: string | null;
-  signIn: () => Promise<void>;
+  signIn: (returnTo?: string) => Promise<void>;
   signOut: () => Promise<void>;
   completeSignIn: () => Promise<User | undefined>;
   getAccessToken: () => Promise<string | null>;
@@ -154,6 +158,10 @@ function RealAuthProvider({
     const apply = (user: User | null) => {
       if (cancelled) return;
       retryCountRef.current = 0;
+      if (user) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = undefined;
+      }
       setState({
         user,
         roles: user ? rolesFromProfile(user.profile as Record<string, unknown>) : [],
@@ -184,8 +192,8 @@ function RealAuthProvider({
 
     return () => {
       cancelled = true;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = undefined;
       manager.events.removeUserLoaded(apply);
       manager.events.removeUserUnloaded(onUnloaded);
       manager.events.removeSilentRenewError(onSilentRenewError);
@@ -196,8 +204,21 @@ function RealAuthProvider({
     () => ({
       ...state,
       memberId: typeof state.user?.profile.sub === 'string' ? state.user.profile.sub : null,
-      signIn: () => manager.signinRedirect(),
-      signOut: () => manager.signoutRedirect(),
+      signIn: (returnTo) => manager.signinRedirect({ state: returnTo }),
+      signOut: async () => {
+        const user = await manager.getUser();
+        if (user?.refresh_token) {
+          const { refresh_token } = user;
+          await Promise.resolve()
+            .then(() => {
+              const { url, body } = buildRevokeRequest(refresh_token);
+              return fetch(url, { method: 'POST', body });
+            })
+            .catch(() => undefined);
+        }
+        await manager.removeUser();
+        window.location.assign(buildLogoutUrl());
+      },
       completeSignIn,
       getAccessToken: async () => {
         const user = await manager.getUser();

@@ -33,6 +33,7 @@ afterEach(() => {
   resetCriticalChannelIdForTest();
   delete nativeModules.BoxalarmAlertReadiness;
   jest.restoreAllMocks();
+  (notifee.createChannel as jest.Mock).mockReset().mockResolvedValue(undefined);
 });
 
 test('a dispatch push (no category, or category dispatch) selects the critical channel', async () => {
@@ -187,4 +188,19 @@ test('the last known channel id survives a fresh process whose first read fails'
   native.getReadiness.mockRejectedValueOnce(new Error('transient'));
 
   await expect(ensureNotificationChannels()).resolves.toBe(CRITICAL_CHANNEL_DND_ID);
+});
+
+test('a failing default-channel create never discards the resolved critical id', async () => {
+  Platform.OS = 'android';
+  installNative(true);
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+  const createChannel = notifee.createChannel as jest.Mock;
+  createChannel.mockReset().mockImplementation(async (channel: { id: string }) => {
+    if (channel.id === DEFAULT_CHANNEL_ID) throw new Error('binder');
+    return channel.id;
+  });
+
+  await expect(ensureNotificationChannels({ deleteStale: true })).resolves.toBe(
+    CRITICAL_CHANNEL_DND_ID,
+  );
 });

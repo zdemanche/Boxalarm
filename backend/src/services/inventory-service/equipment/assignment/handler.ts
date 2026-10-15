@@ -10,7 +10,13 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { getDocClient, readInventoryConfig } from '../../lib/dynamoDb.js';
 import { emitMetric, logEvent } from '../../lib/logger.js';
-import { NotFoundError, ValidationError, toProblemResponse } from '../../lib/problemDetails.js';
+import {
+  NotFoundError,
+  ValidationError,
+  parseJsonBody,
+  requirePathId,
+  toProblemResponse,
+} from '../../lib/problemDetails.js';
 import { setAssignment, type AssignedToType } from '../equipmentRepository.js';
 
 function isAssignedToType(value: unknown): value is AssignedToType {
@@ -24,14 +30,11 @@ export function createAssignmentHandler(docClient?: DynamoDBDocumentClient) {
   ): Promise<APIGatewayProxyResultV2> {
     const correlationId = extractTraceId(event);
     try {
-      const assetId = event.pathParameters?.assetId;
-      if (!assetId) {
-        throw new ValidationError('assetId path parameter is required');
-      }
+      const assetId = requirePathId(event.pathParameters?.assetId, 'assetId');
       const deptId = toVerifiedDeptId(principal);
       const actorId = principal.sub;
 
-      const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+      const body = parseJsonBody(event.body);
       const assignedToType = body.assignedToType;
       const assignedToId = typeof body.assignedToId === 'string' ? body.assignedToId.trim() : '';
       if (!isAssignedToType(assignedToType)) {

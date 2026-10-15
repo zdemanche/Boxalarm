@@ -1,5 +1,11 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  PutCommand,
+  QueryCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
@@ -23,10 +29,10 @@ function fakeDocClient(send: (command: unknown) => unknown): DynamoDBDocumentCli
 
 describe('createEquipmentAsset', () => {
   it('AC1: writes a pk built only via buildDeptScopedPk, unassigned by default (core-harm)', async () => {
-    let putInput: PutCommand['input'] | undefined;
+    let putInput: { Item: Record<string, unknown> | undefined } | undefined;
     const client = fakeDocClient((command) => {
-      if (command instanceof PutCommand) {
-        putInput ??= command.input;
+      if (command instanceof TransactWriteCommand) {
+        putInput = command.input.TransactItems?.[0]?.Put;
         return {};
       }
       throw new Error(`unexpected command: ${String(command)}`);
@@ -47,10 +53,10 @@ describe('createEquipmentAsset', () => {
   });
 
   it('writes an AUDIT_LOG_ENTRY alongside the asset (F9.4)', async () => {
-    const puts: PutCommand['input'][] = [];
+    const sent: unknown[] = [];
     const client = fakeDocClient((command) => {
-      if (command instanceof PutCommand) {
-        puts.push(command.input);
+      sent.push(command);
+      if (command instanceof TransactWriteCommand) {
         return {};
       }
       throw new Error(`unexpected command: ${String(command)}`);
@@ -61,8 +67,14 @@ describe('createEquipmentAsset', () => {
       location: 'Station 1',
     });
 
-    expect(puts).toHaveLength(2);
-    const auditItem = puts[1]?.Item;
+    expect(sent).toHaveLength(1);
+    const transactItems = (sent[0] as TransactWriteCommand).input.TransactItems ?? [];
+    expect(transactItems).toHaveLength(2);
+    const auditItem = transactItems[1]?.Put?.Item;
+    expect(auditItem?.changedFields).toEqual({
+      serialNumber: { old: null, new: 'SN-100' },
+      location: { old: null, new: 'Station 1' },
+    });
     expect(auditItem?.entityType).toBe('AUDIT_LOG_ENTRY');
     expect(auditItem?.pk).toMatch(/^DEPT#NICHOLS#AUDIT#\d{4}-\d{2}-\d{2}$/);
     expect(auditItem?.mutatedEntityType).toBe('EQUIPMENT_ASSET');
@@ -123,8 +135,11 @@ describe('listEquipmentAssets', () => {
       const input = (command as QueryCommand).input;
       expect(input.IndexName).toBe('GSI1');
       expect(input.ExpressionAttributeValues?.[':gsi1Pk']).toBe('MEMBER#MBR-1');
-      expect(input.FilterExpression).toBe('deptId = :deptId');
+      expect(input.FilterExpression).toBe(
+        'deptId = :deptId AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired)',
+      );
       expect(input.ExpressionAttributeValues?.[':deptId']).toBe('NICHOLS');
+      expect(input.ExpressionAttributeValues?.[':retired']).toBe('RETIRED');
       return { Items: [] };
     });
     await listEquipmentAssets(client, TABLE, DEPT_ID, {
@@ -167,10 +182,13 @@ describe('listEquipmentAssets', () => {
     const client = fakeDocClient((command) => {
       const input = (command as QueryCommand).input;
       expect(input.IndexName).toBe('GSI3');
-      expect(input.FilterExpression).toBe('assignedToType = :type AND assignedToId = :id');
+      expect(input.FilterExpression).toBe(
+        'assignedToType = :type AND (attribute_not_exists(lifecycleStatus) OR lifecycleStatus <> :retired) AND assignedToId = :id',
+      );
       expect(input.ExpressionAttributeValues).toMatchObject({
         ':type': 'APPARATUS',
         ':id': 'APP-1',
+        ':retired': 'RETIRED',
       });
       return { Items: [] };
     });
@@ -275,6 +293,95 @@ describe('setAssignment', () => {
       await setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'missing', 'MEMBER', 'MBR-1'),
     ).toBeUndefined();
     expect(commands).toHaveLength(1);
+  });
+});
+
+describe('setAssignment retired guard', () => {
+  it('conditions the update on the asset not being RETIRED', async () => {
+    let updateInput: UpdateCommand['input'] | undefined;
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        updateInput = command.input;
+        return { Attributes: { assetId: 'AS-1' } };
+      }
+      return {};
+    });
+    await setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'AS-1', 'MEMBER', 'MBR-1');
+    expect(updateInput?.ConditionExpression).toContain('lifecycleStatus <> :retired');
+    expect(updateInput?.ExpressionAttributeValues?.[':retired']).toBe('RETIRED');
+    expect(updateInput?.ReturnValuesOnConditionCheckFailure).toBe('ALL_OLD');
+  });
+
+  it('throws ConflictError (409), not undefined, when the existing asset is RETIRED and writes no audit entry', async () => {
+    const commands: unknown[] = [];
+    const client = fakeDocClient((command) => {
+      commands.push(command);
+      throw new ConditionalCheckFailedException({
+        message: 'condition failed',
+        $metadata: {},
+        Item: { lifecycleStatus: { S: 'RETIRED' } },
+      });
+    });
+    await expect(
+      setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'AS-1', 'MEMBER', 'MBR-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(commands).toHaveLength(1);
+  });
+});
+
+describe('audit before/after values', () => {
+  it('setLocation records the prior location as old and returns the new one', async () => {
+    let auditFields: unknown;
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        expect(command.input.ReturnValues).toBe('ALL_OLD');
+        return {
+          Attributes: {
+            assetId: 'AS-1',
+            deptId: 'NICHOLS',
+            serialNumber: 'SN-1',
+            location: 'Station 1',
+            lifecycleStatus: 'ACQUIRED',
+          },
+        };
+      }
+      if (command instanceof PutCommand) {
+        auditFields = command.input.Item?.changedFields;
+      }
+      return {};
+    });
+    const asset = await setLocation(client, TABLE, DEPT_ID, ACTOR_ID, 'AS-1', 'Station 2');
+    expect(auditFields).toEqual({ location: { old: 'Station 1', new: 'Station 2' } });
+    expect(asset?.location).toBe('Station 2');
+  });
+
+  it('setAssignment records the prior assignee (null when unassigned) as old', async () => {
+    let auditFields: unknown;
+    const client = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        return {
+          Attributes: {
+            assetId: 'AS-1',
+            deptId: 'NICHOLS',
+            serialNumber: 'SN-1',
+            assignedToType: 'APPARATUS',
+            assignedToId: 'APP-1',
+            location: 'x',
+            lifecycleStatus: 'ACQUIRED',
+          },
+        };
+      }
+      if (command instanceof PutCommand) {
+        auditFields = command.input.Item?.changedFields;
+      }
+      return {};
+    });
+    const asset = await setAssignment(client, TABLE, DEPT_ID, ACTOR_ID, 'AS-1', 'MEMBER', 'MBR-1');
+    expect(auditFields).toEqual({
+      assignedToType: { old: 'APPARATUS', new: 'MEMBER' },
+      assignedToId: { old: 'APP-1', new: 'MBR-1' },
+    });
+    expect(asset?.assignedToId).toBe('MBR-1');
   });
 });
 

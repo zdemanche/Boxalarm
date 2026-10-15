@@ -152,6 +152,13 @@ function webOriginProblems(env: string | undefined, webOrigin: string | undefine
       `  - ${CONFIG_NAMESPACE}:webOrigin "${webOrigin}" must be https (Cognito callbacks): ${fix}`,
     ];
   }
+  if (url.origin !== webOrigin) {
+    return [
+      `  - ${CONFIG_NAMESPACE}:webOrigin "${webOrigin}" must be a bare origin ` +
+        `(scheme://host[:port], lowercase, no trailing slash or path), or Cognito callbacks ` +
+        `and assets CORS will not match: ${fix}`,
+    ];
+  }
   if (env !== "dev" && isPlaceholderHost(url.hostname)) {
     return [
       `  - ${CONFIG_NAMESPACE}:webOrigin "${webOrigin}" is a placeholder host; outside dev it must ` +

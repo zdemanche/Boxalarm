@@ -10,7 +10,13 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { getDocClient, readInventoryConfig } from '../../lib/dynamoDb.js';
 import { emitMetric, logEvent } from '../../lib/logger.js';
-import { NotFoundError, ValidationError, toProblemResponse } from '../../lib/problemDetails.js';
+import {
+  NotFoundError,
+  ValidationError,
+  parseJsonBody,
+  requirePathId,
+  toProblemResponse,
+} from '../../lib/problemDetails.js';
 import { setLocation } from '../equipmentRepository.js';
 
 export function createLocationHandler(docClient?: DynamoDBDocumentClient) {
@@ -20,14 +26,11 @@ export function createLocationHandler(docClient?: DynamoDBDocumentClient) {
   ): Promise<APIGatewayProxyResultV2> {
     const correlationId = extractTraceId(event);
     try {
-      const assetId = event.pathParameters?.assetId;
-      if (!assetId) {
-        throw new ValidationError('assetId path parameter is required');
-      }
+      const assetId = requirePathId(event.pathParameters?.assetId, 'assetId');
       const deptId = toVerifiedDeptId(principal);
       const actorId = principal.sub;
 
-      const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+      const body = parseJsonBody(event.body);
       const location = typeof body.location === 'string' ? body.location.trim() : '';
       if (!location) {
         throw new ValidationError('location is required and must be a non-empty string');

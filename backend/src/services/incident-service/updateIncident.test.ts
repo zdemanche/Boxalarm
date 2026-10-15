@@ -154,6 +154,20 @@ describe('updateIncident handler', () => {
     );
   });
 
+  it('passes only the submitted fields to the write so concurrent module saves are not overwritten', async () => {
+    const updateCorePayload = vi.fn().mockResolvedValue({ ...BASE_INCIDENT, status: 'DRAFT' });
+    mockDeps({ updateCorePayload });
+    const { handler } = await import('./updateIncident.js');
+
+    await handler(
+      buildEvent(MEMBER_AUTH, { fields: { incident_type: 'STRUCTURE_FIRE' } }),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(updateCorePayload.mock.calls[0]?.[2]).toEqual({ incident_type: 'STRUCTURE_FIRE' });
+  });
+
   it('leaves status unchanged while required fields remain missing', async () => {
     const updateCorePayload = vi.fn().mockResolvedValue({ ...BASE_INCIDENT, status: 'DRAFT' });
     mockDeps({ updateCorePayload });

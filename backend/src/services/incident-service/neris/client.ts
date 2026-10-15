@@ -1,5 +1,6 @@
-import type { NerisConfig } from './config.js';
+import { invalidateNerisConfig, type NerisConfig } from './config.js';
 import {
+  NerisCredentialsRejectedError,
   createTokenCache,
   getAccessToken,
   getTokenCache,
@@ -97,6 +98,11 @@ export function createNerisClient(
           cache: tokenCache,
           nowMs,
           timeoutMs,
+        }).catch(async (error: unknown) => {
+          if (error instanceof NerisCredentialsRejectedError) {
+            await invalidateNerisConfig(error.rejectedConfig);
+          }
+          throw error;
         });
         return fetchFn(url, {
           ...init,
@@ -116,7 +122,7 @@ export function createNerisClient(
   };
 }
 
-let cachedNerisClient: NerisClient | undefined;
+let cachedNerisClient: { readonly config: NerisConfig; readonly client: NerisClient } | undefined;
 
 /**
  * Returns a module-scope singleton {@link NerisClient}, mirroring config.ts's
@@ -128,9 +134,14 @@ let cachedNerisClient: NerisClient | undefined;
  * The client (and its token cache) survive across warm invocations by default.
  */
 export function getNerisClient(config: NerisConfig, deps: CreateNerisClientDeps = {}): NerisClient {
-  cachedNerisClient ??= createNerisClient(config, {
-    ...deps,
-    tokenCache: deps.tokenCache ?? getTokenCache(),
-  });
-  return cachedNerisClient;
+  if (cachedNerisClient?.config !== config) {
+    cachedNerisClient = {
+      config,
+      client: createNerisClient(config, {
+        ...deps,
+        tokenCache: deps.tokenCache ?? getTokenCache(),
+      }),
+    };
+  }
+  return cachedNerisClient.client;
 }

@@ -1,5 +1,6 @@
 import { Component, type ReactNode } from 'react';
 import { ApiErrorState } from './ApiErrorState';
+import { reportClientError } from '../lib/telemetry';
 
 interface RouteErrorBoundaryState {
   failed: boolean;
@@ -22,6 +23,10 @@ export class RouteErrorBoundary extends Component<
 
   static getDerivedStateFromError() {
     return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    reportClientError(error, { boundary: 'route' });
   }
 
   private handleRetry = () => {

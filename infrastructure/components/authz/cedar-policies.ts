@@ -229,6 +229,7 @@ export const INVENTORY_ADMIN_ACTIONS = [
   // and/or reorderThreshold directly — last-writer-wins, same chief/admin/officer tier as
   // every other inventory write (architecture.md:498).
   "RestockConsumable",
+  "CreateConsumable",
 ] as const;
 export const INVENTORY_ADMIN_GROUPS = ["OFFICER", "CHIEF", "ADMIN"] as const;
 
@@ -574,6 +575,7 @@ export const CEDAR_SCHEMA = JSON.stringify({
       },
       IssuePpeAssignment: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Member"] } },
       RestockConsumable: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Asset"] } },
+      CreateConsumable: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Department"] } },
       GetPrePlan: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
       UpdatePrePlan: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },
       WriteOccupancy: { appliesTo: { principalTypes: ["User"], resourceTypes: ["Occupancy"] } },

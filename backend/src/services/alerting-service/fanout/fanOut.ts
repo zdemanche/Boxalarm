@@ -1,8 +1,12 @@
 import { UpdateCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SchedulerClient } from '@aws-sdk/client-scheduler';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
-import { createEscalationSchedule } from '../escalation/scheduleEscalation.js';
+import {
+  createEscalationSchedule,
+  readEscalationThresholdSeconds,
+} from '../escalation/scheduleEscalation.js';
 import { scheduleDepartmentToneLadder } from '../escalation/toneLadder.js';
+import { runWithConcurrencyLimit } from './concurrency.js';
 
 /**
  * Roster rows and escalation scheduling for the stream fan-out (fanout/handler.ts), which is the
@@ -11,6 +15,7 @@ import { scheduleDepartmentToneLadder } from '../escalation/toneLadder.js';
  * member as a duplicate (design review C1). It is gone; do not reintroduce a second producer.
  */
 const TONE_SEQUENCE_ONE = 1;
+const MAX_CONCURRENT_SCHEDULE_TASKS = 10;
 
 export type RosterAckStatus = 'NONE' | 'RESPONDING' | 'NOT_RESPONDING' | 'DIRECT_TO_SCENE';
 
@@ -51,7 +56,7 @@ export function parseRosterItem(
  * the escalation handler requires (review MAJOR-1: an answer-first row had neither, and the
  * member's 75 s escalation failed its parse and paged on-call).
  */
-async function ensureRosterEntry(
+export async function ensureRosterEntry(
   ddb: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
@@ -70,10 +75,13 @@ async function ensureRosterEntry(
 }
 
 /** The roster row's required fields, each seeded only where absent. */
-const ROSTER_SEED_EXPRESSION =
+export const ROSTER_SEED_EXPRESSION =
   'SET entityType = :rosterEntityType, memberId = :rosterMemberId, quals = if_not_exists(quals, :rosterQuals), ackStatus = if_not_exists(ackStatus, :rosterNone), currentChannelTier = if_not_exists(currentChannelTier, :rosterPrimary), escalationLevel = if_not_exists(escalationLevel, :rosterZero)';
 
-function rosterSeedValues(memberId: string, quals: readonly string[]): Record<string, unknown> {
+export function rosterSeedValues(
+  memberId: string,
+  quals: readonly string[],
+): Record<string, unknown> {
   return {
     ':rosterEntityType': 'DISPATCH_ROSTER_ENTRY',
     ':rosterMemberId': memberId,
@@ -92,16 +100,27 @@ export async function scheduleRealtimeFanOutEscalation(
   dispatchId: string,
   members: ReadonlyArray<{ readonly memberId: string; readonly quals: readonly string[] }>,
 ): Promise<void> {
-  for (const member of members) {
-    await ensureRosterEntry(ddb, tableName, deptId, dispatchId, member.memberId, member.quals);
-    await createEscalationSchedule(
-      scheduler,
-      { deptId, dispatchId, memberId: member.memberId, toneSequence: TONE_SEQUENCE_ONE },
-      ddb,
-      tableName,
-    );
+  if (members.length === 0) {
+    return;
   }
-  if (members.length > 0) {
-    await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
+  const delaySeconds = await readEscalationThresholdSeconds(ddb, tableName, deptId);
+  const results = await runWithConcurrencyLimit(
+    members,
+    MAX_CONCURRENT_SCHEDULE_TASKS,
+    async (member) => {
+      await ensureRosterEntry(ddb, tableName, deptId, dispatchId, member.memberId, member.quals);
+      await createEscalationSchedule(scheduler, {
+        deptId,
+        dispatchId,
+        memberId: member.memberId,
+        toneSequence: TONE_SEQUENCE_ONE,
+        delaySeconds,
+      });
+    },
+  );
+  const failure = results.find((result) => result.status === 'rejected');
+  if (failure) {
+    throw failure.reason;
   }
+  await scheduleDepartmentToneLadder(scheduler, ddb, tableName, deptId, dispatchId);
 }

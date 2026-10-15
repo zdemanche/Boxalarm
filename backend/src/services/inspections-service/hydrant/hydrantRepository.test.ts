@@ -41,7 +41,7 @@ beforeEach(() => {
 describe('createHydrant (AC1)', () => {
   it('writes the HYDRANT item with GSI2 due-date and GSI3 geohash keys populated', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
-    const hydrant = await createHydrant(deptId, createInput);
+    const hydrant = await createHydrant(deptId, createInput, 'user-1');
     expect(hydrant.pk).toBe('DEPT#NICHOLS#HYDRANT#HYD-0231');
     expect(hydrant.sk).toBe('METADATA');
     expect(hydrant.gsi2pk).toBe('DEPT#NICHOLS#DUE#HYDRANT#2027-01');
@@ -52,7 +52,7 @@ describe('createHydrant (AC1)', () => {
 
   it('core-harm: writes the exact gsi2/gsi3 key literals so due-date scheduling and map resolution can find the hydrant', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
-    await createHydrant(deptId, createInput);
+    await createHydrant(deptId, createInput, 'user-1');
     const call = ddbMock.commandCalls(TransactWriteCommand)[0];
     const item = call?.args[0].input.TransactItems?.[0]?.Put?.Item as
       Record<string, unknown> | undefined;
@@ -62,11 +62,26 @@ describe('createHydrant (AC1)', () => {
     expect(item?.gsi3sk).toMatch(/^[0-9b-hj-km-np-z]{8}#HYD-0231$/);
   });
 
+  it('writes a CREATE audit entry naming the actor', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await createHydrant(deptId, createInput, 'mbr-102');
+    const audit =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[3]?.Put?.Item;
+    expect(audit).toMatchObject({
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'HYDRANT',
+      mutatedEntityId: 'HYD-0231',
+      action: 'CREATE',
+      actorId: 'mbr-102',
+      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#HYDRANT#HYD-0231',
+    });
+  });
+
   it('writes the department list index item in the same transaction as the hydrant', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
-    await createHydrant(deptId, createInput);
+    await createHydrant(deptId, createInput, 'user-1');
     const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(4);
     expect(items?.[0]?.Put?.ConditionExpression).toBe('attribute_not_exists(pk)');
     expect(items?.[1]?.Put?.Item).toEqual({
       pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231',
@@ -80,7 +95,7 @@ describe('createHydrant (AC1)', () => {
 
   it('emits inspections.hydrant.updated with the full hydrant state in the same transaction, so a new hydrant reaches the alerting nearest-hydrant lookup', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
-    await createHydrant(deptId, createInput);
+    await createHydrant(deptId, createInput, 'user-1');
     const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
     const outbox = items?.[2]?.Put?.Item as Record<string, unknown> | undefined;
     expect(outbox?.entityType).toBe('OUTBOX_ENTRY');
@@ -105,12 +120,14 @@ describe('createHydrant (AC1)', () => {
         CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
       }),
     );
-    await expect(createHydrant(deptId, createInput)).rejects.toThrow(HydrantAlreadyExistsError);
+    await expect(createHydrant(deptId, createInput, 'user-1')).rejects.toThrow(
+      HydrantAlreadyExistsError,
+    );
   });
 
   it('fails closed (rethrows) on an unrecognized DynamoDB failure', async () => {
     ddbMock.on(TransactWriteCommand).rejects(new Error('simulated outage'));
-    await expect(createHydrant(deptId, createInput)).rejects.toThrow('simulated outage');
+    await expect(createHydrant(deptId, createInput, 'user-1')).rejects.toThrow('simulated outage');
   });
 });
 
@@ -127,12 +144,18 @@ describe('updateHydrant (AC2)', () => {
       },
     });
 
-    const result = await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+    const result = await updateHydrant(
+      deptId,
+      'HYD-0231',
+      { status: 'OUT_OF_SERVICE' },
+      'corr-1',
+      'user-1',
+    );
     expect(result.status).toBe('OUT_OF_SERVICE');
 
     const call = ddbMock.commandCalls(TransactWriteCommand)[0];
     const items = call?.args[0].input.TransactItems ?? [];
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
     expect(items[0]?.Update?.ConditionExpression).toBe(
       'attribute_exists(pk) AND attribute_not_exists(archivedAt) AND attribute_not_exists(updatedAt)',
     );
@@ -162,7 +185,7 @@ describe('updateHydrant (AC2)', () => {
       },
     });
 
-    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1');
 
     const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems ?? [];
     expect(items[1]?.Put?.Item?.payload).toEqual({
@@ -182,24 +205,76 @@ describe('updateHydrant (AC2)', () => {
     ddbMock.on(GetCommand).resolves({
       Item: { pk: 'DEPT#NICHOLS#HYDRANT#HYD-0231', sk: 'METADATA', status: 'OUT_OF_SERVICE' },
     });
-    const result = await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+    const result = await updateHydrant(
+      deptId,
+      'HYD-0231',
+      { status: 'OUT_OF_SERVICE' },
+      'corr-1',
+      'user-1',
+    );
     expect(result.status).toBe('OUT_OF_SERVICE');
   });
 
   it('recomputes gsi2pk/gsi2sk when nextFlowTestDue changes', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     ddbMock.on(GetCommand).resolves({ Item: { status: 'IN_SERVICE' } });
-    await updateHydrant(deptId, 'HYD-0231', { nextFlowTestDue: '2028-03-05' }, 'corr-1');
+    await updateHydrant(deptId, 'HYD-0231', { nextFlowTestDue: '2028-03-05' }, 'corr-1', 'user-1');
     const call = ddbMock.commandCalls(TransactWriteCommand)[0];
     const update = call?.args[0].input.TransactItems?.[0]?.Update;
     expect(update?.ExpressionAttributeValues?.[':gsi2pk']).toBe('DEPT#NICHOLS#DUE#HYDRANT#2028-03');
     expect(update?.ExpressionAttributeValues?.[':gsi2sk']).toBe('2028-03-05#HYD-0231');
   });
 
+  it('derives nextFlowTestDue and the gsi2 keys from a patch carrying only lastFlowTestDate', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock
+      .on(GetCommand)
+      .resolves({ Item: { status: 'IN_SERVICE', nextFlowTestDue: '2026-05-01' } });
+    await updateHydrant(deptId, 'HYD-0231', { lastFlowTestDate: '2026-10-13' }, 'corr-1', 'user-1');
+    const items = ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems;
+    const values = items?.[0]?.Update?.ExpressionAttributeValues;
+    expect(values?.[':nextFlowTestDue']).toBe('2027-10-13');
+    expect(values?.[':gsi2pk']).toBe('DEPT#NICHOLS#DUE#HYDRANT#2027-10');
+    expect(values?.[':gsi2sk']).toBe('2027-10-13#HYD-0231');
+    expect(items?.[1]?.Put?.Item?.payload).toMatchObject({ nextFlowTestDue: '2027-10-13' });
+  });
+
+  it('writes an UPDATE audit entry naming the actor with old and new status in the same transaction', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock.on(GetCommand).resolves({ Item: { status: 'IN_SERVICE', updatedAt: 5 } });
+    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'mbr-102');
+    const audit =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[2]?.Put?.Item;
+    expect(audit).toMatchObject({
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'HYDRANT',
+      mutatedEntityId: 'HYD-0231',
+      action: 'UPDATE',
+      actorId: 'mbr-102',
+      changedFields: { status: { old: 'IN_SERVICE', new: 'OUT_OF_SERVICE' } },
+      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#HYDRANT#HYD-0231',
+    });
+  });
+
+  it('keeps an explicit nextFlowTestDue over the derived one', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock.on(GetCommand).resolves({ Item: { status: 'IN_SERVICE' } });
+    await updateHydrant(
+      deptId,
+      'HYD-0231',
+      { lastFlowTestDate: '2026-10-13', nextFlowTestDue: '2026-12-01' },
+      'corr-1',
+      'user-1',
+    );
+    const update =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Update;
+    expect(update?.ExpressionAttributeValues?.[':nextFlowTestDue']).toBe('2026-12-01');
+  });
+
   it('reads back the persisted item with ConsistentRead so a stale pre-update image can never be returned', async () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     ddbMock.on(GetCommand).resolves({ Item: { status: 'OUT_OF_SERVICE' } });
-    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1');
+    await updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1');
     const call = ddbMock.commandCalls(GetCommand)[0];
     expect(call?.args[0].input.ConsistentRead).toBe(true);
   });
@@ -208,7 +283,7 @@ describe('updateHydrant (AC2)', () => {
     ddbMock.on(TransactWriteCommand).resolves({});
     ddbMock.on(GetCommand).resolves({});
     await expect(
-      updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+      updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1'),
     ).rejects.toThrow(HydrantNotFoundError);
   });
 
@@ -221,7 +296,7 @@ describe('updateHydrant (AC2)', () => {
       }),
     );
     await expect(
-      updateHydrant(deptId, 'HYD-9999', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+      updateHydrant(deptId, 'HYD-9999', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1'),
     ).rejects.toThrow(HydrantNotFoundError);
   });
 
@@ -235,7 +310,7 @@ describe('updateHydrant (AC2)', () => {
       }),
     );
     await expect(
-      updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+      updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1'),
     ).rejects.toThrow(TransactionCanceledException);
   });
 });
@@ -329,7 +404,13 @@ describe('listHydrants (web Hydrants page)', () => {
         Item: { hydrantId: 'HYD-0231', status: 'IN_SERVICE', updatedAt: 111 },
       });
       ddbMock.on(TransactWriteCommand).resolves({});
-      await updateHydrant(deptId, 'HYD-0231', { lastFlowTestDate: '2026-09-01' }, 'corr-1');
+      await updateHydrant(
+        deptId,
+        'HYD-0231',
+        { lastFlowTestDate: '2026-09-01' },
+        'corr-1',
+        'user-1',
+      );
       const update =
         ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Update;
       expect(update?.ConditionExpression).toContain('updatedAt = :readUpdatedAt');
@@ -344,7 +425,13 @@ describe('listHydrants (web Hydrants page)', () => {
         .resolves({ Item: { hydrantId: 'HYD-0231', status: 'OUT_OF_SERVICE', updatedAt: 3 } });
       ddbMock.on(TransactWriteCommand).rejectsOnce(conflict()).resolves({});
 
-      await updateHydrant(deptId, 'HYD-0231', { lastFlowTestDate: '2026-09-01' }, 'corr-1');
+      await updateHydrant(
+        deptId,
+        'HYD-0231',
+        { lastFlowTestDate: '2026-09-01' },
+        'corr-1',
+        'user-1',
+      );
 
       const calls = ddbMock.commandCalls(TransactWriteCommand);
       expect(calls).toHaveLength(2);
@@ -357,7 +444,7 @@ describe('listHydrants (web Hydrants page)', () => {
       ddbMock.on(GetCommand).resolves({ Item: { hydrantId: 'HYD-0231', updatedAt: 1 } });
       ddbMock.on(TransactWriteCommand).rejects(conflict());
       await expect(
-        updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+        updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1'),
       ).rejects.toBeInstanceOf(HydrantUpdateConflictError);
       expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(3);
     });
@@ -365,7 +452,7 @@ describe('listHydrants (web Hydrants page)', () => {
     it('is not found (no write) when the hydrant is archived', async () => {
       ddbMock.on(GetCommand).resolves({ Item: { hydrantId: 'HYD-0231', archivedAt: 5 } });
       await expect(
-        updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1'),
+        updateHydrant(deptId, 'HYD-0231', { status: 'OUT_OF_SERVICE' }, 'corr-1', 'user-1'),
       ).rejects.toBeInstanceOf(HydrantNotFoundError);
       expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
     });

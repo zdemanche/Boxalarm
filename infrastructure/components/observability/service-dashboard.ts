@@ -30,7 +30,7 @@ export class ServiceDashboard extends pulumi.ComponentResource {
     // Lambda-per-route (architecture.compiled/spine.md:15): a service has many route
     // functions, none named "boxalarm-{env}-{serviceName}". Widgets must aggregate over
     // every function whose name starts with this prefix, not a single fixed FunctionName.
-    const functionNamePrefix = `boxalarm-${args.env}-${args.serviceName}-`;
+    const functionNamePrefix = `boxalarm-${args.env}-${args.serviceName.replace(/-service$/, "")}-`;
 
     const dashboardBody = pulumi.jsonStringify({
       widgets: [

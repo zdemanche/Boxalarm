@@ -502,6 +502,43 @@ test('preferences: an apparatus officer can mute each apparatus reminder categor
   );
 });
 
+test('preferences: NERIS reminders are offered to the roles they reach and save on their own key', async () => {
+  const puts: unknown[] = [];
+  server.use(
+    http.get('/api/v1/notifications', () => HttpResponse.json({ items: [], nextCursor: null })),
+    NO_PREFS,
+    http.put('/api/v1/notifications/preferences', async ({ request }) => {
+      const body = await request.json();
+      puts.push(body);
+      return HttpResponse.json(body);
+    }),
+  );
+  renderWithProviders(<NotificationsPage />, '/notifications', ['MEMBER', 'OFFICER']);
+
+  await certGroup();
+  const legends = screen.getAllByRole('group').map((g) => g.querySelector('legend')?.textContent);
+  expect(legends).toContain('NERIS returned reports');
+  expect(legends).not.toContain('NERIS no-activity reminders');
+
+  const neris = within(screen.getByRole('group', { name: 'NERIS returned reports' }));
+  await userEvent.click(neris.getByRole('checkbox', { name: 'Email' }));
+  await waitFor(() =>
+    expect(puts).toEqual([{ category: 'neris-rejected', channels: { push: false, email: true } }]),
+  );
+});
+
+test('preferences: a chief is offered the NERIS no-activity reminder', async () => {
+  server.use(
+    http.get('/api/v1/notifications', () => HttpResponse.json({ items: [], nextCursor: null })),
+    NO_PREFS,
+  );
+  renderWithProviders(<NotificationsPage />, '/notifications', ['MEMBER', 'CHIEF']);
+
+  await certGroup();
+  const legends = screen.getAllByRole('group').map((g) => g.querySelector('legend')?.textContent);
+  expect(legends).toContain('NERIS no-activity reminders');
+});
+
 test('preferences: a training officer is told the department certification digest cannot be muted', async () => {
   server.use(
     http.get('/api/v1/notifications', () => HttpResponse.json({ items: [], nextCursor: null })),

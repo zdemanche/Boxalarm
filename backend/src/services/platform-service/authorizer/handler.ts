@@ -10,7 +10,7 @@ import { createRevocationChecker, revocationFailsOpen } from './revocationCheck.
 import type { RevocationChecker } from './revocationCheck.js';
 import { getAuthorizerStoreClient, readRevokedAt } from './revocationStore.js';
 
-export type AuthorizerContext = VerifiedAccessToken;
+export type AuthorizerContext = VerifiedAccessToken & { readonly iat?: string };
 
 type AuthorizerResult =
   APIGatewaySimpleAuthorizerResult | APIGatewaySimpleAuthorizerWithContextResult<AuthorizerContext>;
@@ -22,6 +22,24 @@ function getVerifier(env: NodeJS.ProcessEnv): AccessTokenVerifier {
   return cachedVerifier;
 }
 
+const FRESH_REVOCATION_ROUTE_KEYS: ReadonlySet<string> = new Set([
+  'POST /api/v1/personnel/members/{memberId}/push-tokens',
+]);
+
+function reportRevocationReadError(error: unknown, staleUsed: boolean): void {
+  console.error(
+    JSON.stringify({
+      event: 'authorizer.revocationCheck.readFailed',
+      errorName: error instanceof Error ? error.constructor.name : 'UnknownError',
+      message: error instanceof Error ? error.message : undefined,
+      staleUsed,
+    }),
+  );
+  if (staleUsed) {
+    emitRevocationStaleMetric();
+  }
+}
+
 let cachedChecker: RevocationChecker | undefined;
 
 function getRevocationChecker(env: NodeJS.ProcessEnv): RevocationChecker {
@@ -30,8 +48,11 @@ function getRevocationChecker(env: NodeJS.ProcessEnv): RevocationChecker {
     if (!tableName) {
       throw new Error('PLATFORM_TABLE_NAME is required and was not set');
     }
-    cachedChecker = createRevocationChecker((deptId, sub) =>
-      readRevokedAt(getAuthorizerStoreClient(), tableName, deptId, sub),
+    cachedChecker = createRevocationChecker(
+      (deptId, sub, consistentRead) =>
+        readRevokedAt(getAuthorizerStoreClient(), tableName, deptId, sub, consistentRead),
+      () => Date.now(),
+      reportRevocationReadError,
     );
   }
   return cachedChecker;
@@ -89,6 +110,24 @@ function emitRevocationFailOpenMetric(): void {
   );
 }
 
+function emitRevocationStaleMetric(): void {
+  console.log(
+    JSON.stringify({
+      _aws: {
+        Timestamp: Date.now(),
+        CloudWatchMetrics: [
+          {
+            Namespace: 'Boxalarm/authorizer',
+            Dimensions: [[]],
+            Metrics: [{ Name: 'RevocationCheckStale', Unit: 'Count' }],
+          },
+        ],
+      },
+      RevocationCheckStale: 1,
+    }),
+  );
+}
+
 export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResult> = async (
   event,
 ) => {
@@ -105,12 +144,24 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
 
     // M1: an access token is verified offline and lives an hour; a revoked member's token
     // must stop working now. See revocationCheck.ts for the cache and the fail-open rule.
-    const revocation = await checker.check({ deptId: context.deptId, sub: context.sub, issuedAt });
+    const fresh = FRESH_REVOCATION_ROUTE_KEYS.has(event.routeKey);
+    const revocation = await checker.check({
+      deptId: context.deptId,
+      sub: context.sub,
+      issuedAt,
+      fresh,
+    });
+    // The fresh-read route re-checks the marker after its own write, against this iat.
+    const allowedContext: AuthorizerContext = fresh
+      ? { ...context, iat: String(issuedAt) }
+      : context;
     if (revocation === 'revoked') {
       console.error(
         JSON.stringify({
           event: 'authorizer.denied',
           reason: 'SessionRevoked',
+          sub: context.sub,
+          deptId: context.deptId,
           routeKey: event.routeKey,
         }),
       );
@@ -133,10 +184,10 @@ export const handler: Handler<APIGatewayRequestAuthorizerEventV2, AuthorizerResu
       emitAuthorizerMetric('Allowed', 'RevocationCheckFailOpen');
       // Its own metric so the alarm is a plain Sum > 0 (infra http-api.ts addAlarms).
       emitRevocationFailOpenMetric();
-      return { isAuthorized: true, context };
+      return { isAuthorized: true, context: allowedContext };
     }
     emitAuthorizerMetric('Allowed');
-    return { isAuthorized: true, context };
+    return { isAuthorized: true, context: allowedContext };
   } catch (error) {
     // constructor.name is what separates a JWKS outage (NonRetryableFetchError/FetchError)
     // from routine expiry (JwtExpiredError) — aws-jwt-verify does not set .name.

@@ -8,12 +8,15 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { readRevokedAt } from '../../platform-service/authorizer/revocationStore.js';
 import { createDynamoClient, readPersonnelConfig } from '../dynamoClient.js';
 import {
   parseDeviceId,
   releaseInstallationFromOtherMembers,
+  withoutToken,
   withRegisteredDevice,
   writePushDevices,
   type ContactChannelEntry,
@@ -95,6 +98,29 @@ function emitPushTokenMetric(outcome: 'Registered' | 'Failed', reason?: string):
   );
 }
 
+const ROLLBACK_ATTEMPTS = 3;
+const ROLLBACK_BACKOFF_MS = 100;
+
+async function removeTokenWithRetry(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+  token: string,
+): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await writePushDevices(client, tableName, deptId, memberId, (current) =>
+        withoutToken(current, token),
+      );
+      return;
+    } catch (error) {
+      if (attempt >= ROLLBACK_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, ROLLBACK_BACKOFF_MS * attempt));
+    }
+  }
+}
+
 async function registerToken(
   event: GuardEvent,
   principal: CedarPrincipalContext,
@@ -160,6 +186,51 @@ async function registerToken(
   if (outcome === 'not_found') {
     emitPushTokenMetric('Failed', 'MemberNotFound');
     return notFoundProblem(traceId, `member ${memberId} was not found`);
+  }
+
+  // A device-loss revocation can land between the authorizer's read and the write above. Its
+  // marker is written before it clears the member's devices, so a marker found now that is not
+  // older than this token means the lost phone just re-registered: take it back off.
+  const issuedAt = Number(
+    (event.requestContext.authorizer?.lambda as { iat?: string } | undefined)?.iat,
+  );
+  if (Number.isFinite(issuedAt)) {
+    let stage: 'revocationRecheck' | 'rollback' = 'revocationRecheck';
+    try {
+      const revokedAt = await readRevokedAt(client, config.tableName, deptId, memberId, true);
+      if (revokedAt !== undefined && issuedAt <= revokedAt) {
+        stage = 'rollback';
+        await removeTokenWithRetry(client, config.tableName, deptId, memberId, body.token);
+        console.error(
+          JSON.stringify({
+            event: 'personnel.pushToken.register.revokedDuringRegistration',
+            service: 'personnel-service',
+            correlationId: traceId,
+            memberId,
+            deviceId: body.deviceId ?? null,
+          }),
+        );
+        emitPushTokenMetric('Failed', 'SessionRevoked');
+        return forbiddenProblem(traceId);
+      }
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: `personnel.pushToken.register.${stage}Failed`,
+          service: 'personnel-service',
+          correlationId: traceId,
+          memberId,
+          deviceId: body.deviceId ?? null,
+          reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      emitPushTokenMetric(
+        'Failed',
+        stage === 'rollback' ? 'RollbackFailed' : 'RevocationRecheckFailed',
+      );
+      throw error;
+    }
   }
 
   // This installation is now this member's: take its token off anyone else in the department

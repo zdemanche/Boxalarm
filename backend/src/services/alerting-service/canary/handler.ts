@@ -5,7 +5,11 @@ import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoCli
 import { logError, logInfo } from '../dispatches/logger.js';
 import { deriveIngressIdempotencyKey } from '../dispatches/dispatchIngressPort.js';
 import { createManualDispatch } from '../dispatches/repository.js';
-import { SELF_TEST_CHANNELS, selfTestAdapter } from '../selfTest/dispatchAdapter.js';
+import {
+  SELF_TEST_CHANNELS,
+  SELF_TEST_LOCK_WINDOW_SECONDS,
+  selfTestAdapter,
+} from '../selfTest/dispatchAdapter.js';
 import {
   acquireSelfTestCooldown,
   getSelfTestRun,
@@ -90,7 +94,10 @@ async function completePendingRun(
   // self-test that already resolved.
   await clearCanaryPointer(ddb, tableName, deptId);
 
-  emitOutcomeMetric(METRIC_NAMESPACE, result === 'PASS' ? 'CanaryPassed' : 'CanaryFailed');
+  if (result === 'PASS') {
+    emitOutcomeMetric(METRIC_NAMESPACE, 'CanaryPassed');
+  }
+  emitEmf(METRIC_NAMESPACE, 'CanaryFailed', result === 'PASS' ? 0 : 1, [[]]);
   emitEmf(METRIC_NAMESPACE, 'CanaryLatencyMs', latencyMs, [[]], {}, 'Milliseconds');
   logInfo('alerting.canary.result', { deptId, testId: pointer.pendingTestId, result, latencyMs });
 }
@@ -128,6 +135,7 @@ async function startNextRun(
     dispatch: normalized.value,
     idempotencyKey,
     dispatchedAt: now,
+    lockExpiresAt: now + SELF_TEST_LOCK_WINDOW_SECONDS,
     targetMemberId: memberId,
     selfTestId: testId,
     channelsTested: SELF_TEST_CHANNELS,

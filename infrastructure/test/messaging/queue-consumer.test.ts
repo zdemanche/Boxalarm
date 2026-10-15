@@ -75,6 +75,12 @@ describe("QueueConsumer", () => {
     expect(dlqName).toBe("boxalarm-dev-test-queue-dlq");
   });
 
+  it("keeps dead-lettered messages 14 days so a weekend outage cannot expire the evidence", async () => {
+    const consumer = await build();
+    await settle(consumer);
+    expect(await resolve(consumer.dlq.messageRetentionSeconds)).toBe(1_209_600);
+  });
+
   it("creates the rule with the given pattern (its ARN scopes the send permission — rule-delivery.test.ts)", async () => {
     const consumer = await build();
     await settle(consumer);

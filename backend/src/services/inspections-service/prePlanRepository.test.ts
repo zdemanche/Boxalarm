@@ -113,17 +113,61 @@ describe('putPrePlan', () => {
     expect(prePlanPut.ConditionExpression).toBe('attribute_not_exists(sk)');
   });
 
-  it('does not add a create-guard condition on an update Put', async () => {
+  it('conditions an update Put on the updatedAt that was read (lost-update guard)', async () => {
     const send = vi
       .fn()
-      .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING' }] })
+      .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING', updatedAt: 1234 }] })
       .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockResolvedValueOnce({});
     await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
     const transactCommand = send.mock.calls[2]?.[0] as { input: { TransactItems: unknown[] } };
     const transactItems = transactCommand.input.TransactItems as Array<Record<string, unknown>>;
-    const prePlanPut = transactItems[1]?.Put as { ConditionExpression?: string };
-    expect(prePlanPut.ConditionExpression).toBeUndefined();
+    expect(transactItems[1]?.Put).toMatchObject({
+      ConditionExpression: 'updatedAt = :readUpdatedAt',
+      ExpressionAttributeValues: { ':readUpdatedAt': 1234 },
+    });
+  });
+
+  it('keys a first pre-plan on the occupancy so two concurrent creates collide on the same sk', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockResolvedValueOnce({});
+    const item = await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
+    expect(item.sk).toBe('PREPLAN#OCC-1');
+  });
+
+  it('reads the existing pre-plan with a consistent read', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockResolvedValueOnce({});
+    await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);
+    const query = send.mock.calls[0]?.[0] as { input: { ConsistentRead?: boolean } };
+    expect(query.input.ConsistentRead).toBe(true);
+  });
+
+  it('throws PrePlanConflictError when a concurrent update changed the pre-plan since it was read (409)', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING', updatedAt: 1234 }] })
+      .mockResolvedValueOnce({ Item: OCCUPANCY })
+      .mockRejectedValueOnce(
+        new TransactionCanceledException({
+          message: 'Transaction cancelled',
+          $metadata: {},
+          CancellationReasons: [
+            { Code: 'None' },
+            { Code: 'ConditionalCheckFailed' },
+            { Code: 'None' },
+          ],
+        }),
+      );
+    await expect(putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT)).rejects.toThrow(
+      PrePlanConflictError,
+    );
   });
 
   it('throws PrePlanConflictError when two concurrent first-time PUTs race (409)', async () => {
@@ -150,7 +194,7 @@ describe('putPrePlan', () => {
   it('reuses the existing prePlanId on an update rather than minting a new one', async () => {
     const send = vi
       .fn()
-      .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING' }] })
+      .mockResolvedValueOnce({ Items: [{ prePlanId: 'PP-EXISTING', updatedAt: 1 }] })
       .mockResolvedValueOnce({ Item: OCCUPANCY })
       .mockResolvedValueOnce({});
     const item = await putPrePlan(fakeDoc(send), TABLE, DEPT_ID, 'OCC-1', INPUT);

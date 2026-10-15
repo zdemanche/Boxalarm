@@ -8,11 +8,9 @@ import {
   readAuthorizerContext,
 } from './authContext.js';
 import { DuplicateApparatusError, getApparatusRepository } from './apparatusRepository.js';
-import type { ApparatusStatus, CreateApparatusInput } from './apparatusRepository.js';
+import type { CreateApparatusInput } from './apparatusRepository.js';
 
 class ValidationError extends Error {}
-
-const VALID_STATUSES: readonly ApparatusStatus[] = ['IN_SERVICE', 'OUT_OF_SERVICE'];
 
 function parseJsonBody(event: ApparatusEvent): unknown {
   if (!event.body) {
@@ -52,10 +50,12 @@ function parseCreateApparatusInput(body: unknown): CreateApparatusInput {
   if (rawStatus === undefined) {
     return { unitId, type, status: 'IN_SERVICE' };
   }
-  if (typeof rawStatus !== 'string' || !VALID_STATUSES.includes(rawStatus as ApparatusStatus)) {
-    throw new ValidationError('status must be one of IN_SERVICE, OUT_OF_SERVICE');
+  if (rawStatus !== 'IN_SERVICE') {
+    throw new ValidationError(
+      'status must be IN_SERVICE when provided; take a unit out of service with PUT /apparatus/{unitId}/service-status and a reason',
+    );
   }
-  return { unitId, type, status: rawStatus as ApparatusStatus };
+  return { unitId, type, status: rawStatus };
 }
 
 export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerContext> = async (

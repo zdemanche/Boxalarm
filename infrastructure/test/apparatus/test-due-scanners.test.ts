@@ -92,6 +92,15 @@ describe("apparatus test-due scanners", { timeout: 30_000 }, () => {
     expect(lambdaByName(fn).inputs.reservedConcurrentExecutions).toBeUndefined();
   });
 
+  it.each([TEST_DUE, SCBA])(
+    "%s runs with timeout and memory above the AWS defaults",
+    async (fn) => {
+      await build();
+      expect(lambdaByName(fn).inputs.timeout).toBeGreaterThanOrEqual(60);
+      expect(lambdaByName(fn).inputs.memorySize).toBeGreaterThanOrEqual(512);
+    },
+  );
+
   it.each([
     [TEST_DUE, "APPARATUS_TEST_SCANNER_DEPT_ID"],
     [SCBA, "APPARATUS_SCANNER_DEPT_ID"],

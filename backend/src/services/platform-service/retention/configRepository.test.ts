@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { marshall } from '@aws-sdk/util-dynamodb';
+import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   RetentionConfigConflictError,
@@ -31,9 +32,9 @@ describe('retention configRepository', () => {
 
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0]?.[0]).toBeInstanceOf(GetCommand);
-    const command = send.mock.calls[1]?.[0] as PutCommand;
-    expect(command).toBeInstanceOf(PutCommand);
-    expect(command.input).toMatchObject({
+    const command = send.mock.calls[1]?.[0] as TransactWriteCommand;
+    expect(command).toBeInstanceOf(TransactWriteCommand);
+    expect(command.input.TransactItems?.[0]?.Put).toMatchObject({
       TableName: 'platform-service',
       Item: {
         pk: buildDeptScopedPk(DEPT_ID),
@@ -89,6 +90,28 @@ describe('retention configRepository', () => {
     expect(result.source).toBe('default');
   });
 
+  it('audits the first PUT as a CREATE with a null prior value that marshalls cleanly', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    await putRetentionConfig(fakeDocClient(send), {
+      deptId: DEPT_ID,
+      retentionYears: 10,
+      actorId: 'MBR-0001',
+    });
+
+    const transact = send.mock.calls[1]?.[0] as TransactWriteCommand;
+    const audit = transact.input.TransactItems?.[1]?.Put?.Item;
+    expect(audit).toMatchObject({
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'DEPARTMENT_CONFIG',
+      mutatedEntityId: 'RETENTION',
+      action: 'CREATE',
+      changedFields: { retentionYears: { old: null, new: 10 } },
+    });
+    for (const transactItem of transact.input.TransactItems ?? []) {
+      expect(() => marshall(transactItem.Put?.Item ?? {})).not.toThrow();
+    }
+  });
+
   it('increments version on overwrite when an existing config is present', async () => {
     const send = vi
       .fn()
@@ -112,13 +135,23 @@ describe('retention configRepository', () => {
     });
 
     expect(result.version).toBe(3);
-    const put = send.mock.calls[1]?.[0] as PutCommand;
-    expect(put.input.Item?.version).toBe(3);
-    expect(put.input.Item?.value).toEqual({ retentionYears: 12 });
-    expect(put.input.ConditionExpression).toBe(
-      'attribute_not_exists(pk) OR version = :expectedVersion',
-    );
-    expect(put.input.ExpressionAttributeValues).toEqual({ ':expectedVersion': 2 });
+    const transact = send.mock.calls[1]?.[0] as TransactWriteCommand;
+    const put = transact.input.TransactItems?.[0]?.Put;
+    expect(put?.Item?.version).toBe(3);
+    expect(put?.Item?.value).toEqual({ retentionYears: 12 });
+    expect(put?.Item?.updatedBy).toBe('MBR-0001');
+    const audit = transact.input.TransactItems?.[1]?.Put?.Item;
+    expect(audit).toMatchObject({
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'DEPARTMENT_CONFIG',
+      mutatedEntityId: 'RETENTION',
+      action: 'UPDATE',
+      actorId: 'MBR-0001',
+      changedFields: { retentionYears: { old: 7, new: 12 } },
+    });
+    expect(typeof audit?.gsi3sk).toBe('string');
+    expect(put?.ConditionExpression).toBe('attribute_not_exists(pk) OR version = :expectedVersion');
+    expect(put?.ExpressionAttributeValues).toEqual({ ':expectedVersion': 2 });
   });
 
   it('throws RetentionConfigConflictError when a concurrent PUT already advanced the version', async () => {
@@ -135,9 +168,10 @@ describe('retention configRepository', () => {
         },
       })
       .mockRejectedValueOnce(
-        new ConditionalCheckFailedException({
-          message: 'The conditional request failed',
+        new TransactionCanceledException({
+          message: 'Transaction cancelled',
           $metadata: {},
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
         }),
       );
     const client = fakeDocClient(send);

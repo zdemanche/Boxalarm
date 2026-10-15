@@ -47,7 +47,15 @@ function makeManager(groups: string[]): UserManager {
 }
 
 function renderPage(groups: string[] = ['CHIEF']) {
+  return renderPageWithClient(groups);
+}
+
+function renderPageWithClient(groups: string[] = ['CHIEF']) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return { client, ...renderUi(client, groups) };
+}
+
+function renderUi(client: QueryClient, groups: string[]) {
   return render(
     <QueryClientProvider client={client}>
       <AuthProvider userManager={makeManager(groups)}>
@@ -87,6 +95,14 @@ const STORED: CadSourcesResponse = {
     },
   ],
 };
+
+test('the bare webhook base is never offered as a webhook address', async () => {
+  server.use(http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)));
+  renderPage();
+  await screen.findByRole('heading', { name: 'County CAD' });
+  expect(screen.queryByText('Webhook address')).toBeNull();
+  expect(screen.queryByText(STORED.webhookUrl!)).toBeNull();
+});
 
 test('CHIEF sees the saved source, its email address and parser version', async () => {
   server.use(http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)));
@@ -244,7 +260,7 @@ test('rotating the webhook key shows the new key once, then never again', async 
         rotatedAt: '2026-09-30T13:00:00.000Z',
         previousKeyStillValid: true,
         previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
-        webhookUrl: STORED.webhookUrl,
+        webhookUrl: `${STORED.webhookUrl}/nichols-fd.county`,
       }),
     ),
   );
@@ -271,7 +287,7 @@ test('the one-time key dialog copies each value and a paste-ready vendor block',
         rotatedAt: '2026-09-30T13:00:00.000Z',
         previousKeyStillValid: true,
         previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
-        webhookUrl: STORED.webhookUrl,
+        webhookUrl: `${STORED.webhookUrl}/nichols-fd.county`,
       }),
     ),
   );
@@ -291,7 +307,7 @@ test('the one-time key dialog copies each value and a paste-ready vendor block',
   // The vendor block carries the whole contract: URL, headers, key, body, retries, warning.
   await user.click(within(shown).getByRole('button', { name: 'Copy set-up instructions' }));
   const block = await navigator.clipboard.readText();
-  expect(block).toContain(`POST ${STORED.webhookUrl}`);
+  expect(block).toContain(`POST ${STORED.webhookUrl}/nichols-fd.county`);
   expect(block).toContain('f'.repeat(64));
   expect(block).toContain(`x-api-key: ${'A'.repeat(32)}`);
   expect(block).toContain('X-Boxalarm-Source: nichols-fd.county');
@@ -413,7 +429,7 @@ test("test parse sends the draft's CAD time zone and names the zone that resolve
   });
   await user.click(screen.getByRole('button', { name: 'Test parse' }));
 
-  expect(await screen.findByText(/in America\/Chicago/)).toBeTruthy();
+  expect(await screen.findByText(/1:10:00\s*AM in America\/Chicago/)).toBeTruthy();
   expect(sent).toMatchObject({ timeZone: 'America/Chicago' });
 
   // Changing the zone drops the stale preview - its resolved time no longer applies.
@@ -441,4 +457,163 @@ test('test parse says when the dispatch time cannot be ordered by', async () => 
   });
   await user.click(screen.getByRole('button', { name: 'Test parse' }));
   expect(await screen.findByText(/applied in the order they\s+arrive/)).toBeTruthy();
+});
+
+test('rotating a key or issuing an email address keeps unsaved edits and new sources', async () => {
+  const rotatedAt = '2026-09-30T13:00:00.000Z';
+  let rotatedDone = false;
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () =>
+      HttpResponse.json(
+        rotatedDone
+          ? {
+              ...STORED,
+              version: 4,
+              sources: [{ ...STORED.sources[0]!, webhookRotatedAt: rotatedAt }],
+            }
+          : STORED,
+      ),
+    ),
+    http.post('/api/v1/platform/cad-sources/county/webhook-key', () => {
+      rotatedDone = true;
+      return HttpResponse.json({
+        keyId: 'nichols-fd.county',
+        secret: 'f'.repeat(64),
+        apiKey: 'A'.repeat(32),
+        rotatedAt,
+        previousKeyStillValid: true,
+        previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
+        webhookUrl: `${STORED.webhookUrl}/nichols-fd.county`,
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  const name = await screen.findByLabelText('Name');
+  fireEvent.change(name, { target: { value: 'County CAD (edited)' } });
+  await user.click(screen.getByRole('button', { name: 'Add CAD source' }));
+  expect(screen.getAllByLabelText('Source id')).toHaveLength(2);
+
+  await user.click(screen.getByRole('button', { name: 'Rotate webhook key' }));
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'Rotate key' }));
+  const shown = await screen.findByRole('dialog', { name: 'Copy the webhook key now' });
+  await user.click(within(shown).getByRole('button', { name: 'I have stored the key' }));
+
+  await waitFor(() =>
+    expect(screen.getByText(new Date(rotatedAt).toLocaleString(), { exact: false })).toBeTruthy(),
+  );
+  expect((screen.getAllByLabelText('Name')[0] as HTMLInputElement).value).toBe(
+    'County CAD (edited)',
+  );
+  expect(screen.getAllByLabelText('Source id')).toHaveLength(2);
+});
+
+test('a refetch by another chief while edits are unsaved is not adopted: the save sends the loaded version and gets a 409', async () => {
+  let version = 3;
+  let sent: { expectedVersion?: number } | undefined;
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () =>
+      HttpResponse.json({
+        ...STORED,
+        version,
+        sources: version === 3 ? STORED.sources : [],
+      }),
+    ),
+    http.put('/api/v1/platform/cad-sources', async ({ request }) => {
+      sent = (await request.json()) as { expectedVersion?: number };
+      return HttpResponse.json(
+        { type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' },
+        { status: 409 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  const view = renderPageWithClient();
+  const name = await screen.findByLabelText('Name');
+  fireEvent.change(name, { target: { value: 'County CAD (edited)' } });
+
+  version = 4;
+  await view.client.refetchQueries({ queryKey: ['platform', 'cad-sources'] });
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('County CAD (edited)');
+
+  await user.click(screen.getByRole('button', { name: 'Save CAD sources' }));
+  await waitFor(() => expect(sent?.expectedVersion).toBe(3));
+});
+
+test('a test parse with an invalid CAD time zone still renders, showing the zone the backend used', async () => {
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () => HttpResponse.json(STORED)),
+    http.post('/api/v1/platform/cad-sources/test-parse', () =>
+      HttpResponse.json({
+        status: 'PARSED',
+        fields: { address: '1 MAIN ST', dispatchTime: '01:10' },
+        dispatchTimeResolved: '2026-10-01T06:10:00.000Z',
+      }),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  fireEvent.change(await screen.findByLabelText('CAD time zone'), {
+    target: { value: 'America/Chicgo' },
+  });
+  fireEvent.change(screen.getByLabelText('Sample dispatch text'), {
+    target: { value: 'ADDR: 1 MAIN ST\nTIME: 01:10' },
+  });
+  await user.click(screen.getByRole('button', { name: 'Test parse' }));
+  expect(await screen.findByText(/in America\/New_York/)).toBeTruthy();
+});
+
+async function rotateKeyWithDirtyEdit(serverVersionAfterRotate: number) {
+  const sent: { expectedVersion?: number }[] = [];
+  let rotatedDone = false;
+  server.use(
+    http.get('/api/v1/platform/cad-sources', () =>
+      HttpResponse.json(rotatedDone ? { ...STORED, version: serverVersionAfterRotate } : STORED),
+    ),
+    http.post('/api/v1/platform/cad-sources/county/webhook-key', () => {
+      rotatedDone = true;
+      return HttpResponse.json({
+        keyId: 'nichols-fd.county',
+        secret: 'f'.repeat(64),
+        apiKey: 'A'.repeat(32),
+        rotatedAt: '2026-09-30T13:00:00.000Z',
+        previousKeyStillValid: true,
+        previousKeyExpiresAt: '2026-10-01T13:00:00.000Z',
+        webhookUrl: `${STORED.webhookUrl}/nichols-fd.county`,
+      });
+    }),
+    http.put('/api/v1/platform/cad-sources', async ({ request }) => {
+      const body = (await request.json()) as { expectedVersion?: number };
+      sent.push(body);
+      return body.expectedVersion === serverVersionAfterRotate
+        ? HttpResponse.json({ ...STORED, version: serverVersionAfterRotate + 1 })
+        : HttpResponse.json(
+            { type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' },
+            { status: 409 },
+          );
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'County (edited)' } });
+  await user.click(screen.getByRole('button', { name: 'Rotate webhook key' }));
+  await user.click(
+    within(await screen.findByRole('dialog')).getByRole('button', { name: 'Rotate key' }),
+  );
+  const shown = await screen.findByRole('dialog', { name: 'Copy the webhook key now' });
+  await user.click(within(shown).getByRole('button', { name: 'I have stored the key' }));
+  await user.click(screen.getByRole('button', { name: 'Save CAD sources' }));
+  return sent;
+}
+
+test('after our own key rotation the next save sends the post-rotate version', async () => {
+  const sent = await rotateKeyWithDirtyEdit(4);
+  await waitFor(() => expect(sent.map((b) => b.expectedVersion)).toEqual([4]));
+});
+
+test('a concurrent save landing before our rotation is not adopted: the next save sends the loaded version and gets a 409', async () => {
+  const sent = await rotateKeyWithDirtyEdit(5);
+  await waitFor(() => expect(sent.map((b) => b.expectedVersion)).toEqual([3]));
+  expect(await screen.findByRole('alert')).toBeTruthy();
 });

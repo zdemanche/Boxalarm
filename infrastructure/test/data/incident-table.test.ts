@@ -59,6 +59,19 @@ async function settle(t: {
 }
 
 describe("IncidentTable", () => {
+  it("defines GSI3 on gsi3pk/gsi3sk so incident audit rows are queryable by entity", async () => {
+    const { IncidentTable } = await import("../../components/data/incident-table");
+    const incident = new IncidentTable("incident-gsi3", { env: "dev" });
+    await settle(incident);
+
+    const gsis = await resolve(incident.table.globalSecondaryIndexes);
+    expect(gsis?.find((g) => g.name === "GSI3")).toMatchObject({
+      hashKey: "gsi3pk",
+      rangeKey: "gsi3sk",
+      projectionType: "ALL",
+    });
+  });
+
   it("names the table boxalarm-{env}-incident-service with on-demand billing, PITR, and NEW_AND_OLD_IMAGES streams", async () => {
     const { IncidentTable } = await import("../../components/data/incident-table");
     const incident = new IncidentTable("incident", { env: "dev" });

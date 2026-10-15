@@ -171,7 +171,8 @@ describe('handler', () => {
     const body = JSON.parse(result.body ?? '{}') as { losapPointsAwarded: number };
     expect(body.losapPointsAwarded).toBe(0);
     const items = transactItemsFrom(send.mock.calls[2]?.[0]);
-    expect(items).toHaveLength(1);
+    expect(items.map((item) => item.entityType)).toEqual(['ATTENDANCE_RECORD', 'OUTBOX_ENTRY']);
+    expect(items[1]?.payload).toMatchObject({ losapPoints: 0, activityType: 'DRILL' });
   });
 
   it('signals the skip via a metric and a log line when no LOSAP config exists (P6)', async () => {
@@ -217,7 +218,7 @@ describe('handler', () => {
     const body = JSON.parse(result.body ?? '{}') as { losapPointsAwarded: number };
     expect(body.losapPointsAwarded).toBe(3);
 
-    const items = transactItemsFrom(send.mock.calls[2]?.[0]);
+    const items = transactItemsFrom(send.mock.calls[3]?.[0]);
     const attendanceItem = items.find((item) => item.entityType === 'ATTENDANCE_RECORD');
     const losapItem = items.find((item) => item.entityType === 'LOSAP_POINT_ENTRY');
     expect(attendanceItem?.losapPointsAwarded).toBe(3);
@@ -240,6 +241,7 @@ describe('handler', () => {
         },
       })
       .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ Item: { entityType: 'MEMBER' } }) // memberExists (call 2)
       .mockResolvedValueOnce({
         Item: {
@@ -247,6 +249,7 @@ describe('handler', () => {
           version: 2,
         },
       })
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({});
     mockDynamoWithSend(send);
     const { handler } = await import('./handler.js');
@@ -258,16 +261,109 @@ describe('handler', () => {
       buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798100000, hours: 1 }),
     );
 
-    const firstEntries = transactItemsFrom(send.mock.calls[2]?.[0]).filter(
+    const firstEntries = transactItemsFrom(send.mock.calls[3]?.[0]).filter(
       (item) => item.entityType === 'LOSAP_POINT_ENTRY',
     );
-    const secondEntries = transactItemsFrom(send.mock.calls[5]?.[0]).filter(
+    const secondEntries = transactItemsFrom(send.mock.calls[7]?.[0]).filter(
       (item) => item.entityType === 'LOSAP_POINT_ENTRY',
     );
     expect(firstEntries[0]?.ruleVersionId).toBe('RULE-2026-A');
     expect(firstEntries[0]?.points).toBe(2);
     expect(secondEntries[0]?.ruleVersionId).toBe('RULE-2026-B');
     expect(secondEntries[0]?.points).toBe(5);
+  });
+
+  it("files a New Year's Eve evening call under the department-local year, not the UTC year", async () => {
+    mockAuthzDecision('ALLOW');
+    const send = vi.fn(
+      (command: { constructor: { name: string }; input?: { Key?: { sk?: string } } }) => {
+        if (command.constructor.name === 'GetCommand') {
+          if (command.input?.Key?.sk === 'METADATA') {
+            return Promise.resolve({ Item: { entityType: 'MEMBER' } });
+          }
+          return Promise.resolve(
+            command.input?.Key?.sk === 'CONFIG#LOSAP_POINT_RULES'
+              ? {
+                  Item: {
+                    value: { ruleVersionId: 'RULE-2026', pointsByActivityType: { DRILL: 3 } },
+                    version: 1,
+                  },
+                }
+              : {},
+          );
+        }
+        return Promise.resolve({});
+      },
+    );
+    mockDynamoWithSend(send);
+    const { handler } = await import('./handler.js');
+
+    await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt: 1798770600, hours: 1 }),
+    );
+
+    const transact = send.mock.calls.find(
+      (call: [{ constructor: { name: string } }]) =>
+        call[0].constructor.name === 'TransactWriteCommand',
+    );
+    const losapItem = transactItemsFrom(transact?.[0]).find(
+      (item) => item.entityType === 'LOSAP_POINT_ENTRY',
+    );
+    expect(losapItem?.sk).toMatch(/^LOSAP#2026#/);
+    expect(losapItem?.gsi1sk).toBe('LOSAP_POINT_ENTRY#2026');
+  });
+
+  it('emits personnel.attendance.recorded in the same transaction as the record', async () => {
+    mockAuthzDecision('ALLOW');
+    const { send } = mockDynamo('OK');
+    const { handler } = await import('./handler.js');
+
+    await handler(
+      buildEvent({
+        activityType: 'CALL',
+        refId: 'dispatch-4471',
+        occurredAt: 1798000500,
+        hours: 1,
+      }),
+    );
+
+    const outbox = transactItemsFrom(send.mock.calls[2]?.[0]).find(
+      (item) => item.entityType === 'OUTBOX_ENTRY',
+    );
+    expect(outbox).toMatchObject({
+      eventType: 'personnel.attendance.recorded',
+      payload: {
+        deptId: DEPT_ID,
+        memberId: MEMBER_ID,
+        activityType: 'CALL',
+        activityId: 'dispatch-4471',
+        losapPoints: 0,
+      },
+    });
+  });
+
+  it.each([
+    ['milliseconds', Date.now()],
+    ['a fraction', 1798000500.5],
+    ['zero', 0],
+    ['a negative', -1],
+  ])('returns 400 and writes nothing when occurredAt is %s', async (_label, occurredAt) => {
+    mockAuthzDecision('ALLOW');
+    const { send } = mockDynamo('OK');
+    const { handler } = await import('./handler.js');
+
+    const result = await handler(
+      buildEvent({ activityType: 'DRILL', refId: null, occurredAt, hours: 1 }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(
+      send.mock.calls.some(
+        (call) =>
+          (call[0] as { constructor: { name: string } }).constructor.name ===
+          'TransactWriteCommand',
+      ),
+    ).toBe(false);
   });
 
   it('denies (fails closed) when Cedar denies the action', async () => {
@@ -472,7 +568,8 @@ describe('onBehalfHandler', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('returns 404 when the memberId path parameter is missing', async () => {
+  // withAuthorization refuses an empty resource id (400) before Verified Permissions is called.
+  it('returns 400 when the memberId path parameter is missing', async () => {
     mockAuthzDecision('ALLOW');
     mockDynamo('OK');
     const { onBehalfHandler } = await import('./handler.js');
@@ -481,7 +578,7 @@ describe('onBehalfHandler', () => {
       buildEvent({ activityType: 'DRILL', occurredAt: 1, hours: 1 }, { pathParameters: {} }),
     );
 
-    expect(result).toMatchObject({ statusCode: 404 });
+    expect(result).toMatchObject({ statusCode: 400 });
   });
 
   it("returns 404 and writes nothing when the target memberId does not exist in the caller's department (MAJOR, PR #320 review)", async () => {

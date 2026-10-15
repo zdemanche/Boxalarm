@@ -83,10 +83,16 @@ export function driftKey(entry: Drift): string {
 /** Drift keys kept on the last-run row to tell new drift from drift already reported. */
 const MAX_DRIFT_KEYS = 1_000;
 
+function callCreateEpoch(nerisId: string): number {
+  const segment = nerisId.split('|')[2] ?? '';
+  return /^\d+$/.test(segment) ? Number(segment) : Number.POSITIVE_INFINITY;
+}
+
 export function diffAgainstNeris(
   local: readonly LocalSubmitted[],
   remote: readonly NerisListedIncident[],
   truncated: boolean,
+  windowStart = 0,
 ): Drift[] {
   const drift: Drift[] = [];
   const remoteById = new Map(remote.map((record) => [record.nerisId, record]));
@@ -117,6 +123,7 @@ export function diffAgainstNeris(
   if (!truncated) {
     for (const record of remote) {
       if (localIds.has(record.nerisId)) continue;
+      if (callCreateEpoch(record.nerisId) < windowStart) continue;
       // No skip by incident number: a second NERIS record with the same number but another
       // call_create is exactly the duplicate this check exists to find (review minor 10).
       drift.push({
@@ -178,6 +185,20 @@ export async function remindNoActivity(
   const { month, from, to } = previousMonth(now, timeZone);
   const incidents = await queryIncidentsBetween(client, tableName, deptId, from, to);
   if (incidents.length > 0) return 'not_needed';
+  const dispatches = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
+      ExpressionAttributeValues: {
+        ':pk': buildDeptScopedPk(deptId),
+        ':from': `DISPATCH#${from}`,
+        ':to': `DISPATCH#${to}`,
+      },
+      Select: 'COUNT',
+    }),
+  );
+  if ((dispatches.Count ?? 0) > 0) return 'not_needed';
   const pk = buildDeptScopedPk(deptId, 'NERIS');
   const filed = await client.send(
     new GetCommand({ TableName: tableName, Key: { pk, sk: `NO_ACTIVITY#${month}` } }),
@@ -243,14 +264,9 @@ export async function reconcileDepartment(
   correlationId: string,
 ): Promise<{ drift: Drift[]; truncated: boolean; newDriftCount: number } | undefined> {
   const toAlarmAt = Math.floor(now.getTime() / 1000);
+  const windowStart = toAlarmAt - RECONCILE_WINDOW_DAYS * 86_400;
   const local = (
-    await queryIncidentsBetween(
-      client,
-      tableName,
-      deptId,
-      toAlarmAt - RECONCILE_WINDOW_DAYS * 86_400,
-      toAlarmAt,
-    )
+    await queryIncidentsBetween(client, tableName, deptId, windowStart, toAlarmAt)
   ).flatMap((item) =>
     typeof item.incidentId === 'string' && typeof item.nerisIncidentId === 'string'
       ? [
@@ -277,7 +293,7 @@ export async function reconcileDepartment(
     });
     return undefined;
   }
-  const drift = diffAgainstNeris(local, listed.incidents, listed.truncated);
+  const drift = diffAgainstNeris(local, listed.incidents, listed.truncated, windowStart);
   const repaired = await repairDrift(client, tableName, deptId, drift, listed.incidents, now);
   await clearFoundAgain(client, tableName, deptId, local, listed.incidents);
   // Drift already reported on an earlier night is not new: the alarm and the event are for
@@ -355,7 +371,9 @@ async function clearFoundAgain(
   local: readonly LocalSubmitted[],
   remote: readonly NerisListedIncident[],
 ): Promise<void> {
-  const remoteIds = new Set(remote.map((record) => record.nerisId));
+  const remoteIds = new Set(
+    remote.filter((record) => record.status !== 'DELETED').map((record) => record.nerisId),
+  );
   for (const record of local) {
     if ((!record.missingChecks && !record.givenUp) || !remoteIds.has(record.nerisIncidentId)) {
       continue;

@@ -225,13 +225,12 @@ export class Incident extends pulumi.ComponentResource {
           .all([cmkStatement, vpStatement, args.incidentTableArn])
           .apply(([cmk, vp, tableArn]) => [
             {
-              // ConditionCheckItem: parent-incident existence check inside the transaction;
-              // GetItem: read-back of the committed RESPONSE# row; PutItem: the
+              // UpdateItem: the conditional METADATA update (row exists, not locked) that bumps
+              // contentVersion; GetItem: read-back of the committed RESPONSE# row; PutItem: the
               // incident.response_unit.updated OUTBOX_ENTRY.
               Sid: "IncidentResponseTimesAccess" as const,
               Effect: "Allow" as const,
               Action: [
-                "dynamodb:ConditionCheckItem",
                 "dynamodb:GetItem",
                 "dynamodb:PutItem",
                 "dynamodb:UpdateItem",
@@ -278,8 +277,8 @@ export class Incident extends pulumi.ComponentResource {
           ])
           .apply(([cmk, vp, s3, tableArn]) => [
             {
-              // ConditionCheckItem: the parent report must exist and not be locked, checked
-              // inside the module's write transaction (secondaryRepository.ts, lock.ts).
+              // UpdateItem: the conditional METADATA update requires the parent report to exist
+              // and not be locked, and bumps contentVersion (secondaryRepository.ts, lock.ts).
               Sid: "IncidentExposuresAccess" as const,
               Effect: "Allow" as const,
               Action: [
@@ -287,7 +286,6 @@ export class Incident extends pulumi.ComponentResource {
                 "dynamodb:UpdateItem",
                 "dynamodb:Query",
                 "dynamodb:GetItem",
-                "dynamodb:ConditionCheckItem",
               ],
               Resource: [tableArn],
             },
@@ -428,7 +426,7 @@ export class Incident extends pulumi.ComponentResource {
         key: "submit",
         fn: "submit",
         routeKey: "POST /api/v1/incidents/{incidentId}/submit",
-        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem"],
+        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query"],
       },
       {
         key: "submission-get",
@@ -444,7 +442,7 @@ export class Incident extends pulumi.ComponentResource {
         key: "submission-retry",
         fn: "submission-retry",
         routeKey: "POST /api/v1/incidents/{incidentId}/submission/retry",
-        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem"],
+        actions: ["dynamodb:UpdateItem", "dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:Query"],
       },
     ];
     const submissionLambdas = submissionRoutes.map((route) => {

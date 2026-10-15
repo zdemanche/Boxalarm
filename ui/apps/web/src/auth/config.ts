@@ -61,3 +61,31 @@ export function buildForgotPasswordUrl(): string {
   });
   return `${origin.replace(/\/$/, '')}/forgotPassword?${params.toString()}`;
 }
+
+/**
+ * Cognito's discovery document has no end_session_endpoint, so oidc-client-ts's signoutRedirect
+ * cannot build a request; the hosted-UI /logout (client_id + a registered logout_uri) is what
+ * ends the hosted-UI session cookie.
+ */
+export function buildLogoutUrl(): string {
+  const origin = import.meta.env.COGNITO_HOSTED_UI_ORIGIN;
+  const clientId = import.meta.env.COGNITO_WEB_CLIENT_ID;
+  if (!origin || !clientId) {
+    throw new Error('Missing COGNITO_HOSTED_UI_ORIGIN or COGNITO_WEB_CLIENT_ID');
+  }
+
+  const params = new URLSearchParams({ client_id: clientId, logout_uri: window.location.origin });
+  return `${origin.replace(/\/$/, '')}/logout?${params.toString()}`;
+}
+
+export function buildRevokeRequest(token: string): { url: string; body: URLSearchParams } {
+  const origin = import.meta.env.COGNITO_HOSTED_UI_ORIGIN;
+  const clientId = import.meta.env.COGNITO_WEB_CLIENT_ID;
+  if (!origin || !clientId) {
+    throw new Error('Missing COGNITO_HOSTED_UI_ORIGIN or COGNITO_WEB_CLIENT_ID');
+  }
+  return {
+    url: `${origin.replace(/\/$/, '')}/oauth2/revoke`,
+    body: new URLSearchParams({ token, client_id: clientId }),
+  };
+}

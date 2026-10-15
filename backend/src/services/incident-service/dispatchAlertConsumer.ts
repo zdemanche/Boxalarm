@@ -22,6 +22,7 @@ interface DispatchAlertReceivedEnvelope {
   readonly narrative: string;
   readonly dispatchedAt: number;
   readonly verifyRequired?: true;
+  readonly revision: number;
 }
 
 function parseEnvelope(body: string): DispatchAlertReceivedEnvelope {
@@ -47,6 +48,7 @@ function parseEnvelope(body: string): DispatchAlertReceivedEnvelope {
     crossStreets: typeof payload.crossStreets === 'string' ? payload.crossStreets : '',
     narrative: payload.narrative,
     dispatchedAt: payload.dispatchedAt,
+    revision: typeof payload.revision === 'number' ? payload.revision : 0,
     // CAD ingress (feat/cad-ingress) flags a dispatch it could not parse: the address is a
     // placeholder and the text must be read. Optional - a producer without it sends nothing.
     ...(payload.verifyRequired === true ? { verifyRequired: true as const } : {}),
@@ -82,7 +84,7 @@ async function processRecord(record: SQSRecord, deps: DispatchAlertConsumerDeps)
   const tableName = getTableName(process.env);
 
   try {
-    await putDispatchAlertCopy(client, tableName, {
+    const outcome = await putDispatchAlertCopy(client, tableName, {
       dispatchId: envelope.dispatchId,
       deptId: envelope.deptId,
       incidentType: envelope.incidentType,
@@ -90,9 +92,13 @@ async function processRecord(record: SQSRecord, deps: DispatchAlertConsumerDeps)
       crossStreets: envelope.crossStreets,
       narrative: envelope.narrative,
       dispatchedAt: envelope.dispatchedAt,
+      revision: envelope.revision,
       ...(envelope.verifyRequired ? { verifyRequired: true as const } : {}),
     });
-    emitOutcomeMetric(METRIC_NAMESPACE, 'DispatchAlertCopyUpdated');
+    emitOutcomeMetric(
+      METRIC_NAMESPACE,
+      outcome === 'stale' ? 'DispatchAlertCopyStale' : 'DispatchAlertCopyUpdated',
+    );
   } catch (error) {
     logError('incident.dispatchAlertCopy.writeFailed', error, {
       correlationId: envelope.dispatchId,

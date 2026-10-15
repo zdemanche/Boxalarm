@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CACHE_TTL_MS, createRevocationChecker, revocationFailsOpen } from './revocationCheck.js';
+import {
+  CACHE_TTL_MS,
+  FAILURE_BACKOFF_MS,
+  createRevocationChecker,
+  revocationFailsOpen,
+} from './revocationCheck.js';
 
 const MEMBER = { deptId: 'NICHOLS', sub: 'sub-1' };
 
@@ -61,6 +66,52 @@ describe('createRevocationChecker', () => {
     now = CACHE_TTL_MS * 10;
 
     await expect(checker.check({ ...MEMBER, issuedAt: 5 })).resolves.toBe('revoked');
+  });
+
+  it('does not read again within the backoff after a failed read with a stale entry', async () => {
+    let now = 0;
+    const read = vi.fn().mockResolvedValueOnce(10).mockRejectedValue(new Error('down'));
+    const onReadError = vi.fn();
+    const checker = createRevocationChecker(read, () => now, onReadError);
+    await checker.check({ ...MEMBER, issuedAt: 5 });
+
+    now = CACHE_TTL_MS;
+    await expect(checker.check({ ...MEMBER, issuedAt: 5 })).resolves.toBe('revoked');
+    now += FAILURE_BACKOFF_MS - 1;
+    await expect(checker.check({ ...MEMBER, issuedAt: 5 })).resolves.toBe('revoked');
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(onReadError).toHaveBeenCalledTimes(1);
+    expect(onReadError).toHaveBeenCalledWith(expect.any(Error), true);
+
+    now += 1;
+    await checker.check({ ...MEMBER, issuedAt: 5 });
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it('answers unavailable without reading again within the backoff when nothing is cached', async () => {
+    let now = 0;
+    const read = vi.fn().mockRejectedValue(new Error('down'));
+    const onReadError = vi.fn();
+    const checker = createRevocationChecker(read, () => now, onReadError);
+
+    await expect(checker.check({ ...MEMBER, issuedAt: 1 })).resolves.toBe('unavailable');
+    now = FAILURE_BACKOFF_MS - 1;
+    await expect(checker.check({ ...MEMBER, issuedAt: 1 })).resolves.toBe('unavailable');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(onReadError).toHaveBeenCalledWith(expect.any(Error), false);
+
+    now = FAILURE_BACKOFF_MS;
+    read.mockResolvedValue(undefined);
+    await expect(checker.check({ ...MEMBER, issuedAt: 1 })).resolves.toBe('allow');
+  });
+
+  it('skips the cache and asks for a consistent read when fresh', async () => {
+    const read = vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(100);
+    const checker = createRevocationChecker(read);
+    await checker.check({ ...MEMBER, issuedAt: 5 });
+
+    await expect(checker.check({ ...MEMBER, issuedAt: 5, fresh: true })).resolves.toBe('revoked');
+    expect(read).toHaveBeenLastCalledWith('NICHOLS', 'sub-1', true);
   });
 });
 

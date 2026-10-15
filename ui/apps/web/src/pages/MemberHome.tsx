@@ -19,7 +19,7 @@ const SHIFT_HORIZON_DAYS = 7;
 const CERT_WARNING_DAYS = 60;
 
 /** A shift's fill as a status: an open seat is what a member can act on. */
-const SHIFT_STATUS_ROLE: Record<ShiftStatus, StatusRole> = {
+export const SHIFT_STATUS_ROLE: Record<ShiftStatus, StatusRole> = {
   OPEN: 'warning',
   PARTIALLY_FILLED: 'caution',
   FULL: 'ok',

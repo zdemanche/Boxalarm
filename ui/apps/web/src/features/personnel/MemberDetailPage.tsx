@@ -37,6 +37,7 @@ import type { AttendanceActivityType, Member } from './types';
 import { RolesSection } from './RolesSection';
 import { AccountSecuritySection, canUseAccountKillSwitches } from './AccountSecuritySection';
 import { MemberStatusSection } from './MemberStatusSection';
+import { problemMessage } from './problemMessage';
 import { MEMBER_STATUS_ROLE } from './memberStatus';
 import { formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
@@ -90,6 +91,8 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
   const queryClient = useQueryClient();
   const [qualCode, setQualCode] = useState('');
 
+  const [qualError, setQualError] = useState<string | null>(null);
+
   const qualsQuery = useQuery({
     queryKey: ['personnel', 'members', memberId, 'quals'],
     queryFn: () => getQuals(auth, memberId),
@@ -99,10 +102,12 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
     mutationFn: () => putQual(auth, memberId, qualCode, null),
     onSuccess: async () => {
       setQualCode('');
+      setQualError(null);
       await queryClient.invalidateQueries({
         queryKey: ['personnel', 'members', memberId, 'quals'],
       });
     },
+    onError: (error: Error) => setQualError(problemMessage(error)),
   });
 
   const quals = qualsQuery.data ?? [];
@@ -111,6 +116,10 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
     <Card title="Qualifications">
       {qualsQuery.isLoading ? (
         <Skeleton lines={2} />
+      ) : qualsQuery.error ? (
+        <ApiForbiddenGate error={qualsQuery.error} embedded>
+          <p className={styles.muted}>Unable to load qualifications.</p>
+        </ApiForbiddenGate>
       ) : quals.length === 0 ? (
         <p className={styles.muted}>No qualifications on file.</p>
       ) : (
@@ -150,6 +159,11 @@ function QualsSection({ memberId, canEdit }: { memberId: string; canEdit: boolea
           <Button type="submit" variant="secondary" loading={addQual.isPending}>
             Assign
           </Button>
+          {qualError ? (
+            <p role="alert" aria-live="assertive" className={styles.error}>
+              {qualError}
+            </p>
+          ) : null}
         </form>
       ) : null}
     </Card>
@@ -282,6 +296,7 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
     activityType: 'DRILL',
     hours: '',
   });
+  const [entryError, setEntryError] = useState<string | null>(null);
 
   const attendanceQuery = useQuery({
     queryKey: ['personnel', 'attendance', memberId],
@@ -299,8 +314,10 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
       }),
     onSuccess: async () => {
       setForm({ activityType: 'DRILL', hours: '' });
+      setEntryError(null);
       await queryClient.invalidateQueries({ queryKey: ['personnel', 'attendance', memberId] });
     },
+    onError: (error: Error) => setEntryError(problemMessage(error)),
   });
 
   if (!isOwnRecord) {
@@ -313,6 +330,10 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
     <Card title="Attendance">
       {attendanceQuery.isLoading ? (
         <Skeleton lines={3} />
+      ) : attendanceQuery.error ? (
+        <ApiForbiddenGate error={attendanceQuery.error} embedded>
+          <p className={styles.muted}>Unable to load attendance.</p>
+        </ApiForbiddenGate>
       ) : records.length === 0 ? (
         <p className={styles.muted}>No attendance recorded yet.</p>
       ) : (
@@ -372,6 +393,11 @@ function AttendanceSection({ memberId, isOwnRecord }: { memberId: string; isOwnR
         <Button type="submit" variant="secondary" loading={addEntry.isPending}>
           Record
         </Button>
+        {entryError ? (
+          <p role="alert" aria-live="assertive" className={styles.error}>
+            {entryError}
+          </p>
+        ) : null}
       </form>
     </Card>
   );

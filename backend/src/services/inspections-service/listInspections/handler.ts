@@ -61,7 +61,14 @@ const list = withAuthorization(
           ),
         ),
       );
-      items = pages.flatMap((page) => (page.Items ?? []) as InspectionItem[]);
+      items = pages
+        .flatMap((page) => (page.Items ?? []) as InspectionItem[])
+        .filter(
+          (row) =>
+            window.openOnlyBefore === undefined ||
+            row.nextDueDate >= window.openOnlyBefore ||
+            row.conductedDate === undefined,
+        );
     } catch (error) {
       console.error(
         JSON.stringify({

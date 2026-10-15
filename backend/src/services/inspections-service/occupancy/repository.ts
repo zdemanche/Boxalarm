@@ -7,9 +7,9 @@ import {
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
-import geohash from 'ngeohash';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { VerifiedPrincipal } from '@boxalarm/dept-scope';
+import { encodeGeohash } from '../map/geohash.js';
 import { logStructuredError } from './log.js';
 import type { OccupancyServiceConfig } from './config.js';
 import type { CreateOccupancyInput, OccupancyContact, UpdateOccupancyInput } from './validation.js';
@@ -162,6 +162,10 @@ function buildAuditItem(
   };
 }
 
+export function addressIndexSegment(normalizedAddress: string): string {
+  return normalizedAddress.replace(/%/g, '%25').replace(/#/g, '%23');
+}
+
 export async function createOccupancy(
   config: OccupancyServiceConfig,
   principal: VerifiedPrincipal,
@@ -176,7 +180,7 @@ export async function createOccupancy(
   const hasCoordinates = input.latitude !== undefined && input.longitude !== undefined;
   let geo: { readonly gsi3pk: string; readonly gsi3sk: string } | undefined;
   if (hasCoordinates) {
-    const geohash8 = geohash.encode(input.latitude, input.longitude, GEOHASH8_PRECISION);
+    const geohash8 = encodeGeohash(input.latitude, input.longitude, GEOHASH8_PRECISION);
     const geohash5 = geohash8.slice(0, GEOHASH5_PRECISION);
     geo = {
       gsi3pk: buildDeptScopedPk(deptId, 'OCCUPANCY', 'GEO', geohash5),
@@ -204,7 +208,12 @@ export async function createOccupancy(
     sk: `ADDR#${input.normalizedAddress}`,
     entityType: 'OCCUPANCY_ADDRESS_INDEX',
     occupancyId,
-    gsi3pk: buildDeptScopedPk(deptId, 'OCCUPANCY', 'ADDR', input.normalizedAddress),
+    gsi3pk: buildDeptScopedPk(
+      deptId,
+      'OCCUPANCY',
+      'ADDR',
+      addressIndexSegment(input.normalizedAddress),
+    ),
     gsi3sk: occupancyId,
   };
 

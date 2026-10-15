@@ -36,7 +36,7 @@ describe('isAuthorized', () => {
 });
 
 describe('batchIsAuthorized', () => {
-  it('issues exactly one BatchIsAuthorizedWithToken call for N resources (AC2)', async () => {
+  it('issues one BatchIsAuthorizedWithToken call for up to 30 resources (AC2)', async () => {
     const send = vi.fn().mockResolvedValue({
       results: [
         { decision: Decision.ALLOW },
@@ -56,6 +56,78 @@ describe('batchIsAuthorized', () => {
       { resourceId: 'r-2', allowed: false },
       { resourceId: 'r-3', allowed: true },
     ]);
+  });
+
+  it('keeps exactly 30 resources in a single call', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `r-${i}`);
+    const send = vi.fn().mockResolvedValue({
+      results: ids.map(() => ({ decision: Decision.ALLOW })),
+    });
+    await batchIsAuthorized(fakeClient(send), CONFIG, 'token', 'A', 'Read', 'R', ids);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies only the short chunk without shifting later decisions', async () => {
+    const ids = Array.from({ length: 31 }, (_, i) => `r-${i}`);
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ results: [{ decision: Decision.ALLOW }] })
+      .mockResolvedValueOnce({ results: [{ decision: Decision.ALLOW }] });
+    const decisions = await batchIsAuthorized(
+      fakeClient(send),
+      CONFIG,
+      'token',
+      'A',
+      'Read',
+      'R',
+      ids,
+    );
+    expect(decisions[0]?.allowed).toBe(true);
+    expect(decisions[1]?.allowed).toBe(false);
+    expect(decisions[30]?.allowed).toBe(true);
+  });
+
+  it('splits 31 resources into chunks of 30 and 1, keeping decisions in request order', async () => {
+    const ids = Array.from({ length: 31 }, (_, i) => `r-${i}`);
+    const send = vi.fn().mockImplementation((command: { input: { requests: unknown[] } }) =>
+      Promise.resolve({
+        results: command.input.requests.map((_, i) => ({
+          decision:
+            command.input.requests.length === 1 || i % 2 === 0 ? Decision.ALLOW : Decision.DENY,
+        })),
+      }),
+    );
+    const decisions = await batchIsAuthorized(
+      fakeClient(send),
+      CONFIG,
+      'token',
+      'A',
+      'Read',
+      'R',
+      ids,
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(
+      (send.mock.calls as [{ input: { requests: unknown[] } }][]).map(
+        ([command]) => command.input.requests.length,
+      ),
+    ).toEqual([30, 1]);
+    expect(decisions.map((d) => d.resourceId)).toEqual(ids);
+    expect(decisions[1]?.allowed).toBe(false);
+    expect(decisions[30]?.allowed).toBe(true);
+  });
+
+  it('throws AuthzUnavailableError with no partial list when a later chunk rejects', async () => {
+    const ids = Array.from({ length: 31 }, (_, i) => `r-${i}`);
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        results: ids.slice(0, 30).map(() => ({ decision: Decision.ALLOW })),
+      })
+      .mockRejectedValueOnce(new Error('VP outage'));
+    await expect(
+      batchIsAuthorized(fakeClient(send), CONFIG, 'token', 'A', 'Read', 'R', ids),
+    ).rejects.toBeInstanceOf(AuthzUnavailableError);
   });
 
   it('returns an empty result and makes zero VP calls for an empty resource list', async () => {

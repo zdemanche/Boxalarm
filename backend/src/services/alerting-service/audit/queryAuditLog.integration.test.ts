@@ -101,7 +101,7 @@ describe('audit log GSI1/GSI2 queries (real DynamoDB via LocalStack, AC1/AC2/AC4
     const page = await queryMemberDeliveryHistory(client, TABLE_NAME, DEPT_ID, 'mbr-201');
 
     expect(page.entries).toHaveLength(1);
-    expect(page.entries[0]?.memberId).toBe('mbr-201');
+    expect(page.entries[0]).toEqual({ dispatchId: 'D-1', sentAt: 1798000000 });
   });
 
   it('assembles a full per-member per-channel delivery timeline for a dispatch in range via GSI2 + pk fan-out (AC1/AC4)', async () => {

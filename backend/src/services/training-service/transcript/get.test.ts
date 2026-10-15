@@ -133,6 +133,32 @@ describe('transcript/get.ts handler (entrypoint)', () => {
     expect(body.hoursByCategory).toEqual({ LADDER_OPS: 3 });
   });
 
+  it('leaves sign-ups with no recorded hours out of the transcript', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, allowClient());
+    const { createDynamoClient } = await import('../dynamoClient.js');
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Items: [] })
+      .mockResolvedValueOnce({
+        Items: [
+          { eventId: 'e1', category: 'LADDER_OPS', hours: 3, gsi1sk: 'TRAINING_ATTENDANCE#100' },
+          { eventId: 'e2', category: 'HOSE_OPS', gsi1sk: 'TRAINING_ATTENDANCE#200' },
+        ],
+      });
+    createDynamoClient({ send } as unknown as DynamoDBDocumentClient);
+    const { handler } = await import('./get.js');
+
+    const result = await handler(buildEvent());
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      attendance: { eventId: string }[];
+      hoursByCategory: Record<string, number>;
+    };
+    expect(body.attendance.map((a) => a.eventId)).toEqual(['e1']);
+    expect(body.hoursByCategory).toEqual({ LADDER_OPS: 3 });
+  });
+
   it('returns 200 text/csv with transcript content for format=csv (AC2)', async () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, allowClient());
@@ -178,7 +204,7 @@ describe('transcript/get.ts handler (entrypoint)', () => {
 
     const event = buildEvent();
     (event as unknown as { headers: Record<string, string> }).headers.traceparent =
-      '00-tracefail2000000000000000000-01234567890abcde-01';
+      '00-4bf92f3577b34da6a3ce929d0e0e4734-01234567890abcde-01';
 
     const result = await handler(event);
 
@@ -188,7 +214,7 @@ describe('transcript/get.ts handler (entrypoint)', () => {
       traceId: string;
     };
     expect(body.status).toBe(500);
-    expect(body.traceId).toBe('tracefail2000000000000000000');
+    expect(body.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4734');
     expect(errorSpy).toHaveBeenCalled();
     const loggedPayload = errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
     expect(loggedPayload).toContain('DynamoDB throttled');

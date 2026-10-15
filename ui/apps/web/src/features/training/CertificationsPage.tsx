@@ -72,8 +72,10 @@ function ExpiringTab({ members }: { members: readonly Member[] | undefined }) {
       header: 'Status',
       sortValue: (r) => r.expiryDate,
       render: (r) => {
+        if (r.status === 'REVOKED') return <StatusChip status="neutral">Revoked</StatusChip>;
         const days = daysUntil(r.expiryDate);
-        if (days < 0) return <StatusChip status="danger">Expired</StatusChip>;
+        if (r.status === 'EXPIRED' || days < 0)
+          return <StatusChip status="danger">Expired</StatusChip>;
         return (
           <StatusChip status="warning">
             {days === 0 ? 'Expires today' : `Expires in ${days} ${days === 1 ? 'day' : 'days'}`}

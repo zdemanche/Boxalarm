@@ -174,6 +174,17 @@ describe("training Lambdas: env and IAM match their handlers", { timeout: 30_000
     });
   });
 
+  describe("cert-expiry scanner sizing", () => {
+    it("runs with an explicit timeout and memory above the AWS defaults", async () => {
+      await build();
+      const fn = resourcesOfType("aws:lambda/function:Function").find(
+        (r) => r.inputs.name === "boxalarm-dev-training-cert-expiry-scanner",
+      );
+      expect(fn?.inputs.timeout).toBeGreaterThanOrEqual(60);
+      expect(fn?.inputs.memorySize).toBeGreaterThanOrEqual(512);
+    });
+  });
+
   describe("least privilege (MIN-2)", () => {
     const WRITES = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"];
 

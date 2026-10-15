@@ -41,6 +41,8 @@ import {
 import {
   badRequestProblem,
   conflictProblem,
+  notQualifiedProblem,
+  shiftClosedProblem,
   notFoundProblem,
   notPendingProblem,
 } from './problemDetails.js';
@@ -128,6 +130,7 @@ function jsonResponse(status: number, body: unknown): APIGatewayProxyResultV2 {
 type ShiftMetricOutcome =
   | 'ShiftCreated'
   | 'ShiftCreateFailed'
+  | 'ShiftCreateRecalculateFailed'
   | 'ShiftClaimed'
   | 'ShiftClaimFailed'
   | 'ShiftClaimRecalculateFailed'
@@ -326,6 +329,14 @@ async function handleCreate(
     return problemResponse(503, 'Service Unavailable', 'shift could not be created', correlationId);
   }
 
+  try {
+    const { tableName } = readPersonnelTableConfig(process.env);
+    await recalculateShiftStatus(getDocClient(process.env), tableName, deptId, shiftId);
+  } catch (error) {
+    logHandlerError('shifts.create.recalculate_failed', correlationId, error);
+    emitShiftMetric('ShiftCreateRecalculateFailed');
+  }
+
   emitShiftMetric('ShiftCreated');
   return jsonResponse(201, {
     shiftId,
@@ -403,6 +414,14 @@ async function handleClaim(
   if (outcome.kind === 'CONFLICT') {
     emitShiftMetric('ShiftClaimFailed');
     return conflictProblem(correlationId);
+  }
+  if (outcome.kind === 'SHIFT_CLOSED') {
+    emitShiftMetric('ShiftClaimFailed');
+    return shiftClosedProblem(correlationId);
+  }
+  if (outcome.kind === 'NOT_QUALIFIED') {
+    emitShiftMetric('ShiftClaimFailed');
+    return notQualifiedProblem(correlationId, outcome.requiredQual);
   }
 
   try {
@@ -713,6 +732,10 @@ async function handleSwap(
       emitShiftMetric('ShiftSwapProposeFailed');
       return conflictProblem(correlationId);
     }
+    if (outcome.kind === 'SHIFT_CLOSED') {
+      emitShiftMetric('ShiftSwapProposeFailed');
+      return shiftClosedProblem(correlationId);
+    }
     emitShiftMetric('ShiftSwapProposed');
     return jsonResponse(201, {
       shiftId,
@@ -809,6 +832,14 @@ async function handleApproveSwap(
     if (outcome.kind === 'POSITION_CONFLICT') {
       emitShiftMetric('ShiftSwapApproveFailed');
       return conflictProblem(correlationId);
+    }
+    if (outcome.kind === 'SHIFT_CLOSED') {
+      emitShiftMetric('ShiftSwapApproveFailed');
+      return shiftClosedProblem(correlationId);
+    }
+    if (outcome.kind === 'NOT_QUALIFIED') {
+      emitShiftMetric('ShiftSwapApproveFailed');
+      return notQualifiedProblem(correlationId, outcome.requiredQual);
     }
     emitShiftMetric('ShiftSwapApproved');
     return jsonResponse(200, {

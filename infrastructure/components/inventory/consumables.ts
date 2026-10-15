@@ -36,6 +36,7 @@ export interface ConsumablesArgs {
  */
 export class Consumables extends pulumi.ComponentResource {
   public readonly listLambda: ServiceLambda;
+  public readonly createLambda: ServiceLambda;
   public readonly restockLambda: ServiceLambda;
   public readonly reorderScannerLambda: ServiceLambda;
   public readonly reorderScannerSchedule: aws.scheduler.Schedule;
@@ -76,6 +77,42 @@ export class Consumables extends pulumi.ComponentResource {
     args.httpApi.route(
       `${name}-list-route`,
       { routeKey: "GET /api/v1/inventory/consumables", lambda: this.listLambda },
+      { parent: this },
+    );
+
+    this.createLambda = new ServiceLambda(
+      `${name}-create`,
+      {
+        env,
+        serviceName: "inventory-service",
+        functionName: `boxalarm-${env}-inventory-consumables-create`,
+        handler: LAMBDA_HANDLER,
+        code: lambdaCode("inventory-service", "consumables-create"),
+        logGroup: args.logGroup,
+        environment: {
+          PLATFORM_TABLE_NAME: args.platformTableName,
+          VERIFIED_PERMISSIONS_POLICY_STORE_ID: args.policyStoreId,
+        },
+        additionalPolicyStatements: pulumi
+          .all([args.platformTableArn, args.policyStoreArn])
+          .apply(([tableArn, policyStoreArn]) => [
+            {
+              // createConsumable: TransactWriteItems of two PutItems (the CONSUMABLE_STOCK
+              // item and its AUDIT_LOG_ENTRY), both attribute_not_exists-guarded.
+              Sid: "ConsumablesCreateWrite" as const,
+              Effect: "Allow" as const,
+              Action: ["dynamodb:PutItem"],
+              Resource: [tableArn],
+            },
+            verifiedPermissionsPolicyStatement(policyStoreArn),
+            auditMutationDenyStatement(tableArn),
+          ]),
+      },
+      { parent: this },
+    );
+    args.httpApi.route(
+      `${name}-create-route`,
+      { routeKey: "POST /api/v1/inventory/consumables", lambda: this.createLambda },
       { parent: this },
     );
 
@@ -124,6 +161,8 @@ export class Consumables extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("inventory-service", "consumable-reorder-scanner"),
         logGroup: args.logGroup,
+        timeout: 60,
+        memorySize: 512,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,
           PLATFORM_EVENT_BUS_NAME: args.platformBusName,
@@ -172,6 +211,7 @@ export class Consumables extends pulumi.ComponentResource {
 
     this.registerOutputs({
       listLambda: this.listLambda,
+      createLambda: this.createLambda,
       restockLambda: this.restockLambda,
       reorderScannerLambda: this.reorderScannerLambda,
     });

@@ -58,7 +58,6 @@ async function queryDueWindow(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
-  startDate: string,
   endDate: string,
 ): Promise<readonly TestDueItem[]> {
   const items: TestDueItem[] = [];
@@ -68,10 +67,9 @@ async function queryDueWindow(
       new QueryCommand({
         TableName: tableName,
         IndexName: 'GSI2',
-        KeyConditionExpression: 'gsi2pk = :gsi2pk AND gsi2sk BETWEEN :start AND :end',
+        KeyConditionExpression: 'gsi2pk = :gsi2pk AND gsi2sk <= :end',
         ExpressionAttributeValues: {
           ':gsi2pk': buildDeptScopedPk(deptId, 'DUE', 'APPARATUS_TEST'),
-          ':start': startDate,
           ':end': `${endDate}#${RANGE_END_SENTINEL}`,
         },
         ExclusiveStartKey: exclusiveStartKey,
@@ -98,7 +96,6 @@ async function getTestingSchedules(
       deps.client,
       deps.tableName,
       deptId,
-      isoDate(now),
       windowEndDate(now, monthsAhead),
     );
     const apparatusList = await deps.apparatusRepository.listApparatus(deptId);

@@ -104,6 +104,30 @@ describe("AlertingCanary schedule is config-driven per stack", { timeout: 30_000
   });
 });
 
+describe(
+  "AlertingCanary breaching-on-missing alarms span the schedule interval",
+  { timeout: 30_000 },
+  () => {
+    for (const rateMinutes of ["2", "5", "15"]) {
+      it(`uses a period covering rate(${rateMinutes} minutes)`, async () => {
+        installMocks({
+          "boxalarm-infra:canaryMemberId": "test-canary-member",
+          "boxalarm-infra:canaryScheduleRateMinutes": rateMinutes,
+        });
+        await build();
+        for (const name of [
+          "boxalarm-dev-alerting-canary-failed",
+          "boxalarm-dev-alerting-canary-latency-high",
+        ]) {
+          expect(alarmByName(name).inputs.period as number, name).toBeGreaterThanOrEqual(
+            Number(rateMinutes) * 60,
+          );
+        }
+      });
+    }
+  },
+);
+
 describe("AlertingCanary pages on its own Lambda Errors", { timeout: 30_000 }, () => {
   it("routes the canary Errors alarm to the page topic", async () => {
     await build();

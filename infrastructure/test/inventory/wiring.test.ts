@@ -87,6 +87,7 @@ const ROUTES: Record<string, string> = {
   "PUT /api/v1/inventory/equipment/{assetId}/location": fn("equipment-location"),
   "PUT /api/v1/inventory/equipment/{assetId}/lifecycle": fn("equipment-lifecycle"),
   "GET /api/v1/inventory/consumables": fn("consumables-list"),
+  "POST /api/v1/inventory/consumables": fn("consumables-create"),
   "PUT /api/v1/inventory/consumables/{itemId}": fn("consumables-restock"),
   "GET /api/v1/inventory/ppe/{memberId}": fn("ppe-get"),
   "POST /api/v1/inventory/ppe/{memberId}": fn("ppe-issue"),
@@ -156,12 +157,22 @@ describe("inventory Lambdas: routes, env and IAM match their handlers", { timeou
       },
     );
 
-    it("equipment lifecycle holds GetItem + UpdateItem", async () => {
+    it("equipment lifecycle holds GetItem + UpdateItem + PutItem (audit row)", async () => {
       await build();
       const s = statementsForRole(fn("equipment-lifecycle"));
       expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
-      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(false);
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      expect(isGranted(s, "dynamodb:Query", TABLE)).toBe(false);
+    });
+
+    it("consumables create holds PutItem only (stock item + audit row)", async () => {
+      await build();
+      const s = statementsForRole(fn("consumables-create"));
+      expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
+      for (const action of ["dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query"]) {
+        expect(isGranted(s, action, TABLE), action).toBe(false);
+      }
     });
 
     it("consumables list Queries GSI3 only", async () => {
@@ -218,6 +229,18 @@ describe("inventory Lambdas: routes, env and IAM match their handlers", { timeou
       expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(false);
     });
   });
+
+  it.each(["ppe-expiry-scanner", "consumable-reorder-scanner"])(
+    "the %s runs with an explicit timeout and memory above the AWS defaults",
+    async (suffix) => {
+      await build();
+      const lambda = resourcesOfType("aws:lambda/function:Function").find(
+        (r) => r.inputs.name === fn(suffix),
+      );
+      expect(lambda?.inputs.timeout).toBeGreaterThanOrEqual(60);
+      expect(lambda?.inputs.memorySize).toBeGreaterThanOrEqual(512);
+    },
+  );
 
   it("every role holding UpdateItem/DeleteItem on the platform table carries the audit-row deny", async () => {
     await build();

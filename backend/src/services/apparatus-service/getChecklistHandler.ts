@@ -11,8 +11,8 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readApparatusServiceConfig } from './dynamoClient.js';
 import {
-  resolveApparatusIdByUnitId,
-  resolveChecklistTemplateForUnit,
+  getChecklistTemplateById,
+  resolveApparatusByUnitId,
   resolveDepartmentDefaultTemplate,
 } from './checklistResolution.js';
 
@@ -65,20 +65,22 @@ async function getChecklist(
     const client = createDynamoClient(process.env);
 
     operation = 'resolveApparatus';
-    const apparatusId = await resolveApparatusIdByUnitId(client, config.tableName, deptId, unitId);
-    if (!apparatusId) {
+    const apparatus = await resolveApparatusByUnitId(client, config.tableName, deptId, unitId);
+    if (!apparatus) {
       emitChecklistMetric('NotFound');
       return notFoundProblem(traceId, `No apparatus found for unitId "${unitId}"`);
     }
 
     operation = 'resolveTemplate';
-    let template = await resolveChecklistTemplateForUnit(
-      client,
-      config.tableName,
-      deptId,
-      apparatusId,
-    );
-    if (!template) {
+    let template = apparatus.checklistTemplateId
+      ? await getChecklistTemplateById(
+          client,
+          config.tableName,
+          deptId,
+          apparatus.checklistTemplateId,
+        )
+      : undefined;
+    if (!template?.applicableApparatusIds.includes(apparatus.apparatusId)) {
       // No unit-specific sheet: the department's default sheet (settings, CHECKLIST_DEFAULTS).
       operation = 'resolveDepartmentDefault';
       template = await resolveDepartmentDefaultTemplate(client, config.tableName, deptId);
@@ -87,7 +89,7 @@ async function getChecklist(
       emitChecklistMetric('NotFound');
       return notFoundProblem(
         traceId,
-        `No checklist template applies to apparatus "${apparatusId}"`,
+        `No checklist template applies to apparatus "${apparatus.apparatusId}"`,
       );
     }
 
