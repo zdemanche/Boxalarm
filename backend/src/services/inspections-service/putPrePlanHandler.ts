@@ -96,12 +96,16 @@ export function parsePrePlanInput(body: string | undefined | null): PrePlanInput
   if (!body) {
     return { attachmentFilenames: [], utilityShutoffs: [], hazards: [] };
   }
-  let parsed: RawPrePlanBody;
+  let json: unknown;
   try {
-    parsed = JSON.parse(body) as RawPrePlanBody;
+    json = JSON.parse(body);
   } catch {
     return undefined;
   }
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) {
+    return undefined;
+  }
+  const parsed = json as RawPrePlanBody;
   if (
     parsed.siteDiagramFilename !== undefined &&
     (typeof parsed.siteDiagramFilename !== 'string' ||

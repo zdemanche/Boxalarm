@@ -93,7 +93,8 @@ async function queryAuditTrail(
 
   try {
     const deptId = toVerifiedDeptId(principal);
-    const { tableName } = readAuditConfig(process.env);
+    const config = readAuditConfig(process.env);
+    const tableName = entityType === 'INCIDENT' ? config.incidentTableName : config.tableName;
     const client = getDocumentClient();
     const page = await queryAuditTrailForEntity(
       client,
@@ -115,6 +116,7 @@ async function queryAuditTrail(
           mutatedEntityType: entry.mutatedEntityType,
           mutatedEntityId: entry.mutatedEntityId,
           changedFields: entry.changedFields,
+          ...(entry.secondaryType !== undefined ? { secondaryType: entry.secondaryType } : {}),
         })),
         ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
       }),

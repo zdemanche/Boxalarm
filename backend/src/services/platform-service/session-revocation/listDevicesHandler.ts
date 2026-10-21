@@ -106,5 +106,5 @@ export const handler = withAuthorization(listDevices, {
   actionType: 'Boxalarm::Action',
   actionId: 'ViewMemberDevices',
   resourceType: 'Boxalarm::Member',
-  resourceId: (event) => readMemberId(event) ?? '',
+  resourceId: (event) => readMemberId(event) ?? 'unknown',
 });

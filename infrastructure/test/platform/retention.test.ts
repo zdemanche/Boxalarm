@@ -144,6 +144,18 @@ describe("Retention", () => {
     expect(statement?.Action).not.toContain("dynamodb:BatchWriteItem");
   });
 
+  it("bounds the disposal Lambda by API Gateway's 29 s limit with explicit memory", async () => {
+    const retention = await build();
+    const [timeout, memorySize] = await resolve(
+      pulumi.all([
+        retention.disposalLambda.function.timeout,
+        retention.disposalLambda.function.memorySize,
+      ]),
+    );
+    expect(timeout).toBe(29);
+    expect(memorySize).toBe(512);
+  });
+
   it("denies mutation on audit keys via the shared deny helper", async () => {
     const retention = await build();
     const policyJson = await resolve(retention.disposalLambda.rolePolicy.policy);
@@ -185,6 +197,7 @@ describe("Retention", () => {
     };
     const access = policy.Statement.find((s) => s.Sid === "RetentionConfigAccess");
     expect(access?.Action).toEqual(["dynamodb:GetItem", "dynamodb:PutItem"]);
+    expect(policyJson).not.toContain("TransactWriteItems");
     expect(policy.Statement.some((s) => s.Sid === "DenyAuditMutations")).toBe(true);
   });
 

@@ -8,7 +8,7 @@ import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { listMembers } from '../personnel/api';
 import { Button } from '../../components/ui/Button';
 import { Badge, StatusChip } from '../../components/ui/Chip';
-import { Checkbox, Textarea, TextInput } from '../../components/ui/Field';
+import { Checkbox, Select, Textarea, TextInput } from '../../components/ui/Field';
 import { Card } from '../../components/ui/Card';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { SkeletonBlock } from '../../components/ui/Skeleton';
@@ -30,9 +30,15 @@ import { FireProtectionStep } from './FireProtectionStep';
 import { focusFieldById } from './focusField';
 import { IncidentTypePicker, type IncidentTypesState } from './IncidentTypePicker';
 import { NerisReviewPanel } from './NerisReviewPanel';
-import { focusTargetFor } from './reviewFix';
+import { focusTargetFor, parseIssuePath } from './reviewFix';
 import { SubmissionLedger } from './SubmissionLedger';
-import { coreStrings, dateTimeLocalToEpoch, epochToDateTimeLocal, formatTimestamp } from './format';
+import {
+  coreStrings,
+  dateTimeLocalToEpoch,
+  epochToDateTimeLocal,
+  formatTimestamp,
+  problemMessage,
+} from './format';
 import { CORE_SCHEMA, fieldLabel, SECONDARY_SCHEMA, SECONDARY_TYPES } from './nerisSchema';
 import { useNerisSchema } from './nerisIncidentTypes';
 import { modulesForIncident, type JsonRecord } from './nerisModuleSchema';
@@ -129,6 +135,17 @@ function mergeDetail(current: IncidentDetail, patch: Partial<IncidentDetail>): I
   };
 }
 
+function stepsFor(incident: IncidentDetail) {
+  const hasModules =
+    modulesForIncident(coreStrings(incident.corePayload).incident_type ?? '', incident.corePayload)
+      .length > 0;
+  return STEPS.filter(
+    (item) =>
+      (item.id !== 'exposure' || incident.secondaryModules !== undefined) &&
+      (item.id !== 'modules' || hasModules),
+  );
+}
+
 function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const auth = useAuth();
   const queryClient = useQueryClient();
@@ -148,12 +165,14 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     coreStrings(incident.corePayload).incident_type ?? '',
     incident.corePayload,
   );
-  const steps = STEPS.filter(
-    (step) =>
-      (step.id !== 'exposure' || incident.secondaryModules !== undefined) &&
-      (step.id !== 'modules' || nerisModules.length > 0),
+  const steps = stepsFor(incident);
+  const [stepId, setStepId] = useState<StepId>('dispatch');
+  const step = Math.max(
+    0,
+    steps.findIndex(
+      (item) => STEPS.findIndex((s) => s.id === item.id) >= STEPS.findIndex((s) => s.id === stepId),
+    ),
   );
-  const [step, setStep] = useState(0);
   const [fields, setFields] = useState(() => coreStrings(incident.corePayload));
   const [narrative, setNarrative] = useState(incident.narrative ?? '');
   const [narrativeError, setNarrativeError] = useState<string | null>(null);
@@ -166,6 +185,15 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   const [injuryType, setInjuryType] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [extraMember, setExtraMember] = useState('');
+  const existingModule = incident.secondaryModules?.find(
+    (module) => module.secondaryType === secondaryType,
+  );
+  useEffect(() => {
+    const payload = existingModule?.payload ?? {};
+    setExposureType(payload.exposure_type ?? '');
+    setInjuryType(payload.injury_type ?? '');
+    setSelectedMembers(existingModule?.affectedMemberIds ?? []);
+  }, [existingModule]);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const skipInitialFocus = useRef(true);
   const errorTick = useRef(0);
@@ -234,12 +262,12 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
 
   // The worker moves the incident to ACCEPTED/REJECTED; keep the report's status chip in step.
   useEffect(() => {
-    if (submissionIncidentStatus && submissionIncidentStatus !== incident.status) {
+    if (locked && submissionIncidentStatus && submissionIncidentStatus !== incident.status) {
       queryClient.setQueryData<IncidentDetail>(['incident', incident.incidentId], (current) =>
         current ? { ...current, status: submissionIncidentStatus } : current,
       );
     }
-  }, [submissionIncidentStatus, incident.status, incident.incidentId, queryClient]);
+  }, [locked, submissionIncidentStatus, incident.status, incident.incidentId, queryClient]);
 
   useEffect(() => {
     if (skipInitialFocus.current) {
@@ -276,11 +304,11 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     setFocusErrors(errorTick.current);
   }
 
-  function selectStep(index: number) {
-    const next = steps[index];
+  function selectStep(index: number, list = steps) {
+    const next = list[index];
     if (!next) return;
-    setStep(index);
-    setAnnounce(`Step ${index + 1} of ${steps.length}. ${next.title}.`);
+    setStepId(next.id);
+    setAnnounce(`Step ${index + 1} of ${list.length}. ${next.title}.`);
   }
 
   function onStepKeyDown(event: KeyboardEvent<HTMLOListElement>) {
@@ -311,13 +339,16 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
   }
 
   /** A fix applied from the review checklist: cache it and keep the step forms in step. */
-  function applyReviewPatch(patch: Partial<IncidentDetail>) {
+  function applyReviewPatch(patch: Partial<IncidentDetail>, fixedPath?: string) {
     writeIncident(patch);
-    if (patch.corePayload) {
-      const next = coreStrings(patch.corePayload);
-      setFields((current) => ({ ...current, ...next }));
+    const target = fixedPath ? parseIssuePath(fixedPath) : undefined;
+    if (target?.kind === 'field' && patch.corePayload) {
+      const value = coreStrings(patch.corePayload)[target.name];
+      if (value !== undefined) setFields((current) => ({ ...current, [target.name]: value }));
     }
-    if (typeof patch.narrative === 'string') setNarrative(patch.narrative);
+    if (target?.kind === 'narrative' && typeof patch.narrative === 'string') {
+      setNarrative(patch.narrative);
+    }
   }
 
   function goToIssue(issue: ValidationIssue) {
@@ -372,9 +403,17 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
     try {
       const updated = await updateIncident(auth, incident.incidentId, { fields: payload });
       writeIncident(updated);
-      setFields((current) => ({ ...current, ...coreStrings(updated.corePayload) }));
+      const stored = coreStrings(updated.corePayload);
+      setFields((current) => {
+        const next = { ...current };
+        for (const key of keys) if (key in stored) next[key] = stored[key] ?? '';
+        return next;
+      });
       setErrors([]);
-      if (advance) selectStep(step + 1);
+      if (advance) {
+        const after = stepsFor(mergeDetail(incident, updated));
+        selectStep(after.findIndex((item) => item.id === active?.id) + 1, after);
+      }
     } catch (error) {
       noteLocked(error);
       const serverErrors = fieldErrorsFromUnknown(error);
@@ -385,11 +424,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
         );
         return;
       }
-      setFormError(
-        error instanceof ApiError
-          ? (error.problem.detail ?? error.problem.title)
-          : 'Unable to save the report.',
-      );
+      setFormError(problemMessage(error, 'Unable to save the report.'));
     } finally {
       setSaving(false);
     }
@@ -417,10 +452,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       setAnnounce('Narrative saved.');
     } catch (error) {
       noteLocked(error);
-      const detail =
-        error instanceof ApiError
-          ? (error.problem.detail ?? error.problem.title)
-          : 'Unable to save the narrative.';
+      const detail = problemMessage(error, 'Unable to save the narrative.');
       setNarrativeError(detail);
       setAnnounce(detail);
     } finally {
@@ -452,11 +484,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       setAnnounce(`${TIME_LABEL[field]} saved for ${unit.unitId}.`);
     } catch (error) {
       noteLocked(error);
-      setFormError(
-        error instanceof ApiError
-          ? (error.problem.detail ?? error.problem.title)
-          : 'Unable to save the response time.',
-      );
+      setFormError(problemMessage(error, 'Unable to save the response time.'));
     } finally {
       setSaving(false);
     }
@@ -497,6 +525,7 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
         secondaryType,
         payload,
         affectedMemberIds,
+        expectedVersion: existingModule?.version ?? 0,
       });
       const modules = incident.secondaryModules ?? [];
       const replaced: IncidentSecondary[] = [
@@ -508,12 +537,11 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           affectedMemberIds: saved.affectedMemberIds,
           complete: saved.complete,
           updatedAt: saved.updatedAt,
+          version: saved.version,
         },
       ];
       writeIncident({ secondaryModules: replaced });
       setErrors([]);
-      setExposureType('');
-      setInjuryType('');
       setAnnounce(
         saved.complete
           ? `${secondaryTitle(saved.secondaryType)} marked complete.`
@@ -521,23 +549,22 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
       );
     } catch (error) {
       noteLocked(error);
+      if (error instanceof ApiError && error.problem.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['incident', incident.incidentId] });
+      }
       const serverErrors = fieldErrorsFromUnknown(error);
       if (serverErrors.length > 0) {
         showErrors(serverErrors);
         return;
       }
-      setFormError(
-        error instanceof ApiError
-          ? (error.problem.detail ?? error.problem.title)
-          : 'Unable to save the exposure record.',
-      );
+      setFormError(problemMessage(error, 'Unable to save the exposure record.'));
     } finally {
       setSaving(false);
     }
   }
 
   function problemText(error: unknown, fallback: string): string {
-    return error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : fallback;
+    return problemMessage(error, fallback);
   }
 
   async function submitToNeris() {
@@ -921,21 +948,19 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
               ))}
             </ul>
           )}
-          <TextInput
+          <Select
             label="Module"
             value={secondaryType}
-            list="secondary-types"
-            onChange={(event) => {
-              const next = event.target.value;
-              if (next === 'EXPOSURE' || next === 'RESPONDER_SAFETY') setSecondaryType(next);
-              else setSecondaryType(next as (typeof SECONDARY_TYPES)[number]);
-            }}
-          />
-          <datalist id="secondary-types">
+            onChange={(event) =>
+              setSecondaryType(event.target.value as (typeof SECONDARY_TYPES)[number])
+            }
+          >
             {SECONDARY_TYPES.map((type) => (
-              <option key={type} value={type} />
+              <option key={type} value={type}>
+                {secondaryTitle(type)}
+              </option>
             ))}
-          </datalist>
+          </Select>
           <EnumField
             field={fieldName}
             schema="secondary"
@@ -946,16 +971,19 @@ function IncidentReport({ incident }: { incident: IncidentDetail }) {
           />
           <fieldset className={styles.fieldset}>
             <legend>Affected members</legend>
-            {(incident.respondingMembers ?? []).map((member) => (
+            {[
+              ...new Set([
+                ...(incident.respondingMembers ?? []).map((member) => member.memberId),
+                ...selectedMembers,
+              ]),
+            ].map((memberId) => (
               <Checkbox
-                key={member.memberId}
-                label={memberName(member.memberId)}
-                checked={selectedMembers.includes(member.memberId)}
+                key={memberId}
+                label={memberName(memberId)}
+                checked={selectedMembers.includes(memberId)}
                 onCheckedChange={(checked) =>
                   setSelectedMembers((current) =>
-                    checked
-                      ? [...current, member.memberId]
-                      : current.filter((id) => id !== member.memberId),
+                    checked ? [...current, memberId] : current.filter((id) => id !== memberId),
                   )
                 }
               />

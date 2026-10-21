@@ -1,4 +1,4 @@
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GuardEvent, WithAuthorizationOptions } from '@boxalarm/authz';
@@ -52,9 +52,16 @@ describe('handler (POST /api/v1/inventory/equipment)', () => {
     process.env = { ...originalEnv };
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event({}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('AC1: creates an asset and returns it unassigned by default (entrypoint-test)', async () => {
     const client = fakeDocClient((command) => {
-      expect(command).toBeInstanceOf(PutCommand);
+      expect(command).toBeInstanceOf(TransactWriteCommand);
       return {};
     });
     const result = await invoke(event({ serialNumber: 'SN-1', location: 'Station 1' }), client);
@@ -84,6 +91,16 @@ describe('handler (POST /api/v1/inventory/equipment)', () => {
     expect(result.statusCode).toBe(403);
     expect(client.sendMock).not.toHaveBeenCalled();
   });
+
+  it.each(['{bad', 'null', '[]'])(
+    '400 (not 500) for a malformed or non-object body %s',
+    async (raw) => {
+      const send = vi.fn();
+      const result = await invoke({ ...event({}), body: raw }, fakeDocClient(send));
+      expect(result.statusCode).toBe(400);
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
 
   it('400 problem+json when serialNumber is missing/empty', async () => {
     const result = await invoke(

@@ -16,6 +16,7 @@ import { parseScbaDueItem, type ScbaDueItem } from './scbaRecord.js';
 
 const DEFAULT_WITHIN_DAYS = 30;
 const MAX_WITHIN_DAYS = 366;
+const SCBA_DUE_FLOOR_YEAR = 2010;
 export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const METRIC_NAMESPACE = 'Boxalarm/ApparatusService';
 
@@ -28,10 +29,14 @@ function monthKey(date: Date): string {
   return date.toISOString().slice(0, 7);
 }
 
-export function monthsWithinWindow(now: Date, withinDays: number): readonly string[] {
+export function monthsWithinWindow(
+  now: Date,
+  withinDays: number,
+  lookbackMonths = 0,
+): readonly string[] {
   const end = new Date(now.getTime() + withinDays * MS_PER_DAY);
   const months: string[] = [];
-  const cursor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const cursor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - lookbackMonths, 1));
   const endMonth = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
   while (cursor.getTime() <= endMonth.getTime()) {
     months.push(monthKey(cursor));
@@ -100,7 +105,8 @@ async function getScbaTestingSchedules(
 
   const now = new Date();
   try {
-    const months = monthsWithinWindow(now, withinDays);
+    const lookbackMonths = (now.getUTCFullYear() - SCBA_DUE_FLOOR_YEAR) * 12 + now.getUTCMonth();
+    const months = monthsWithinWindow(now, withinDays, lookbackMonths);
     const results = await Promise.all(
       months.map((yearMonth) =>
         queryScbaDueInMonth(deps.client, deps.tableName, deptId, yearMonth),

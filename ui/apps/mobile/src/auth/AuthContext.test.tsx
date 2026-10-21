@@ -715,6 +715,35 @@ describe('a sign-out whose push revoke does not land (M3)', () => {
     await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
   });
 
+  test('a gateway 403 keeps the pending revoke for a retry; a backend 403 ends it', async () => {
+    const deps = makeDeps();
+    const pending = {
+      memberId: 'MBR-1',
+      deviceId: 'dev-1',
+      refreshToken: 'refresh-A',
+      apiBaseUrl: 'https://api.example.test',
+      savedAt: Date.now(),
+    };
+    await deps.setInternetCredentials(PENDING, PENDING, JSON.stringify(pending));
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    globalThis.fetch = jest.fn(
+      async () => new Response(JSON.stringify({ message: 'Forbidden' }), { status: 403 }),
+    ) as unknown as typeof fetch;
+
+    await expect(retryPendingUnregister(deps)).resolves.toBe('failed');
+    expect(await deps.getInternetCredentials(PENDING)).not.toBe(false);
+
+    globalThis.fetch = jest.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ type: 'about:blank', title: 'Forbidden', status: 403, traceId: 't-1' }),
+          { status: 403 },
+        ),
+    ) as unknown as typeof fetch;
+    await expect(retryPendingUnregister(deps)).resolves.toBe('dropped');
+    await expect(deps.getInternetCredentials(PENDING)).resolves.toBe(false);
+  });
+
   test('the same member signing back in cancels their pending revoke; it would remove this phone again', async () => {
     const deps = makeDeps();
     await deps.setInternetCredentials(

@@ -118,9 +118,11 @@ describe("OutboxPublisher", () => {
     const publisher = await build();
     const filters = await resolve(publisher.eventSourceMapping.filterCriteria);
     const pattern = JSON.parse(filters?.filters?.[0]?.pattern ?? "{}") as {
+      eventName: string[];
       dynamodb: { NewImage: { entityType: { S: string[] } } };
     };
     expect(pattern.dynamodb.NewImage.entityType.S).toEqual(["OUTBOX_ENTRY"]);
+    expect(pattern.eventName).toEqual(["INSERT"]);
   });
 
   it("sets both bus env names backend outbox publishers read (PLATFORM_BUS_NAME, PLATFORM_EVENT_BUS_NAME)", async () => {
@@ -128,6 +130,11 @@ describe("OutboxPublisher", () => {
     const env = await resolve(publisher.lambda.function.environment);
     expect(env?.variables?.PLATFORM_BUS_NAME).toBe("boxalarm-dev-platform-bus");
     expect(env?.variables?.PLATFORM_EVENT_BUS_NAME).toBe("boxalarm-dev-platform-bus");
+  });
+
+  it("keeps on-failure records 14 days so a weekend outage cannot expire the evidence", async () => {
+    const publisher = await build();
+    expect(await resolve(publisher.onFailureQueue.messageRetentionSeconds)).toBe(1_209_600);
   });
 
   it("grants sqs:SendMessage on its own on-failure queue so exhausted records reach it", async () => {

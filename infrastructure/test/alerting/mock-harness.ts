@@ -295,6 +295,7 @@ export async function buildSchedulingChain() {
     alertingTableName: "boxalarm-dev-alerting-table",
     logGroup: alertingLogGroup,
     policyStoreId: "policy-store-id",
+    policyStoreArn: "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
     permissionsBoundaryArn: BOUNDARY_ARN,
   });
   await settle();

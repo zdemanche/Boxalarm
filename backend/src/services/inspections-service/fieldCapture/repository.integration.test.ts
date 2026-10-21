@@ -164,7 +164,7 @@ describe('submitFieldCapture (real DynamoDB via LocalStack — offline queue + r
     expect(items.Items?.[0]?.photoS3Keys).toEqual(input.photoS3Keys);
   });
 
-  it('a different idempotencyKey against the same inspectionId is not treated as a duplicate — it attaches again (re-conduct), not a conflict', async () => {
+  it('a different idempotencyKey against the same inspectionId is not treated as a duplicate — it appends to the record, not a conflict', async () => {
     const inspectionId = `INS-conflict-${Date.now()}`;
     await seedScheduledInspection('OCC-1', inspectionId);
     const first = await submitFieldCapture(
@@ -188,7 +188,10 @@ describe('submitFieldCapture (real DynamoDB via LocalStack — offline queue + r
       }),
     );
     expect(second.outcome).toBe('created');
-    expect(second.item.photoS3Keys).toEqual(['NICHOLS/INSPECTION_RECORD/INS-1/second.jpg']);
+    expect(second.item.photoS3Keys).toEqual([
+      'NICHOLS/INSPECTION_RECORD/INS-1/first.jpg',
+      'NICHOLS/INSPECTION_RECORD/INS-1/second.jpg',
+    ]);
     expect(second.item.scheduledDate).toBe('2026-09-01');
   });
 

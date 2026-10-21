@@ -1,4 +1,5 @@
 import NetInfo from '@react-native-community/netinfo';
+import { AppState } from 'react-native';
 import { ApiError, apiRequest } from '../lib/apiClient';
 import * as outbox from './outbox';
 import * as store from './outboxStore';
@@ -73,7 +74,7 @@ test('a defect with a photo advances CREATE -> UPLOAD_PHOTO -> DONE and uploads 
     .spyOn(globalThis, 'fetch')
     .mockImplementation(async (input: RequestInfo | URL) => {
       if (input === 'file:///tmp/defect.jpg') {
-        return { blob: async () => new Blob(['x']) } as Response;
+        return { ok: true, blob: async () => new Blob(['x']) } as Response;
       }
       return { ok: true, status: 200 } as Response;
     });
@@ -105,7 +106,7 @@ test('a photo upload failure retries independently and does not re-POST the alre
     .spyOn(globalThis, 'fetch')
     .mockImplementation(async (input: RequestInfo | URL) => {
       if (input === 'file:///tmp/defect.jpg') {
-        return { blob: async () => new Blob(['x']) } as Response;
+        return { ok: true, blob: async () => new Blob(['x']) } as Response;
       }
       return { ok: false, status: 500 } as Response;
     });
@@ -318,7 +319,7 @@ async function enqueuePhotoDefect(id: string, uploadUrl: string, putStatus: numb
     .spyOn(globalThis, 'fetch')
     .mockImplementation(async (input: RequestInfo | URL) => {
       if (input === 'file:///tmp/defect.jpg') {
-        return { blob: async () => new Blob(['x']) } as Response;
+        return { ok: true, blob: async () => new Blob(['x']) } as Response;
       }
       return { ok: putStatus < 400, status: putStatus } as Response;
     });
@@ -347,7 +348,7 @@ test('an already-expired defect upload link is not PUT; an idempotent replay re-
     .spyOn(globalThis, 'fetch')
     .mockImplementation(async (input: RequestInfo | URL) =>
       input === 'file:///tmp/defect.jpg'
-        ? ({ blob: async () => new Blob(['x']) } as Response)
+        ? ({ ok: true, blob: async () => new Blob(['x']) } as Response)
         : ({ ok: true, status: 200 } as Response),
     );
   await syncManager.enqueueDefect(
@@ -422,7 +423,7 @@ describe('field capture', () => {
 
   function mockUpload(putStatus: number) {
     return jest.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
-      if (input === PHOTO) return { blob: async () => new Blob(['x']) } as Response;
+      if (input === PHOTO) return { ok: true, blob: async () => new Blob(['x']) } as Response;
       return { ok: putStatus < 400, status: putStatus } as Response;
     });
   }
@@ -450,6 +451,29 @@ describe('field capture', () => {
     );
     expect(fetchSpy).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'PUT' }));
     await expect(store.find('fc-1')).resolves.toBeUndefined();
+    fetchSpy.mockRestore();
+  });
+
+  test('a readable photo file is uploaded and the capture is sent, while a file answering not-ok is refused', async () => {
+    const url = signedUrl(new Date());
+    mockApiRequest.mockResolvedValue(captureResponse(url));
+    const fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (input: RequestInfo | URL) =>
+        input === PHOTO
+          ? ({ blob: async () => new Blob(['x']) } as Response)
+          : ({ ok: true, status: 200 } as Response),
+      );
+
+    await syncManager.enqueueFieldCapture('fc-1', 'occ-1', body, PHOTO);
+    await flush();
+    expect(fetchSpy).toHaveBeenCalledWith(url, expect.objectContaining({ method: 'PUT' }));
+    await expect(store.find('fc-1')).resolves.toBeUndefined();
+
+    fetchSpy.mockImplementation(async () => ({ ok: false, status: 404 }) as Response);
+    await syncManager.enqueueFieldCapture('fc-2', 'occ-1', body, PHOTO);
+    await flush();
+    expect((await store.find('fc-2'))?.status).toBe('REJECTED');
     fetchSpy.mockRestore();
   });
 
@@ -1209,7 +1233,7 @@ test('a check photo POSTs to the run photos path, then PUTs the file to its sign
     .spyOn(globalThis, 'fetch')
     .mockImplementation(async (input: RequestInfo | URL) =>
       input === 'file:///tmp/tires.jpg'
-        ? ({ blob: async () => new Blob(['x']) } as Response)
+        ? ({ ok: true, blob: async () => new Blob(['x']) } as Response)
         : ({ ok: true, status: 200 } as Response),
     );
 
@@ -1248,7 +1272,7 @@ test('an expired check-photo link is re-signed by replaying the POST, not lost',
     .spyOn(globalThis, 'fetch')
     .mockImplementation(async (input: RequestInfo | URL) =>
       input === 'file:///tmp/t.jpg'
-        ? ({ blob: async () => new Blob(['x']) } as Response)
+        ? ({ ok: true, blob: async () => new Blob(['x']) } as Response)
         : ({ ok: true, status: 200 } as Response),
     );
 
@@ -1263,4 +1287,310 @@ test('an expired check-photo link is re-signed by replaying the POST, not lost',
   expect(fetchSpy).toHaveBeenCalledWith(freshUrl, expect.objectContaining({ method: 'PUT' }));
   await expect(store.find('k-photo-TIRES')).resolves.toBeUndefined();
   fetchSpy.mockRestore();
+});
+
+describe('automatic retry', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('a 503 on a steady link is retried when its backoff ends, with no connectivity event', async () => {
+    jest.useFakeTimers();
+    mockApiRequest
+      .mockRejectedValueOnce(problem(503, 'try later'))
+      .mockResolvedValueOnce({ json: async () => ({}) });
+
+    await syncManager.enqueueChecklistRun('ENGINE-2', 'check-timer', {});
+    await jest.advanceTimersByTimeAsync(0);
+    expect((await store.find('check-timer'))?.status).toBe('FAILED');
+
+    await jest.advanceTimersByTimeAsync(11_000);
+
+    expect(mockApiRequest).toHaveBeenCalledTimes(2);
+    await expect(store.find('check-timer')).resolves.toBeUndefined();
+  });
+
+  test('no retry timer runs while the phone is offline', async () => {
+    jest.useFakeTimers();
+    mockApiRequest.mockRejectedValueOnce(problem(503, 'try later'));
+    await syncManager.enqueueChecklistRun('ENGINE-2', 'check-offline', {});
+    await jest.advanceTimersByTimeAsync(0);
+    expect((await store.find('check-offline'))?.status).toBe('FAILED');
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: false });
+    await jest.advanceTimersByTimeAsync(11_000);
+    const callsBefore = mockApiRequest.mock.calls.length;
+
+    await jest.advanceTimersByTimeAsync(120_000);
+
+    expect(mockApiRequest.mock.calls.length).toBe(callsBefore);
+    (NetInfo.fetch as jest.Mock).mockResolvedValue({ isConnected: true });
+  });
+
+  test('signing out cancels the pending retry', async () => {
+    jest.useFakeTimers();
+    mockApiRequest.mockRejectedValueOnce(problem(503, 'try later'));
+    await syncManager.enqueueChecklistRun('ENGINE-2', 'check-timer-out', {});
+    await jest.advanceTimersByTimeAsync(0);
+
+    syncManager.configure(null, null);
+    await jest.advanceTimersByTimeAsync(60_000);
+
+    expect(mockApiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  test('returning to the foreground drains, and the app-state listener is removed on sign-out', async () => {
+    syncManager.configure(null, null);
+    const remove = jest.fn();
+    let onChange: (state: string) => void = () => undefined;
+    const addSpy = jest.spyOn(AppState, 'addEventListener').mockImplementation(((
+      _type: string,
+      listener: (state: string) => void,
+    ) => {
+      onChange = listener;
+      return { remove };
+    }) as never);
+    syncManager.configure(tokens, 'https://api.example.com');
+    await flush();
+    await outbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
+      id: 'check-foreground',
+      kind: 'CHECKLIST_RUN',
+      label: 'Truck check — ENGINE-2',
+      path: 'apparatus/ENGINE-2/checks',
+      body: {},
+    });
+    mockApiRequest.mockResolvedValueOnce({ json: async () => ({}) });
+
+    onChange('active');
+    await flush();
+
+    await expect(store.find('check-foreground')).resolves.toBeUndefined();
+    syncManager.configure(null, null);
+    expect(remove).toHaveBeenCalledTimes(1);
+    addSpy.mockRestore();
+  });
+});
+
+describe('alert answers go first', () => {
+  const queueRun = (id: string) =>
+    outbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
+      id,
+      kind: 'CHECKLIST_RUN',
+      label: 'Truck check — ENGINE-2',
+      path: `apparatus/ENGINE-2/checks/${id}`,
+      body: {},
+    });
+
+  test('an answer queued behind other work is the first thing sent', async () => {
+    syncManager.configure(null, null);
+    await queueRun('run-a');
+    await outbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
+      id: 'answer-a',
+      kind: 'RESPONSE',
+      label: 'Responding',
+      path: 'alerting/dispatches/D1/responses',
+      body: {},
+    });
+    mockApiRequest.mockResolvedValue({ json: async () => ({}) });
+
+    syncManager.configure(tokens, 'https://api.example.com');
+    await syncManager.drainAndSettle();
+
+    expect(mockApiRequest.mock.calls.map((call) => call[0])).toEqual([
+      'alerting/dispatches/D1/responses',
+      'apparatus/ENGINE-2/checks/run-a',
+    ]);
+  });
+
+  test('an answer queued while a pass is running goes out before the rest of the pass', async () => {
+    syncManager.configure(null, null);
+    await queueRun('run-1');
+    await queueRun('run-2');
+    let finishFirst: () => void = () => undefined;
+    mockApiRequest
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishFirst = () => resolve({ json: async () => ({}) });
+        }),
+      )
+      .mockResolvedValue({ json: async () => ({}) });
+
+    syncManager.configure(tokens, 'https://api.example.com');
+    await flush();
+    await syncManager.enqueueResponse('answer-b', 'D2', 'Responding', {
+      ackStatus: 'RESPONDING',
+    });
+    finishFirst();
+    await syncManager.drainAndSettle();
+
+    expect(mockApiRequest.mock.calls.map((call) => call[0])).toEqual([
+      'apparatus/ENGINE-2/checks/run-1',
+      'alerting/dispatches/D2/responses',
+      'apparatus/ENGINE-2/checks/run-2',
+    ]);
+  });
+});
+
+describe('photo upload limits and loss', () => {
+  const photoRow = {
+    json: async () => ({ uploadUrl: 'https://cdn.example.com/signed', photoS3Key: 'k/x.jpg' }),
+  };
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  test('a photo PUT that never answers times out, so it cannot hold up the alert answer behind it', async () => {
+    jest.useFakeTimers();
+    mockApiRequest.mockResolvedValueOnce(photoRow).mockResolvedValue({ json: async () => ({}) });
+    const fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        if (input === 'file:///tmp/stall.jpg') {
+          return Promise.resolve({ ok: true, blob: async () => new Blob(['x']) } as Response);
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('Aborted')));
+        });
+      });
+
+    await syncManager.enqueueDefect(
+      'ENGINE-2',
+      'defect-stall',
+      { description: 'x', severity: 'MINOR', photo: { filename: 'x.jpg' } },
+      'file:///tmp/stall.jpg',
+    );
+    await jest.advanceTimersByTimeAsync(0);
+    await syncManager.enqueueResponse('answer-stall', 'D3', 'Responding', {});
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockApiRequest).toHaveBeenCalledTimes(1);
+
+    await jest.advanceTimersByTimeAsync(60_001);
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      'alerting/dispatches/D3/responses',
+      expect.anything(),
+      expect.anything(),
+    );
+    const defect = await store.find('defect-stall');
+    expect(defect?.status).toBe('FAILED');
+    expect(defect?.stage).toBe('UPLOAD_PHOTO');
+    fetchSpy.mockRestore();
+  });
+
+  test('a photo file that answers not-ok is REJECTED; an unreadable one is retried', async () => {
+    mockApiRequest.mockResolvedValue(photoRow);
+    const fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => ({ ok: false, status: 404 }) as Response);
+    await syncManager.enqueueDefect(
+      'ENGINE-2',
+      'defect-404',
+      { description: 'x', severity: 'MINOR', photo: { filename: 'x.jpg' } },
+      'file:///tmp/gone404.jpg',
+    );
+    await flush();
+    expect((await store.find('defect-404'))?.status).toBe('REJECTED');
+
+    fetchSpy.mockImplementation(async () => {
+      throw new Error('Protected file unavailable');
+    });
+    await syncManager.enqueueDefect(
+      'ENGINE-2',
+      'defect-locked',
+      { description: 'x', severity: 'MINOR', photo: { filename: 'x.jpg' } },
+      'file:///tmp/locked.jpg',
+    );
+    await flush();
+    expect((await store.find('defect-locked'))?.status).toBe('FAILED');
+    fetchSpy.mockRestore();
+  });
+
+  test('a photo the phone no longer has is REJECTED with a clear reason, not retried forever', async () => {
+    mockApiRequest.mockResolvedValueOnce(photoRow);
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      throw new TypeError('Network request failed');
+    });
+
+    await syncManager.enqueueDefect(
+      'ENGINE-2',
+      'defect-gone',
+      { description: 'x', severity: 'MINOR', photo: { filename: 'x.jpg' } },
+      'file:///tmp/gone.jpg',
+    );
+    await flush();
+
+    const row = await store.find('defect-gone');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toMatch(/no longer on this phone/i);
+    fetchSpy.mockRestore();
+  });
+});
+
+describe('API Gateway denials', () => {
+  const gatewayDenial = (status: number) =>
+    new ApiError({ type: 'about:blank', title: 'Forbidden', status, traceId: 'unknown' });
+
+  test('a gateway 403 is a sign-in problem that stays retryable, not a refusal of the request', async () => {
+    mockApiRequest.mockRejectedValueOnce(gatewayDenial(403));
+
+    await syncManager.enqueueChecklistRun('ENGINE-2', 'check-gw403', {});
+    await flush();
+
+    const row = await store.find('check-gw403');
+    expect(row?.status).toBe('FAILED');
+    expect(row?.lastError).toBe(syncManager.SIGN_IN_REJECTED);
+  });
+
+  test('a gateway 401 reads as a sign-in problem, not as no signal', async () => {
+    mockApiRequest.mockRejectedValueOnce(gatewayDenial(401));
+
+    await syncManager.enqueueChecklistRun('ENGINE-2', 'check-gw401', {});
+    await flush();
+
+    expect((await store.find('check-gw401'))?.lastError).toBe(syncManager.SIGN_IN_REJECTED);
+  });
+
+  test('a 403 the backend itself returned (it carries a traceId) is still a refusal', async () => {
+    mockApiRequest.mockRejectedValueOnce(
+      new ApiError({ type: 'about:blank', title: 'Forbidden', status: 403, traceId: 'abc' }),
+    );
+
+    await syncManager.enqueueChecklistRun('ENGINE-2', 'check-be403', {});
+    await flush();
+
+    expect((await store.find('check-be403'))?.status).toBe('REJECTED');
+  });
+});
+
+test('an interrupted send of a mark-off counts as an attempt, so a 409 on the resend reads "may be in effect"', async () => {
+  await jest.isolateModulesAsync(async () => {
+    const freshOutbox = jest.requireActual<typeof import('./outbox')>('./outbox');
+    const freshStore = jest.requireActual<typeof store>('./outboxStore');
+    const freshApi = jest.requireMock<{ apiRequest: jest.Mock }>('../lib/apiClient');
+    freshApi.apiRequest.mockRejectedValue(problem(409, 'Conflict'));
+    await freshOutbox.enqueue({
+      ownerMemberId: 'm-test',
+      ownerDeptId: null,
+      id: 'markoff-orphan',
+      kind: 'AVAILABILITY',
+      label: 'Mark-off',
+      path: 'personnel/members/m-test/availability',
+      body: {},
+    });
+    await freshOutbox.markSyncing('markoff-orphan');
+
+    const freshManager = jest.requireActual<typeof syncManager>('./syncManager');
+    freshManager.configure(tokens, 'https://api.example.com');
+    await freshManager.drainAndSettle();
+
+    const row = await freshStore.find('markoff-orphan');
+    expect(row?.status).toBe('REJECTED');
+    expect(row?.lastError).toBe(freshManager.AVAILABILITY_MAY_BE_IN_EFFECT);
+  });
 });

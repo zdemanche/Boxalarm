@@ -72,6 +72,8 @@ describe('publishDueEvent', () => {
       deptId: 'NICHOLS',
     });
     expect(ddbSend.mock.calls.some((c: unknown[]) => c[0] instanceof UpdateCommand)).toBe(true);
+    const marker = ddbSend.mock.calls[0]?.[0] as PutCommand;
+    expect(marker.input.Item?.ttl).toBe(Math.floor(NOW.getTime() / 1000) + 7 * 86400);
   });
 
   it('skips publishing when the dedup marker already exists for today (dedup guard)', async () => {

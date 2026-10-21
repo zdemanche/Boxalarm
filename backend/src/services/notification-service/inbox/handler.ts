@@ -30,6 +30,13 @@ function logError(
   );
 }
 
+const MAX_PAGE_SIZE = 100;
+
+function parsePageSize(raw: string | undefined): number | undefined {
+  const requested = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(requested) ? Math.min(Math.max(requested, 1), MAX_PAGE_SIZE) : undefined;
+}
+
 function encodeCursor(key: Record<string, unknown> | undefined): string | null {
   return key ? Buffer.from(JSON.stringify(key)).toString('base64url') : null;
 }
@@ -78,6 +85,7 @@ async function listNotifications(
           ':prefix': 'NOTIF#',
         },
         ExclusiveStartKey: decodeCursor(event.queryStringParameters?.cursor),
+        Limit: parsePageSize(event.queryStringParameters?.limit),
         ScanIndexForward: false,
       }),
     );

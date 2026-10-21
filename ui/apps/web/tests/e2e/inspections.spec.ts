@@ -150,7 +150,7 @@ test('schedule then conduct an inspection with a violation, axe clean (E5-S5 tes
 }) => {
   await signInAsChief(page);
   let scheduled: Record<string, unknown> | undefined;
-  await page.route('**/api/v1/inspections', async (route) => {
+  await page.route(/\/api\/v1\/inspections(\?.*)?$/, async (route) => {
     if (route.request().method() === 'GET') {
       return route.fulfill({ json: { items: scheduled ? [scheduled] : [] } });
     }

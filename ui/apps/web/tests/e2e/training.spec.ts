@@ -107,7 +107,23 @@ test('training officer creates an event, signs up, and records attendance (#152)
   const hourPayloads: { attendees: { memberId: string; hours: number }[] }[] = [];
 
   await page.route('**/api/v1/personnel/members', (route) =>
-    route.fulfill({ json: { items: [] } }),
+    route.fulfill({
+      json: {
+        items: [
+          {
+            memberId: 'm-2',
+            firstName: 'Jordan',
+            lastName: 'Osei',
+            email: 'josei@nicholsfd.org',
+            phone: null,
+            status: 'ACTIVE',
+            joinDate: '2015-09-01',
+            rank: 'Deputy Chief',
+            agencyId: 'nichols-fd',
+          },
+        ],
+      },
+    }),
   );
   await page.route('**/api/v1/training/events**', async (route) => {
     const url = new URL(route.request().url());
@@ -161,7 +177,7 @@ test('training officer creates an event, signs up, and records attendance (#152)
   await expect(page.getByText('Signed up')).toBeVisible();
 
   const hoursForm = page.getByRole('form', { name: 'Record hours for Hose line drill' });
-  await hoursForm.getByLabel('Member ID').fill('m-2');
+  await hoursForm.getByLabel('Member').selectOption({ label: 'Osei, Jordan' });
   await hoursForm.getByLabel('Hours').fill('2');
   await hoursForm.getByRole('button', { name: 'Record hours' }).click();
 

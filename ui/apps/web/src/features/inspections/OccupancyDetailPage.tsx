@@ -15,7 +15,9 @@ import {
   TextInput,
 } from '../../components/ui';
 import { getOccupancy, getPrePlan, putPrePlan, updateOccupancy, uploadPrePlanFile } from './api';
+import { ApiError } from '../../lib/apiClient';
 import type { UtilityShutoff } from './types';
+import { hasInspectionsWrite } from './writeRoles';
 import styles from './Inspections.module.css';
 
 type Tab = 'details' | 'preplan';
@@ -31,6 +33,8 @@ function oversizedFileNames(files: File[]): string[] {
 /** putPrePlanHandler's MAX_LIST_LENGTH for attachmentFilenames. */
 const MAX_PREPLAN_ATTACHMENTS = 50;
 
+const safeFileName = (file: File) => file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+
 /** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('/') + 1);
@@ -43,11 +47,31 @@ function splitLines(value: string): string[] {
     .filter(Boolean);
 }
 
+function SaveError({ error, subject }: { error: Error | null; subject: string }) {
+  if (!error) return null;
+  if (error instanceof ApiError && error.problem.status === 403) {
+    return (
+      <ApiForbiddenGate error={error} embedded>
+        {null}
+      </ApiForbiddenGate>
+    );
+  }
+  const reason =
+    error instanceof ApiError
+      ? (error.problem.detail ?? `HTTP ${error.problem.status}`)
+      : error.message;
+  return (
+    <p role="alert" className={styles.error}>
+      {subject} was not saved: {reason}. Your edits are still here - save again to retry.
+    </p>
+  );
+}
+
 export function OccupancyDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = hasInspectionsWrite(auth.roles);
   const [tab, setTab] = useState<Tab>('details');
   // Both saves replace whole lists, so each editor shows what is on file until it is edited
   // (null = untouched). An editor that opened empty deleted every existing hazard and shutoff
@@ -99,7 +123,7 @@ export function OccupancyDetailPage() {
   // A new attachment with an on-file name replaces that file.
   function plannedFiles() {
     const onFile = prePlanQuery.data;
-    const newNames = attachmentFiles.map((file) => file.name);
+    const newNames = attachmentFiles.map(safeFileName);
     const keptAttachments = (onFile?.attachmentS3Keys ?? [])
       .filter((key) => !removedKeys.includes(key))
       .map(fileNameOf)
@@ -108,7 +132,11 @@ export function OccupancyDetailPage() {
       onFile?.siteDiagramS3Key && !removedKeys.includes(onFile.siteDiagramS3Key)
         ? fileNameOf(onFile.siteDiagramS3Key)
         : null;
-    return { siteDiagramFilename: diagramFile?.name ?? keptDiagram, keptAttachments, newNames };
+    return {
+      siteDiagramFilename: diagramFile ? safeFileName(diagramFile) : keptDiagram,
+      keptAttachments,
+      newNames,
+    };
   }
 
   const hazardsMutation = useMutation({
@@ -137,7 +165,7 @@ export function OccupancyDetailPage() {
         );
       }
       for (const attachment of result.attachmentUploadUrls) {
-        const file = attachmentFiles.find((f) => f.name === attachment.filename);
+        const file = attachmentFiles.find((f) => safeFileName(f) === attachment.filename);
         if (file) await uploadPrePlanFile(attachment.uploadUrl, file, attachment.contentType);
       }
       return result;
@@ -214,11 +242,7 @@ export function OccupancyDetailPage() {
             </Card>
           ) : null}
 
-          {hazardsMutation.error ? (
-            <ApiForbiddenGate error={hazardsMutation.error} embedded>
-              <p role="alert">Unable to save changes</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <SaveError error={hazardsMutation.error} subject="The hazards" />
         </div>
       ) : null}
     </div>
@@ -229,12 +253,18 @@ export function OccupancyDetailPage() {
   // removal don't count, so removing one frees its name and its place.
   function prePlanFileProblem(): string | null {
     const { siteDiagramFilename, keptAttachments, newNames } = plannedFiles();
-    const clash = attachmentFiles.find((file) => file.name === siteDiagramFilename);
+    const clash = attachmentFiles.find((file) => safeFileName(file) === siteDiagramFilename);
     if (clash) {
       return `${clash.name} has the same name as the site diagram. Rename one of them before saving.`;
     }
-    if (diagramFile && keptAttachments.includes(diagramFile.name)) {
+    if (diagramFile && keptAttachments.includes(safeFileName(diagramFile))) {
       return `${diagramFile.name} has the same name as an attachment on file. Rename one of them before saving.`;
+    }
+    const repeated = attachmentFiles.find(
+      (file, index) => newNames.indexOf(safeFileName(file)) !== index,
+    );
+    if (repeated) {
+      return `${repeated.name} has the same name as another new attachment. Rename one of them before saving.`;
     }
     const total = keptAttachments.length + newNames.length;
     if (total > MAX_PREPLAN_ATTACHMENTS) {
@@ -505,11 +535,7 @@ export function OccupancyDetailPage() {
             </Card>
           ) : null}
 
-          {prePlanMutation.error ? (
-            <ApiForbiddenGate error={prePlanMutation.error} embedded>
-              <p role="alert">Unable to save pre-plan</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <SaveError error={prePlanMutation.error} subject="The pre-plan" />
         </div>
       ) : null}
     </div>

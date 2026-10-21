@@ -74,19 +74,19 @@ test('renders the per-tone, per-channel timeline for the most recent dispatch', 
         timeline: [
           {
             entityType: 'DELIVERY_RECEIPT',
-            channel: 'PUSH',
+            channel: 'push',
             toneSequence: 1,
             sentAt: T + 5,
             deliveredAt: T + 6,
           },
           {
             entityType: 'DELIVERY_RECEIPT',
-            channel: 'SMS',
+            channel: 'sms',
             toneSequence: 1,
             sentAt: T + 5,
             failureReason: 'CARRIER_REJECTED',
           },
-          { entityType: 'DELIVERY_RECEIPT', channel: 'PUSH', toneSequence: 2, sentAt: T + 185 },
+          { entityType: 'DELIVERY_RECEIPT', channel: 'push', toneSequence: 2, sentAt: T + 185 },
         ],
         deviceState: {
           notificationPermission: true,
@@ -114,6 +114,62 @@ test('renders the per-tone, per-channel timeline for the most recent dispatch', 
   expect(mockApiRequest.mock.calls.map((c) => c[0])).not.toContainEqual(
     expect.stringMatching(/diagnostics\/MBR/),
   );
+});
+
+test('a page that was claimed but never sent shows as not sent, with a danger glyph and word', async () => {
+  routeRequests({
+    [HISTORY]: () => ok({ entries: [{ dispatchId: 'D-1', sentAt: T + 5 }] }),
+    [ACTIVE]: () => ok({ dispatches: [], activeWindowSeconds: 7200 }),
+    'alerting/dispatches/D-1/diagnostics': () =>
+      ok({
+        dispatchId: 'D-1',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          { entityType: 'DELIVERY_RECEIPT', channel: 'push', toneSequence: 2 },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'sms',
+            toneSequence: 2,
+            failureReason: 'SnsUnavailableError',
+          },
+        ],
+        deviceState: null,
+      }),
+  });
+
+  const { findByText, getByText, getAllByText } = await render(<DiagnosticsScreen />);
+
+  expect(await findByText('Push: not sent')).toBeTruthy();
+  expect(getAllByText('⊠')).toHaveLength(2);
+  expect(getByText(/SMS: failed \(SnsUnavailableError\)/)).toBeTruthy();
+});
+
+test('a merged row with both a failure reason and a delivery time reads as delivered', async () => {
+  routeRequests({
+    [HISTORY]: () => ok({ entries: [{ dispatchId: 'D-1', sentAt: T + 5 }] }),
+    [ACTIVE]: () => ok({ dispatches: [], activeWindowSeconds: 7200 }),
+    'alerting/dispatches/D-1/diagnostics': () =>
+      ok({
+        dispatchId: 'D-1',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'push',
+            toneSequence: 1,
+            sentAt: T + 5,
+            deliveredAt: T + 6,
+            failureReason: 'APNs: Unregistered',
+          },
+        ],
+        deviceState: null,
+      }),
+  });
+
+  const { findByText, queryByText } = await render(<DiagnosticsScreen />);
+
+  expect(await findByText('Push: delivered')).toBeTruthy();
+  expect(queryByText(/failed/)).toBeNull();
 });
 
 test('a recent call the member was never paged for shows as not on the eligible roster', async () => {

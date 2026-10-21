@@ -21,6 +21,8 @@ export interface DkimSignature {
   readonly bodyHash?: string;
 }
 
+export type HeaderCoverage = 'all' | 'some' | 'none';
+
 export interface ParsedEmail {
   readonly fromAddress: string | undefined;
   readonly fromDomain: string | undefined;
@@ -38,12 +40,19 @@ export interface ParsedEmail {
     | 'DkimBodyLength'
     | 'DuplicateHeader';
   readonly date: number | undefined;
-  readonly messageId: string | undefined;
+  /** The Message-ID header as received, whether or not a signature covers it: replay keys only. */
+  readonly rawMessageId?: string;
+  /** How many of the signatures list Message-ID in h=; a replayer can append or strip signatures. */
+  readonly messageIdCoverage: HeaderCoverage;
   /** Every address in the To and Cc headers (address.ts parseAddressList). */
   readonly toAddresses: readonly string[];
   readonly ccAddresses: readonly string[];
   /** Decoded Subject: many CADs put the call type and address there (chain review C1). */
   readonly subject: string | undefined;
+  /** The Subject header as received, whether or not a signature covers it: replay keys only. */
+  readonly rawSubject?: string;
+  /** How many of the signatures list Subject in h=; a replayer can append signatures. */
+  readonly subjectCoverage: HeaderCoverage;
   readonly dkimSignatures: readonly DkimSignature[];
   readonly text: string;
 }
@@ -251,6 +260,13 @@ export function parseEmail(raw: string): ParsedEmail {
   const date = dateHeader ? Date.parse(dateHeader) : Number.NaN;
   const found = extractText(headers, body);
   const subject = signed('subject');
+  const rawSubjectHeader = first(headers, 'subject');
+  const rawSubject = rawSubjectHeader ? decodeEncodedWords(rawSubjectHeader).trim() : '';
+  const coverageOf = (name: string): HeaderCoverage => {
+    const covering = signatures.filter((sig) => sig.signedHeaders.includes(name)).length;
+    return covering === 0 ? 'none' : covering === signatures.length ? 'all' : 'some';
+  };
+  const rawMessageId = first(headers, 'message-id')?.trim();
   const to = signed('to');
   const cc = signed('cc');
   return {
@@ -258,10 +274,13 @@ export function parseEmail(raw: string): ParsedEmail {
     fromDomain: from.ok ? from.domain : undefined,
     ...(from.ok ? {} : { fromError: from.reason }),
     date: Number.isFinite(date) ? Math.floor(date / 1000) : undefined,
-    messageId: signed('message-id'),
+    ...(rawMessageId ? { rawMessageId } : {}),
+    messageIdCoverage: coverageOf('message-id'),
     toAddresses: to ? parseAddressList(to) : [],
     ccAddresses: cc ? parseAddressList(cc) : [],
     subject: subject ? decodeEncodedWords(subject).trim() || undefined : undefined,
+    ...(rawSubject ? { rawSubject } : {}),
+    subjectCoverage: coverageOf('subject'),
     dkimSignatures: signatures,
     ...(headerError ? { headerError } : {}),
     text: (found.plain ?? found.html ?? '').trim(),

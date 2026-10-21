@@ -2,12 +2,11 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { StatusRole } from '@boxalarm/design-tokens';
 import { useAuth } from '../../auth/AuthContext';
-import { ApiError } from '../../lib/apiClient';
 import { Button } from '../../components/ui/Button';
 import { StatusChip } from '../../components/ui/Chip';
 import { DataTable } from '../../components/ui/DataTable';
 import { resubmitIncident } from './api';
-import { formatTimestamp } from './format';
+import { formatTimestamp, problemMessage } from './format';
 import type {
   AttemptOutcome,
   NerisStatus,
@@ -96,11 +95,7 @@ export function SubmissionLedger({
         queryKey: ['incident-submission', state.incidentId],
       });
     } catch (caught) {
-      setError(
-        caught instanceof ApiError
-          ? (caught.problem.detail ?? caught.problem.title)
-          : 'Unable to resubmit the report to NERIS.',
-      );
+      setError(problemMessage(caught, 'Unable to resubmit the report to NERIS.'));
     } finally {
       setResubmitting(false);
     }

@@ -15,6 +15,7 @@ import {
   parseCadUpdateEnvelope,
   parseMutualAidPromptEnvelope,
   resolveChannelTarget,
+  TEST_AUDIT_TTL_SECONDS,
   type ChannelEnvelopePayload,
   type ChannelName,
   type ContactChannelSnapshot,
@@ -132,8 +133,9 @@ function buildSendGuard(params: DeliverChannelMessageParams, sentAt: number): Se
       entityType: 'DELIVERY_RECEIPT',
       channelTier: CHANNEL_TIER[channel],
       toneSequence,
-      gsi1pk: `MEMBER#${memberId}`,
-      gsi1sk: `RECEIPT#${sentAt}#${dispatchId}`,
+      ...(params.isTest === true
+        ? { isTest: true, ttl: sentAt + TEST_AUDIT_TTL_SECONDS }
+        : { gsi1pk: `MEMBER#${memberId}`, gsi1sk: `RECEIPT#${sentAt}#${dispatchId}` }),
     },
   };
 }
@@ -461,7 +463,8 @@ async function deliverPushToDevices(
       deviceSends[device.deviceKey] = 'INVALID';
     } catch (error) {
       // The mass-invalidation latch held this token valid: the device stays without an
-      // outcome, so the page throws, redelivers and dead-letters (pages on-call).
+      // outcome. If no other device rang, the page throws, redelivers and dead-letters (pages
+      // on-call); if one did, MassInvalidationBlocked is the alarm and the page is recorded SENT.
       massInvalidationError ??= error instanceof Error ? error : new Error(String(error));
     }
   }
@@ -479,12 +482,9 @@ async function deliverPushToDevices(
       deviceSends,
       deviceAttempts,
     );
-    if (massInvalidationError !== undefined) {
-      throw massInvalidationError;
-    }
     return;
   }
-  if (massInvalidationError !== undefined) {
+  if (massInvalidationError !== undefined && !anySent) {
     await recordClaimedFailure(
       ddb,
       tableName,

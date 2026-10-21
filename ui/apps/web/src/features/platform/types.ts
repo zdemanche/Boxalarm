@@ -1,7 +1,6 @@
 export const EDITABLE_CONFIG_TYPES = [
   'STATIONS',
   'RANKS',
-  'LOSAP_POINT_RULES',
   'ALERT_RULES',
   'CHECKLIST_DEFAULTS',
   'NERIS',
@@ -70,13 +69,6 @@ export interface MemberDevice {
 export interface MemberDevices {
   memberId: string;
   devices: MemberDevice[];
-}
-
-export interface DisposalResult {
-  retentionYearsUsed: number;
-  hardDeleted: number;
-  cryptoShredded: number;
-  refused: string[];
 }
 
 export const LIFE_SAFETY_RECORD_CLASSES = [

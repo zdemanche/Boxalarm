@@ -1,7 +1,7 @@
 import { radiusScale, spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
 import { useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Text, TextInput, View } from 'react-native';
 import { Button, Card, Screen, useTheme } from '../../components/ui';
 import { useMeRepository } from '../../features/me/apiMeRepository';
 import { ApiError } from '../../lib/apiClient';
@@ -59,49 +59,100 @@ export function ProfileEditScreen() {
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [status, setStatus] = useState<'loading' | 'idle' | 'saving' | 'saved' | 'error'>(
-    'loading',
-  );
+  const [loadedPhone, setLoadedPhone] = useState('');
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [status, setStatus] = useState<
+    'loading' | 'loadError' | 'idle' | 'saving' | 'saved' | 'error'
+  >('loading');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    repository.getProfile().then((profile) => {
-      if (cancelled) return;
-      setFirstName(profile.firstName);
-      setLastName(profile.lastName);
-      setEmail(profile.email);
-      setPhone(profile.phone ?? '');
-      setStatus('idle');
-    });
+    setStatus('loading');
+    repository
+      .getProfile()
+      .then((profile) => {
+        if (cancelled) return;
+        setFirstName(profile.firstName);
+        setLastName(profile.lastName);
+        setEmail(profile.email);
+        setPhone(profile.phone ?? '');
+        setLoadedPhone(profile.phone ?? '');
+        setStatus('idle');
+      })
+      .catch(() => {
+        if (!cancelled) setStatus('loadError');
+      });
     return () => {
       cancelled = true;
     };
-  }, [repository]);
+  }, [repository, loadAttempt]);
 
   const handleSave = async () => {
+    const trimmedPhone = phone.trim();
+    const phoneUpdate =
+      trimmedPhone === loadedPhone ? {} : { phone: trimmedPhone === '' ? null : trimmedPhone };
     setStatus('saving');
     setError(null);
     try {
       // No email: the server refuses a member changing their own (403) - only a chief or admin
       // can, because it is also their sign-in, kept in step with Cognito.
-      await repository.updateProfile({ firstName, lastName, phone });
+      await repository.updateProfile({ firstName, lastName, ...phoneUpdate });
       setStatus('saved');
       AccessibilityInfo.announceForAccessibility('Profile saved');
       navigation.goBack();
     } catch (e) {
       setStatus('error');
-      setError(
+      const message =
         e instanceof ApiError && e.problem.status === 403
           ? 'You do not have access to update this profile.'
-          : 'Could not save. Try again.',
-      );
-      AccessibilityInfo.announceForAccessibility(error ?? 'Could not save');
+          : e instanceof ApiError && e.problem.status === 400 && e.problem.detail
+            ? e.problem.detail
+            : 'Could not save. Try again.';
+      setError(message);
+      AccessibilityInfo.announceForAccessibility(message);
     }
   };
 
+  const confirmSave = () => {
+    if (loadedPhone !== '' && phone.trim() === '') {
+      Alert.alert(
+        'Remove your phone number?',
+        'You will stop getting text and voice pages. Boxalarm pages on this phone are not affected.',
+        [
+          { text: 'Keep number', style: 'cancel' },
+          { text: 'Remove and save', style: 'destructive', onPress: () => void handleSave() },
+        ],
+      );
+      return;
+    }
+    void handleSave();
+  };
+
   if (status === 'loading') {
-    return <Screen scroll={false}>{null}</Screen>;
+    return (
+      <Screen scroll={false}>
+        <ActivityIndicator accessibilityLabel="Loading your profile" />
+      </Screen>
+    );
+  }
+
+  if (status === 'loadError') {
+    return (
+      <Screen scroll={false}>
+        <Card>
+          <View style={{ gap: spacing.md }}>
+            <Text
+              accessibilityRole="alert"
+              style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+            >
+              Could not load your profile. Try again when you have signal.
+            </Text>
+            <Button label="Try again" fullWidth onPress={() => setLoadAttempt((n) => n + 1)} />
+          </View>
+        </Card>
+      </Screen>
+    );
   }
 
   // Not scrolling, as before: a scroll view would spend the first tap on Save dismissing the
@@ -136,12 +187,7 @@ export function ProfileEditScreen() {
               {error}
             </Text>
           ) : null}
-          <Button
-            label="Save"
-            fullWidth
-            loading={status === 'saving'}
-            onPress={() => void handleSave()}
-          />
+          <Button label="Save" fullWidth loading={status === 'saving'} onPress={confirmSave} />
         </View>
       </Card>
     </Screen>

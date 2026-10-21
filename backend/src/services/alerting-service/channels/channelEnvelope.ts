@@ -5,6 +5,8 @@ import {
   resolvePushTargets,
 } from '../eligibility/resolvePushTarget.js';
 
+export const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
+
 export type ChannelName = 'push' | 'sms' | 'voice';
 
 export interface ChannelEnvelopePayload {

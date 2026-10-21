@@ -210,6 +210,64 @@ describe('getNerisClient', () => {
   });
 });
 
+describe('rotated client secret', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('re-reads Secrets Manager after the token endpoint refuses the cached secret', async () => {
+    const { readNerisConfig } = await import('./config.js');
+    const { getNerisClient } = await import('./client.js');
+    const env = {
+      STAGE: 'dev',
+      NERIS_BASE_URL_PARAM: '/base',
+      NERIS_USER_AGENT_PARAM: '/ua',
+      NERIS_CREDENTIALS_SECRET_ID: 'creds',
+    };
+    const ssmClient = {
+      send: vi.fn().mockImplementation((command: { input: { Name: string } }) =>
+        Promise.resolve({
+          Parameter: {
+            Value:
+              command.input.Name === '/base'
+                ? 'https://api-test.neris.fsri.org/v1'
+                : 'boxalarm/dev',
+          },
+        }),
+      ),
+    };
+    const secrets = ['v1', 'v2'];
+    const secretsClient = {
+      send: vi.fn().mockImplementation(() =>
+        Promise.resolve({
+          SecretString: JSON.stringify({ clientId: 'id', clientSecret: secrets.shift() }),
+        }),
+      ),
+    };
+    const deps = { ssmClient, secretsClient } as never;
+    const fetchFn = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (!String(url).endsWith('/token')) return Promise.resolve(jsonResponse({ ok: true }));
+      const authorization = new Headers(init?.headers).get('Authorization');
+      const secret = Buffer.from(String(authorization).slice(6), 'base64').toString().split(':')[1];
+      return Promise.resolve(
+        secret === 'v1'
+          ? jsonResponse({ error: 'invalid_client' }, 401)
+          : jsonResponse({ access_token: 'tok', expires_in: 3600 }),
+      );
+    });
+
+    const first = await readNerisConfig(env, deps);
+    await expect(
+      getNerisClient(first, { fetchFn, nowMs: () => 1_000_000 }).fetch('/a'),
+    ).rejects.toThrow('HTTP 401');
+
+    const second = await readNerisConfig(env, deps);
+    expect(second.clientSecret).toBe('v2');
+    const response = await getNerisClient(second, { fetchFn, nowMs: () => 1_000_000 }).fetch('/a');
+    expect(response.ok).toBe(true);
+  });
+});
+
 describe('resolveUrl', () => {
   beforeEach(() => {
     vi.resetModules();

@@ -33,10 +33,9 @@ export interface ImmediateDeliverySpec {
 }
 
 /**
- * How long a channel claim stays owned by the invocation that took it. The queue's
- * visibility timeout (30s) outlasts the Lambda's (25s), so by the time SQS redelivers a
- * message whose handler died between claiming and sending, the claim is stale and the
- * redelivery takes it over rather than skipping the send.
+ * How long a channel claim stays owned by the invocation that took it. A claim without sentAt
+ * is in flight, never delivered: a redelivery that finds it younger than this fails, so the
+ * message is retried rather than acked, and takes the claim over once it is this old.
  */
 export const CLAIM_STALE_MS = 30_000;
 const CLAIM_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -75,11 +74,26 @@ export async function sendOnce(
         ConditionExpression:
           'attribute_not_exists(sk) OR (attribute_not_exists(sentAt) AND claimedAt < :staleBefore)',
         ExpressionAttributeValues: { ':staleBefore': now - CLAIM_STALE_MS },
+        ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
       }),
     );
   } catch (error) {
     if (isConditionalPutFailed(error)) {
-      return 'AlreadySent';
+      const held = (error as { Item?: Record<string, unknown> }).Item;
+      if (held && 'sentAt' in held) {
+        return 'AlreadySent';
+      }
+      console.warn(
+        JSON.stringify({
+          event: `${logPrefix}.claim_in_flight`,
+          service: 'notification-service',
+          correlationId: envelope.eventId,
+          memberId,
+          marker,
+          claimedAt: (held?.claimedAt as { N?: string } | undefined)?.N ?? held?.claimedAt,
+        }),
+      );
+      return 'Failed';
     }
     logError(`${logPrefix}.claim_failed`, error, envelope.eventId, { memberId, marker });
     return 'Failed';

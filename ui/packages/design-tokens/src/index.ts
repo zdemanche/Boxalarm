@@ -28,27 +28,14 @@ export const typography = {
   lineHeight: 1.4,
 } as const;
 
-// N3.5 baseline: 44x44pt (iOS) / 48x48dp (Android). Oversized applies to the truck-check
-// runner and alert-response screens specifically, per architecture.md's explicit callout
-// that those are used gloved and in a moving vehicle.
+// N3.5 baseline: 44x44pt (iOS) / 48x48dp (Android). Field and alert targets live in
+// `targetSize` (field 56, alert 72); `oversized` here is superseded by them.
 export const touchTarget = {
   baseline: { ios: 44, android: 48 },
   oversized: { ios: 56, android: 60 },
 } as const;
 
 export const radius = { default: 8, card: 12 } as const;
-
-export const elevation = {
-  level0: { shadowOpacity: 0, shadowRadius: 0, androidElevation: 0 },
-  level1: { shadowOpacity: 0.08, shadowRadius: 4, androidElevation: 2 },
-  level2: { shadowOpacity: 0.16, shadowRadius: 12, androidElevation: 6 },
-} as const;
-
-// Sizes only — the icon set itself (Phosphor) is added where it's first consumed, since it
-// pulls in react-native-svg as a peer dependency requiring native linking.
-export const iconSize = { sm: 16, md: 24, lg: 32 } as const;
-
-export type PaletteName = keyof typeof palette;
 
 // Widened shape of a single resolved palette (palette.day or palette.cab) — use this, not
 // `typeof palette.day`, whenever a value is chosen at runtime (e.g. `scheme === 'dark' ?
@@ -205,6 +192,16 @@ export const typeScale = {
   mono: { size: 13, lineHeight: 18, weight: 500 },
 } as const;
 
+export const fieldTypeScale = {
+  address: { size: 32, lineHeight: 38, weight: 700 },
+  display: { size: 28, lineHeight: 34, weight: 700 },
+  title: { size: 24, lineHeight: 30, weight: 600 },
+  heading: { size: 20, lineHeight: 26, weight: 600 },
+  body: { size: 17, lineHeight: 24, weight: 400 },
+  label: { size: 15, lineHeight: 20, weight: 600 },
+  caption: { size: 13, lineHeight: 18, weight: 400 },
+} as const;
+
 // Extends the existing five-step `spacing` scale without altering it (docs/design.md §2.5).
 export const spacingScale = {
   '2xs': 2,
@@ -233,7 +230,7 @@ export const motion = {
   },
 } as const;
 
-export const targetSize = { office: 44, field: 56, gap: 8 } as const;
+export const targetSize = { office: 44, field: 56, alert: 72, gap: 8, fieldGap: 12 } as const;
 
 export const breakpoints = { xs: 0, sm: 480, md: 768, lg: 1024, xl: 1440, xxl: 1920 } as const;
 

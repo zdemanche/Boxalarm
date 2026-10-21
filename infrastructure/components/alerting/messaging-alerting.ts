@@ -27,6 +27,7 @@ export interface MessagingAlertingArgs {
 export interface ChannelQueue {
   readonly queue: aws.sqs.Queue;
   readonly dlq: aws.sqs.Queue;
+  readonly subscriptionDlq: aws.sqs.Queue;
 }
 
 /**
@@ -97,6 +98,41 @@ export class MessagingAlerting extends pulumi.ComponentResource {
           { parent: this },
         );
 
+        const subscriptionDlq = new aws.sqs.Queue(
+          `${name}-${channel}-subscription-dlq`,
+          {
+            name: `boxalarm-${env}-alerting-${channel}-subscription-dlq.fifo`,
+            fifoQueue: true,
+            messageRetentionSeconds: 1_209_600,
+          },
+          { parent: this },
+        );
+
+        new aws.sqs.QueuePolicy(
+          `${name}-${channel}-subscription-dlq-policy`,
+          {
+            queueUrl: subscriptionDlq.url,
+            policy: pulumi
+              .all([subscriptionDlq.arn, this.topic.arn])
+              .apply(([queueArn, topicArn]) =>
+                JSON.stringify({
+                  Version: "2012-10-17",
+                  Statement: [
+                    {
+                      Sid: "AllowAlertingTopicOnly",
+                      Effect: "Allow",
+                      Principal: { Service: "sns.amazonaws.com" },
+                      Action: "sqs:SendMessage",
+                      Resource: queueArn,
+                      Condition: { ArnEquals: { "aws:SourceArn": topicArn } },
+                    },
+                  ],
+                }),
+              ),
+          },
+          { parent: this },
+        );
+
         const queue = new aws.sqs.Queue(
           `${name}-${channel}-queue`,
           {
@@ -142,11 +178,14 @@ export class MessagingAlerting extends pulumi.ComponentResource {
             rawMessageDelivery: true,
             // channel only — never channelTier/toneSequence (boxalarm-docs#12).
             filterPolicy: JSON.stringify({ channel: [channel] }),
+            redrivePolicy: subscriptionDlq.arn.apply((arn) =>
+              JSON.stringify({ deadLetterTargetArn: arn }),
+            ),
           },
           { parent: this },
         );
 
-        return [channel, { queue, dlq }];
+        return [channel, { queue, dlq, subscriptionDlq }];
       }),
     ) as Record<AlertingChannel, ChannelQueue>;
 

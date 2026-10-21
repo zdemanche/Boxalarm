@@ -56,6 +56,9 @@ describe("AuditRoute", () => {
       env: "dev",
       platformTableName: pulumi.output("platform-table"),
       platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
+      incidentTableName: pulumi.output("incident-table"),
+      incidentTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/incident"),
+      incidentCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/incident-key"),
       policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
       policyStoreId: pulumi.output("ps-1"),
       logGroup,
@@ -68,10 +71,57 @@ describe("AuditRoute", () => {
     ]);
     expect(env?.variables?.VERIFIED_PERMISSIONS_POLICY_STORE_ID).toBe("ps-1");
     expect(policyJson).toContain("verifiedpermissions:IsAuthorizedWithToken");
-    const statements = (JSON.parse(policyJson) as { Statement: Array<{ Action: string[] }> })
-      .Statement;
+    const statements = (
+      JSON.parse(policyJson) as { Statement: Array<{ Action: string[]; Resource: string }> }
+    ).Statement;
     expect(statements.flatMap((s) => s.Action).filter((a) => a.startsWith("dynamodb:"))).toEqual([
       "dynamodb:Query",
+      "dynamodb:Query",
     ]);
+  });
+
+  it("reads the incident table's GSI3 only and decrypts with its CMK", async () => {
+    const { AuditRoute } = await import("../../components/platform/audit-route");
+    const logGroup = new ServiceLogGroup("test-audit-inc-lg", {
+      env: "dev",
+      serviceName: "platform-service",
+    });
+    const httpApi = new HttpApi("test-audit-inc-api", {
+      env: "dev",
+      userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+      allowedClientIds: [pulumi.output("client-1")],
+      platformLogGroup: logGroup,
+    });
+    const route = new AuditRoute("test-audit-inc", {
+      env: "dev",
+      platformTableName: pulumi.output("platform-table"),
+      platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
+      incidentTableName: pulumi.output("incident-table"),
+      incidentTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/incident"),
+      incidentCmkArn: pulumi.output("arn:aws:kms:us-east-1:123456789012:key/incident-key"),
+      policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
+      logGroup,
+      httpApi,
+    });
+
+    const [policyJson, env] = await Promise.all([
+      resolve(route.lambda.rolePolicy.policy),
+      resolve(route.lambda.function.environment),
+    ]);
+    expect(env?.variables?.INCIDENT_AUDIT_TABLE_NAME).toBe("incident-table");
+    const statements = (
+      JSON.parse(policyJson) as { Statement: Array<{ Action: string[]; Resource: string }> }
+    ).Statement;
+    expect(
+      statements.find(
+        (s) => s.Resource === "arn:aws:dynamodb:us-east-1:123456789012:table/incident/index/GSI3",
+      )?.Action,
+    ).toEqual(["dynamodb:Query"]);
+    expect(statements.find((s) => s.Action.includes("kms:Decrypt"))?.Resource).toBe(
+      "arn:aws:kms:us-east-1:123456789012:key/incident-key",
+    );
   });
 });

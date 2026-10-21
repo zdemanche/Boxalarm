@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
+import { ApiErrorState } from '../../components/ApiErrorState';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, PageHeader, StatusChip, Tabs, buttonClassName } from '../../components/ui';
 import { canAccessPath } from '../../routing/routeTable';
@@ -31,13 +33,14 @@ export function MapPage() {
 
   const mapQuery = useQuery({
     queryKey: ['inspections', 'map', bbox.minLat, bbox.minLng, bbox.maxLat, bbox.maxLng],
-    queryFn: async () => {
-      const result = await queryMap(auth, bbox);
-      setOccupancies((prev) => mergeOccupancies(prev, result.occupancies));
-      setHydrants((prev) => mergeHydrants(prev, result.hydrants));
-      return result;
-    },
+    queryFn: () => queryMap(auth, bbox),
   });
+  useEffect(() => {
+    const data = mapQuery.data;
+    if (!data) return;
+    setOccupancies((prev) => mergeOccupancies(prev, data.occupancies));
+    setHydrants((prev) => mergeHydrants(prev, data.hydrants));
+  }, [mapQuery.data]);
   // The map feed carries ids and coordinates only; the registry (same query the Occupancies and
   // Inspections pages share) names each pin by its address. Without it the list falls back to ids.
   const registryQuery = useQuery({
@@ -46,7 +49,8 @@ export function MapPage() {
     enabled: canAccessPath('/inspections/occupancies', auth.roles),
   });
 
-  if (mapQuery.error) {
+  const forbidden = mapQuery.error instanceof ApiError && mapQuery.error.problem.status === 403;
+  if (forbidden) {
     return (
       <ApiForbiddenGate error={mapQuery.error}>
         <p>Unexpected error</p>
@@ -93,6 +97,10 @@ export function MapPage() {
               Zoom out
             </Button>
           </div>
+
+          {mapQuery.error ? (
+            <ApiErrorState embedded headingLevel="h2" onRetry={() => void mapQuery.refetch()} />
+          ) : null}
 
           <Tabs
             label="Map display"

@@ -15,7 +15,11 @@ import { deriveIngressIdempotencyKey } from '../dispatches/dispatchIngressPort.j
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import { logError } from '../dispatches/logger.js';
 import { createManualDispatch } from '../dispatches/repository.js';
-import { SELF_TEST_CHANNELS, selfTestAdapter } from './dispatchAdapter.js';
+import {
+  SELF_TEST_CHANNELS,
+  SELF_TEST_LOCK_WINDOW_SECONDS,
+  selfTestAdapter,
+} from './dispatchAdapter.js';
 import { acquireSelfTestCooldown, upsertSelfTestRun } from './selfTestRunRepository.js';
 
 const METRIC_NAMESPACE = 'Boxalarm/AlertingSelfTest';
@@ -81,6 +85,7 @@ async function postSelfTest(
       dispatch: normalized.value,
       idempotencyKey,
       dispatchedAt: runAt,
+      lockExpiresAt: runAt + SELF_TEST_LOCK_WINDOW_SECONDS,
       targetMemberId: memberId,
       selfTestId: testId,
       channelsTested: SELF_TEST_CHANNELS,

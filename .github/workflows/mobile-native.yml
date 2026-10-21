@@ -1,0 +1,73 @@
+name: mobile-native
+
+on:
+  push:
+    branches: [main]
+    paths:
+      [
+        "ui/apps/mobile/**",
+        "ui/package-lock.json",
+        ".github/workflows/mobile-native.yml",
+      ]
+  pull_request:
+    paths:
+      [
+        "ui/apps/mobile/**",
+        "ui/package-lock.json",
+        ".github/workflows/mobile-native.yml",
+      ]
+
+concurrency:
+  group: mobile-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+        working-directory: ui
+      - name: Placeholder google-services.json
+        working-directory: ui/apps/mobile/android/app
+        run: |
+          cat > google-services.json <<'JSON'
+          {
+            "project_info": {"project_number": "000000000000", "project_id": "ci-placeholder"},
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                "android_client_info": {"package_name": "com.boxalarm.mobile"}
+              },
+              "api_key": [{"current_key": "ci-placeholder"}]
+            }],
+            "configuration_version": "1"
+          }
+          JSON
+      - run: ./gradlew :app:assembleDebug
+        working-directory: ui/apps/mobile/android
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+        working-directory: ui
+      - run: pod install
+        working-directory: ui/apps/mobile/ios
+      - run: xcodebuild -workspace Boxalarm.xcworkspace -scheme Boxalarm -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+        working-directory: ui/apps/mobile/ios

@@ -3,7 +3,7 @@ import { LocalstackContainer, type StartedLocalStackContainer } from '@testconta
 import { CreateTableCommand, DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
-import { buildLosapEntryItem, getMemberLosapTotal, getYearEndReport } from './repository.js';
+import { buildLosapEntryItem, getMemberLosapTotal } from './repository.js';
 import { getLosapPointRules, putLosapPointRules } from './configRepository.js';
 
 const TABLE_NAME = 'personnel-losap-test';
@@ -75,36 +75,6 @@ describe('LOSAP repository (real DynamoDB via LocalStack)', () => {
 
     const total = await getMemberLosapTotal(client, TABLE_NAME, DEPT_ID, 'mbr-201', 2026);
     expect(total).toBe(5);
-  });
-
-  it('produces a dept-wide year-end report from real per-member partitions (AC4)', async () => {
-    await client.send(
-      new PutCommand({
-        TableName: TABLE_NAME,
-        Item: buildLosapEntryItem({
-          deptId: DEPT_ID,
-          memberId: 'mbr-301',
-          year: 2027,
-          activityType: 'CALL',
-          points: 4,
-          sourceRefId: 'ATTENDANCE#3',
-          ruleVersionId: 'RULE-1',
-          entryId: 'entry-3',
-        }),
-      }),
-    );
-
-    const report = await getYearEndReport(
-      client,
-      TABLE_NAME,
-      DEPT_ID,
-      ['mbr-301', 'mbr-999'],
-      2027,
-    );
-    expect(report).toEqual([
-      { memberId: 'mbr-301', totalPoints: 4 },
-      { memberId: 'mbr-999', totalPoints: 0 },
-    ]);
   });
 
   it('round-trips a versioned rule set through putLosapPointRules/getLosapPointRules (AC1)', async () => {

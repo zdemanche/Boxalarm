@@ -55,11 +55,15 @@ function validateCreateInput(body: unknown): CreateHydrantInput | string {
   if (typeof b.hydrantId !== 'string' || !HYDRANT_ID_PATTERN.test(b.hydrantId)) {
     return 'hydrantId is required and must match ^[A-Za-z0-9_-]{1,64}$';
   }
-  if (typeof b.latitude !== 'number' || !Number.isFinite(b.latitude)) {
-    return 'latitude is required and must be a finite number';
+  if (typeof b.latitude !== 'number' || !Number.isFinite(b.latitude) || Math.abs(b.latitude) > 90) {
+    return 'latitude is required and must be a finite number in [-90, 90]';
   }
-  if (typeof b.longitude !== 'number' || !Number.isFinite(b.longitude)) {
-    return 'longitude is required and must be a finite number';
+  if (
+    typeof b.longitude !== 'number' ||
+    !Number.isFinite(b.longitude) ||
+    Math.abs(b.longitude) > 180
+  ) {
+    return 'longitude is required and must be a finite number in [-180, 180]';
   }
   if (typeof b.size !== 'string' || b.size.trim().length === 0) {
     return 'size is required and must be a non-empty string';
@@ -122,7 +126,7 @@ export async function createHydrantInner(
   const deptId = toVerifiedDeptId(principal);
 
   try {
-    const hydrant = await createHydrant(deptId, validated);
+    const hydrant = await createHydrant(deptId, validated, principal.sub);
     emitMetric('HydrantCreated');
     return {
       statusCode: 201,

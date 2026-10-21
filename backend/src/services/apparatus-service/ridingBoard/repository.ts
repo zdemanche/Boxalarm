@@ -142,6 +142,7 @@ export interface BoardPosition {
   readonly code: string;
   readonly label: string;
   readonly requiredQual?: string;
+  readonly version: number;
   readonly assignment?: BoardPositionAssignment;
 }
 
@@ -191,7 +192,10 @@ export async function getRidingBoard(
     ...new Set(
       seatAssignments
         .map((seat) => seat.memberId)
-        .filter((memberId): memberId is string => memberId !== null),
+        .filter(
+          (memberId): memberId is string =>
+            memberId !== null && memberId.length > 0 && !memberId.includes('#'),
+        ),
     ),
   ];
   const qualsByMember = new Map<string, ReadonlySet<string>>();
@@ -223,6 +227,7 @@ export async function getRidingBoard(
         const base = {
           code: position.code,
           label: position.label,
+          version: seat?.version ?? 0,
           ...(position.requiredQual !== undefined ? { requiredQual: position.requiredQual } : {}),
         };
         if (!seat || seat.memberId === null) {
@@ -459,11 +464,6 @@ export async function assignSeat(
       emitOutcomeMetric(METRICS_NAMESPACE, 'RidingAssignmentConflict');
       return { kind: 'CONFLICT', current };
     }
-    emitOutcomeMetric(
-      METRICS_NAMESPACE,
-      'RidingAssignmentFailed',
-      error instanceof Error ? error.constructor.name : 'UnknownError',
-    );
     throw new RidingBoardWriteError(error);
   }
 

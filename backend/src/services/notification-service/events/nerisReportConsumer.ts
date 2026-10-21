@@ -1,12 +1,13 @@
 import { PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readNotificationConfig } from '../dynamoClient.js';
 import { NERIS_REJECTED_CATEGORY, type ReminderItem } from '../reminders/categories.js';
 import { loadRoster, membersWithRoles } from '../reminders/recipients.js';
 import { buildNotificationItem, isConditionalPutFailed } from '../repository.js';
 import {
+  handleRecords,
   logError,
   MalformedEventError,
   METRIC_NAMESPACE,
@@ -21,6 +22,7 @@ const REJECTED = 'neris.incident.rejected';
 const FAILED = 'neris.incident.failed';
 const SUBMISSION_FAILED = 'neris.submission.failed';
 const MISSING = 'neris.incident.missing';
+const DELETED = 'neris.incident.deleted';
 const LOG_PREFIX = 'notification.nerisReport';
 
 /**
@@ -29,7 +31,9 @@ const LOG_PREFIX = 'notification.nerisReport';
  *   - neris.submission.failed (the submission worker: a 422 at send time, revoked
  *     credentials, the department not configured, or retries exhausted — review M6);
  *   - neris.incident.missing (the nightly reconciliation: NERIS stopped listing a record it
- *     had accepted, and it was given up on after bounded re-checks — round 2, N6).
+ *     had accepted, and it was given up on after bounded re-checks — round 2, N6);
+ *   - neris.incident.deleted (the status poller or reconciliation: NERIS deleted the record,
+ *     and the report is re-creatable by resubmitting it).
  *
  * The report owner, the officer who locked it, and every active OFFICER get an inbox item
  * right away (not only the next daily digest: the NERIS target is 72 hours), each linking to
@@ -56,8 +60,10 @@ export function toNerisReportReminder({ eventType, payload }: EventEnvelope): Ne
       ? 'was rejected by NERIS: fix it and resubmit'
       : eventType === FAILED
         ? "couldn't be processed by NERIS: check the submission and resubmit"
-        : eventType === MISSING
-          ? 'is no longer listed by NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
+        : eventType === MISSING || eventType === DELETED
+          ? eventType === DELETED
+            ? 'was deleted in NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
+            : 'is no longer listed by NERIS: open the report and resubmit it, and Boxalarm will send it to NERIS again'
           : `didn't reach NERIS${reason ? ` (${reason.slice(0, 200)})` : ''}: fix it and retry`;
   return {
     deptId: requireString(payload, 'deptId', eventType),
@@ -70,6 +76,19 @@ export function toNerisReportReminder({ eventType, payload }: EventEnvelope): Ne
       link: { kind: 'incident', id: incidentId },
     },
   };
+}
+
+/**
+ * incident-service omits ownerId (its `notify` block) when NERIS submissions are switched off on
+ * purpose, so a retry that was already scheduled records NOT_CONFIGURED without alarming anyone.
+ * That event is acked here: the reporting projection still reads it, nobody is told.
+ */
+function isSwitchedOffSubmission({ eventType, payload }: EventEnvelope): boolean {
+  return (
+    eventType === SUBMISSION_FAILED &&
+    payload.outcome === 'NOT_CONFIGURED' &&
+    optionalString(payload, 'ownerId') === undefined
+  );
 }
 
 async function writeInbox(
@@ -105,23 +124,27 @@ async function writeInbox(
   }
 }
 
-export const handler = async (event: SQSEvent): Promise<void> => {
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const { tableName } = readNotificationConfig(process.env);
   const ddb = createDynamoClient(process.env);
 
-  for (const record of event.Records) {
+  return handleRecords(event, async (record) => {
     let envelope: EventEnvelope;
-    let reminder: NerisReportReminder;
+    let reminder: NerisReportReminder | undefined;
     try {
       envelope = parseEnvelope(
         record.body,
-        new Set([REJECTED, FAILED, SUBMISSION_FAILED, MISSING]),
+        new Set([REJECTED, FAILED, SUBMISSION_FAILED, MISSING, DELETED]),
         REJECTED,
       );
-      reminder = toNerisReportReminder(envelope);
+      reminder = isSwitchedOffSubmission(envelope) ? undefined : toNerisReportReminder(envelope);
     } catch (error) {
       logError(`${LOG_PREFIX}.malformed_event`, error, record.messageId);
       throw error instanceof MalformedEventError ? error : new MalformedEventError(REJECTED);
+    }
+    if (!reminder) {
+      emitOutcomeMetric(METRIC_NAMESPACE, 'NerisReportSuppressed');
+      return;
     }
     const deptId = toVerifiedDeptId({ deptId: reminder.deptId });
     // Stable per event, so a redelivery reuses the same inbox keys.
@@ -162,5 +185,5 @@ export const handler = async (event: SQSEvent): Promise<void> => {
       // Throw so SQS redelivers; delivered copies are conditional no-ops next time.
       throw new Error('one or more NERIS report inbox writes failed');
     }
-  }
+  });
 };

@@ -135,8 +135,30 @@ describe('validateCadParserTemplate', () => {
     ['no address rule', { version: 1, fields: { incidentType: { label: 'TYPE' } } }],
     ['a version below 1', { version: 0, fields: { address: { label: 'A' } } }],
     ['a label with a newline', { version: 1, fields: { address: { label: 'A\nB' } } }],
+    ['a label that is only a separator', { version: 1, fields: { address: { label: ' : ' } } }],
   ])('rejects %s', (_name, template) => {
     expect(validateCadParserTemplate(template).ok).toBe(false);
+  });
+});
+
+describe('a label copied with its own separator', () => {
+  it('is normalized so it still matches', () => {
+    const result = validateCadParserTemplate({
+      version: 1,
+      fields: { address: { label: 'ADDRESS:' }, crossStreets: { label: 'X-ST' } },
+    });
+    expect(result).toEqual({
+      ok: true,
+      template: {
+        version: 1,
+        fields: { address: { label: 'ADDRESS' }, crossStreets: { label: 'X-ST' } },
+      },
+    });
+    if (!result.ok) throw new Error('unreachable');
+    expect(parseCadText(result.template, 'ADDRESS: 123 MAIN ST')).toMatchObject({
+      status: 'PARSED',
+      fields: { address: '123 MAIN ST' },
+    });
   });
 });
 

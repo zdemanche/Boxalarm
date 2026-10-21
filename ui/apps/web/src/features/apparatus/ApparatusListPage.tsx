@@ -106,7 +106,7 @@ export function ApparatusListPage() {
         />
 
         <div className={styles.stack}>
-          <MaintenanceDueSoonPanel apparatus={listQuery.data ?? []} />
+          <MaintenanceDueSoonPanel apparatus={listQuery.data ?? []} loading={listQuery.isLoading} />
 
           {canCreate ? (
             <Card title="Add apparatus">

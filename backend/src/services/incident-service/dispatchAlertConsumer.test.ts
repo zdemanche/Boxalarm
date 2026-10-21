@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SQSEvent } from 'aws-lambda';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { createHandler } from './dispatchAlertConsumer.js';
 
 const originalEnv = { ...process.env };
@@ -104,5 +105,41 @@ describe('dispatchAlertConsumer', () => {
 
     expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-0' }] });
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('stores the payload revision (0 when absent) and guards the Put against an older one', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const handler = createHandler({ client: { send } as never });
+
+    await handler(
+      sqsEvent([validBody({ revision: 3 }), validBody({ dispatchId: 'D-2' })]),
+      {} as never,
+      () => undefined,
+    );
+
+    const inputs = send.mock.calls.map(
+      (call) =>
+        (call[0] as { input: Record<string, unknown> & { Item: Record<string, unknown> } }).input,
+    );
+    expect(inputs[0]?.Item).toMatchObject({ revision: 3 });
+    expect(inputs[1]?.Item).toMatchObject({ revision: 0 });
+    expect(inputs[0]?.ConditionExpression).toContain('revision <= :revision');
+    expect(inputs[0]?.ExpressionAttributeValues).toEqual({ ':revision': 3 });
+  });
+
+  it('acknowledges a redelivered older revision without failing the batch', async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValue(new ConditionalCheckFailedException({ message: 'stale', $metadata: {} }));
+    const handler = createHandler({ client: { send } as never });
+
+    const result = await handler(
+      sqsEvent([validBody({ revision: 0 })]),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

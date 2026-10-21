@@ -24,6 +24,26 @@ export function conflictProblem(traceId: string): ProblemResponse {
   );
 }
 
+export function shiftClosedProblem(traceId: string): ProblemResponse {
+  return problemResponse(
+    409,
+    'https://boxalarm.dev/problems/shift-closed',
+    'Conflict',
+    'This shift has ended or been cancelled and can no longer be changed.',
+    traceId,
+  );
+}
+
+export function notQualifiedProblem(traceId: string, requiredQual: string): ProblemResponse {
+  return problemResponse(
+    403,
+    'https://boxalarm.dev/problems/shift-position-not-qualified',
+    'Forbidden',
+    `This shift position requires the ${requiredQual} qualification.`,
+    traceId,
+  );
+}
+
 export function notFoundProblem(traceId: string): ProblemResponse {
   return problemResponse(
     404,

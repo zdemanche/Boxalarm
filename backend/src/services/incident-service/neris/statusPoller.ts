@@ -127,7 +127,7 @@ export async function applyStatusChange(
                   ? 'attribute_not_exists(nerisStatus)'
                   : 'nerisStatus = :previous'
               }`,
-              UpdateExpression: `SET nerisStatus = :status, nerisStatusAt = :now${localStatus ? ', #status = :local' : ''}`,
+              UpdateExpression: `SET nerisStatus = :status, nerisStatusAt = :now${localStatus ? ', #status = :local' : ''}${current.status === 'DELETED' ? ', nerisMissingAt = :now' : ''}`,
               ...(localStatus ? { ExpressionAttributeNames: { '#status': 'status' } } : {}),
               ExpressionAttributeValues: {
                 ':status': current.status,
@@ -236,6 +236,21 @@ export async function pollRecord(
     return 'unchanged';
   }
   if (metadata.nerisStatus === current.status) {
+    if (!OPEN_NERIS_STATUSES.has(current.status)) {
+      await client
+        .send(
+          new DeleteCommand({
+            TableName: tableName,
+            Key: nerisOpenKey(deptId, open.incidentId),
+            ConditionExpression: 'nerisIncidentId = :nerisId',
+            ExpressionAttributeValues: { ':nerisId': open.nerisIncidentId },
+          }),
+        )
+        .catch((error: unknown) => {
+          if (error instanceof Error && error.name === 'ConditionalCheckFailedException') return;
+          throw error;
+        });
+    }
     return 'unchanged';
   }
   const applied = await applyStatusChange(
@@ -303,32 +318,43 @@ async function reschedule(
   if (age > POLL_MAX_AGE_SECONDS || failures >= POLL_MAX_FAILURES) {
     // Aged out: stop spending calls; the nightly reconciliation still compares it, and the
     // event records why it stopped being watched.
-    await client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          { Delete: { TableName: tableName, Key: nerisOpenKey(deptId, row.incidentId) } },
-          {
-            Put: {
-              TableName: tableName,
-              Item: buildOutboxRecord(
-                deptId,
-                'incident-service',
-                'neris.incident.poll_expired',
-                correlationId,
-                {
-                  incidentId: row.incidentId,
-                  deptId,
-                  nerisIncidentId: row.nerisIncidentId,
-                  reason: failures >= POLL_MAX_FAILURES ? 'POLL_FAILURES' : 'MAX_AGE',
-                  failures,
-                  ageSeconds: age,
-                },
-              ),
+    try {
+      await client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Delete: {
+                TableName: tableName,
+                Key: nerisOpenKey(deptId, row.incidentId),
+                ConditionExpression: 'attribute_exists(pk)',
+              },
             },
-          },
-        ],
-      }),
-    );
+            {
+              Put: {
+                TableName: tableName,
+                Item: buildOutboxRecord(
+                  deptId,
+                  'incident-service',
+                  'neris.incident.poll_expired',
+                  correlationId,
+                  {
+                    incidentId: row.incidentId,
+                    deptId,
+                    nerisIncidentId: row.nerisIncidentId,
+                    reason: failures >= POLL_MAX_FAILURES ? 'POLL_FAILURES' : 'MAX_AGE',
+                    failures,
+                    ageSeconds: age,
+                  },
+                ),
+              },
+            },
+          ],
+        }),
+      );
+    } catch (error) {
+      if (isConditionFailureAt(error, 0)) return 'kept';
+      throw error;
+    }
     return 'expired';
   }
   const base = pollInterval(age);
@@ -384,6 +410,7 @@ async function pollDepartment(
   let budget = MAX_RECORDS_PER_RUN;
   let api: NerisApi | undefined;
   let reachedEnd = false;
+  let budgetExhaustedMidPage = false;
 
   for (let page = 0; page < MAX_PAGES_PER_RUN && budget > 0; page++) {
     const result = await client.send(
@@ -396,7 +423,10 @@ async function pollDepartment(
       }),
     );
     for (const item of (result.Items ?? []) as Record<string, unknown>[]) {
-      if (budget <= 0) break;
+      if (budget <= 0) {
+        budgetExhaustedMidPage = true;
+        break;
+      }
       const row = toWorkRow(item, now());
       if (!row) continue;
       lastSeen = row.incidentId;
@@ -425,7 +455,7 @@ async function pollDepartment(
       }
     }
     startKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
-    if (!startKey) {
+    if (!startKey && !budgetExhaustedMidPage) {
       reachedEnd = true;
       break;
     }

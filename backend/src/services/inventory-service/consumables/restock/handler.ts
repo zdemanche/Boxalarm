@@ -10,7 +10,13 @@ import {
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { getDocClient, readInventoryConfig } from '../../lib/dynamoDb.js';
 import { emitMetric, logEvent } from '../../lib/logger.js';
-import { NotFoundError, ValidationError, toProblemResponse } from '../../lib/problemDetails.js';
+import {
+  NotFoundError,
+  ValidationError,
+  parseJsonBody,
+  requirePathId,
+  toProblemResponse,
+} from '../../lib/problemDetails.js';
 import { restockConsumable, type RestockConsumableInput } from '../consumableRepository.js';
 
 function parseNonNegativeNumber(value: unknown, field: string): number | undefined {
@@ -30,14 +36,11 @@ export function createRestockHandler(docClient?: DynamoDBDocumentClient) {
   ): Promise<APIGatewayProxyResultV2> {
     const correlationId = extractTraceId(event);
     try {
-      const itemId = event.pathParameters?.itemId;
-      if (!itemId) {
-        throw new ValidationError('itemId path parameter is required');
-      }
+      const itemId = requirePathId(event.pathParameters?.itemId, 'itemId');
       const deptId = toVerifiedDeptId(principal);
       const actorId = principal.sub;
 
-      const body = event.body ? (JSON.parse(event.body) as Record<string, unknown>) : {};
+      const body = parseJsonBody(event.body);
       const stockLevel = parseNonNegativeNumber(body.stockLevel, 'stockLevel');
       const reorderThreshold = parseNonNegativeNumber(body.reorderThreshold, 'reorderThreshold');
       if (stockLevel === undefined && reorderThreshold === undefined) {

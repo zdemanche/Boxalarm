@@ -131,6 +131,45 @@ describe('expiring.ts handler (entrypoint, AC3)', () => {
     expect(body[0]?.certId).toBe('CERT-1');
   });
 
+  it('leaves a REVOKED cert inside the lead window out of the list', async () => {
+    const { createAuthzClient } = await import('@boxalarm/authz');
+    createAuthzClient(process.env, decidingClient('ALLOW'));
+    const { createDynamoClient } = await import('../dynamoClient.js');
+    const expiryDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const send = vi.fn((command: unknown) => {
+      if (command instanceof GetCommand) {
+        return { Item: { value: { certExpiryLeadDays: 30 } } };
+      }
+      if (command instanceof QueryCommand) {
+        const gsi2pk = command.input.ExpressionAttributeValues?.[':gsi2pk'] as string;
+        return {
+          Items: gsi2pk.includes(expiryDate.slice(0, 7))
+            ? [
+                {
+                  certId: 'CERT-1',
+                  memberId: 'MBR-1',
+                  certType: 'FF1',
+                  issueDate: '2024-01-01',
+                  expiryDate,
+                  issuingAuthority: 'CT DESPP',
+                  attachmentS3Key: null,
+                  status: 'REVOKED',
+                },
+              ]
+            : [],
+        };
+      }
+      throw new Error('unexpected command');
+    });
+    createDynamoClient({ send } as unknown as DynamoDBDocumentClient);
+    const { handler } = await import('./expiring.js');
+
+    const result = await handler(buildEvent());
+
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(JSON.parse((result as { body: string }).body)).toEqual([]);
+  });
+
   it('returns 200 with an empty array when no certs are due', async () => {
     const { createAuthzClient } = await import('@boxalarm/authz');
     createAuthzClient(process.env, decidingClient('ALLOW'));

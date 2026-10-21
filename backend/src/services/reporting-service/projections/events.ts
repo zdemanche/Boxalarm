@@ -9,6 +9,7 @@ export interface DomainEvent {
   readonly eventId: string;
   readonly eventType: string;
   readonly deptId: string;
+  readonly eventTimeMs?: number;
   readonly payload: Readonly<Record<string, unknown>>;
 }
 
@@ -16,6 +17,7 @@ export type ProjectionWrite =
   | {
       readonly kind: 'update';
       readonly sk: string;
+      readonly clock?: 'statusAt' | 'availabilityAt';
       readonly values: Readonly<Record<string, unknown>>;
     }
   | { readonly kind: 'delete'; readonly sk: string };
@@ -23,15 +25,20 @@ export type ProjectionWrite =
 const PROJECTION_EVENT_TYPES = new Set([
   'personnel.attendance.recorded',
   'personnel.member.updated',
-  'personnel.member.created',
   'personnel.availability.changed',
   'neris.incident.submitted',
   'neris.submission.failed',
+  'neris.incident.approved',
+  'neris.incident.rejected',
+  'neris.incident.failed',
+  'neris.incident.deleted',
+  'neris.incident.missing',
+  'neris.incident.transmitted',
   'training.expiry.due',
   'cert.expiry.due',
-  'apparatus.out_of_service',
-  'apparatus.defect.reported',
+  'apparatus.serviceStatus.changed',
   'scheduling.coverage_gap.detected',
+  'scheduling.coverage_gap.resolved',
 ]);
 
 export function isProjectionEvent(eventType: string): boolean {
@@ -63,6 +70,14 @@ function epochMs(value: unknown, fallback: number): number {
     return fallback;
   }
   return value < 1_000_000_000_000 ? Math.round(value * 1000) : Math.round(value);
+}
+
+function eventTimeMs(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? epochMs(value, 0) : undefined;
+  }
+  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 export function parseDomainEvent(body: string): DomainEvent {
@@ -98,7 +113,14 @@ export function parseDomainEvent(body: string): DomainEvent {
   if (!eventId || !eventType || !deptId) {
     throw new MalformedEventError('event is missing eventId, eventType, or deptId');
   }
-  return { eventId, eventType, deptId, payload };
+  const parsedEventTimeMs = eventTimeMs(source.eventTime ?? root.time);
+  return {
+    eventId,
+    eventType,
+    deptId,
+    payload,
+    ...(parsedEventTimeMs === undefined ? {} : { eventTimeMs: parsedEventTimeMs }),
+  };
 }
 
 function memberStatusWrite(payload: Readonly<Record<string, unknown>>): ProjectionWrite {
@@ -110,33 +132,53 @@ function memberStatusWrite(payload: Readonly<Record<string, unknown>>): Projecti
   return {
     kind: 'update',
     sk: `MEMBER#${memberId}`,
+    clock: 'statusAt',
     values: { entityType: 'REPORTING_MEMBER', memberId, status },
   };
 }
 
 function apparatusUnitId(payload: Readonly<Record<string, unknown>>): string {
-  return stringField(payload, 'unitId') ?? requireString(payload, 'apparatusId');
+  return (
+    stringField(payload, 'unitId') ??
+    stringField(payload, 'unitLabel') ??
+    requireString(payload, 'apparatusId')
+  );
+}
+
+const NERIS_TERMINAL_FAILURES = new Set(['REJECTED', 'FAILED', 'DELETED']);
+
+function nerisFailedWrite(
+  payload: Readonly<Record<string, unknown>>,
+  failureReason: string,
+): ProjectionWrite {
+  const incidentId = requireString(payload, 'incidentId');
+  return {
+    kind: 'update',
+    sk: `NERIS#${incidentId}`,
+    values: { entityType: 'REPORTING_NERIS', incidentId, status: 'FAILED', failureReason },
+  };
+}
+
+const CERT_ROW_GRACE_SECONDS = 86_400;
+
+function certTtl(expiryDate: string): { ttl?: number } {
+  const expiryMs = Date.parse(`${expiryDate}T00:00:00.000Z`);
+  return Number.isNaN(expiryMs)
+    ? {}
+    : { ttl: Math.floor(expiryMs / 1000) + CERT_ROW_GRACE_SECONDS };
+}
+
+function shiftRowTtl(endAt: number): { ttl: number } {
+  return { ttl: Math.floor(epochMs(endAt, 0) / 1000) + CERT_ROW_GRACE_SECONDS };
 }
 
 export function projectionWrites(event: DomainEvent, nowMs: number): readonly ProjectionWrite[] {
   const payload = event.payload;
   switch (event.eventType) {
     case 'personnel.attendance.recorded': {
-      const memberId = requireString(payload, 'memberId');
-      const activityId = requireString(payload, 'activityId');
-      return [
-        {
-          kind: 'update',
-          sk: `ATTENDANCE#${activityId}#${memberId}`,
-          values: {
-            entityType: 'REPORTING_ATTENDANCE',
-            memberId,
-            activityId,
-            activityType: stringField(payload, 'activityType') ?? 'UNKNOWN',
-            losapPoints: typeof payload.losapPoints === 'number' ? payload.losapPoints : 0,
-          },
-        },
-      ];
+      requireString(payload, 'memberId');
+      requireString(payload, 'activityId');
+      return [];
     }
     case 'personnel.member.updated':
       // member.updated also carries profile, push-token and role changes, which hold no
@@ -146,8 +188,6 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
       return payload.status === undefined && payload.newStatus === undefined
         ? []
         : [memberStatusWrite(payload)];
-    case 'personnel.member.created':
-      return [memberStatusWrite(payload)];
     case 'personnel.availability.changed': {
       const memberId = requireString(payload, 'memberId');
       const state = stringField(payload, 'availabilityState') ?? 'MARKED_OFF';
@@ -155,6 +195,7 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         {
           kind: 'update',
           sk: `MEMBER#${memberId}`,
+          clock: 'availabilityAt',
           values: {
             entityType: 'REPORTING_MEMBER',
             memberId,
@@ -195,6 +236,24 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         },
       ];
     }
+    case 'neris.incident.approved':
+      return [{ kind: 'delete', sk: `NERIS#${requireString(payload, 'incidentId')}` }];
+    case 'neris.incident.transmitted': {
+      const nerisStatus = stringField(payload, 'nerisStatus') ?? 'SUBMITTED';
+      if (nerisStatus === 'APPROVED') {
+        return [{ kind: 'delete', sk: `NERIS#${requireString(payload, 'incidentId')}` }];
+      }
+      return NERIS_TERMINAL_FAILURES.has(nerisStatus)
+        ? [nerisFailedWrite(payload, nerisStatus)]
+        : [];
+    }
+    case 'neris.incident.rejected':
+    case 'neris.incident.failed':
+      return [nerisFailedWrite(payload, stringField(payload, 'nerisStatus') ?? 'unknown')];
+    case 'neris.incident.deleted':
+      return [nerisFailedWrite(payload, 'DELETED')];
+    case 'neris.incident.missing':
+      return [nerisFailedWrite(payload, 'MISSING')];
     case 'training.expiry.due':
     case 'cert.expiry.due': {
       const memberId = requireString(payload, 'memberId');
@@ -204,11 +263,18 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         {
           kind: 'update',
           sk: `CERT#${certId}`,
-          values: { entityType: 'REPORTING_CERT', memberId, certId, expiryDate },
+          values: {
+            entityType: 'REPORTING_CERT',
+            memberId,
+            certId,
+            expiryDate,
+            ...(typeof payload.leadDays === 'number' ? { leadDays: payload.leadDays } : {}),
+            ...certTtl(expiryDate),
+          },
         },
       ];
     }
-    case 'apparatus.out_of_service': {
+    case 'apparatus.serviceStatus.changed': {
       const unitId = apparatusUnitId(payload);
       const status = stringField(payload, 'status') ?? 'OUT_OF_SERVICE';
       if (status === 'IN_SERVICE') {
@@ -227,25 +293,6 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
         },
       ];
     }
-    case 'apparatus.defect.reported': {
-      const outOfService = payload.outOfService === true || payload.severity === 'OUT_OF_SERVICE';
-      if (!outOfService) {
-        return [];
-      }
-      const unitId = apparatusUnitId(payload);
-      return [
-        {
-          kind: 'update',
-          sk: `OOS#${unitId}`,
-          values: {
-            entityType: 'REPORTING_OOS',
-            unitId,
-            reason: stringField(payload, 'reason') ?? stringField(payload, 'summary') ?? 'defect',
-            startedAt: epochMs(payload.reportedAt, nowMs),
-          },
-        },
-      ];
-    }
     case 'scheduling.coverage_gap.detected': {
       const shiftId = requireString(payload, 'shiftId');
       return [
@@ -257,10 +304,15 @@ export function projectionWrites(event: DomainEvent, nowMs: number): readonly Pr
             shiftId,
             gapReason: stringField(payload, 'gapReason') ?? 'unspecified',
             requiredQuals: payload.requiredQuals ?? [],
+            ...(typeof payload.endAt === 'number'
+              ? { endAt: payload.endAt, ...shiftRowTtl(payload.endAt) }
+              : {}),
           },
         },
       ];
     }
+    case 'scheduling.coverage_gap.resolved':
+      return [{ kind: 'delete', sk: `COVERAGE#${requireString(payload, 'shiftId')}` }];
     default:
       throw new MalformedEventError(`unsupported event type ${event.eventType}`);
   }

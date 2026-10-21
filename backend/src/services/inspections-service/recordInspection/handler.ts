@@ -108,9 +108,10 @@ async function schedule(
       new GetCommand({
         TableName: tableName,
         Key: { pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId), sk: 'METADATA' },
+        ConsistentRead: true,
       }),
     );
-    if (!occupancy.Item) {
+    if (!occupancy.Item || occupancy.Item.archivedAt !== undefined) {
       emitInspectionMetric('ScheduleFailed');
       return notFoundProblem(traceId, `No occupancy found for occupancyId "${occupancyId}"`);
     }

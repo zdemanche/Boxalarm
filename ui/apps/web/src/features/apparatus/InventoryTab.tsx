@@ -85,7 +85,7 @@ export function InventoryTab({ apparatusId }: { apparatusId: string }) {
       render: (i) => (
         <span className={styles.quantityCell}>
           <TextInput
-            key={`${i.itemId}-${quantityResetNonce}`}
+            key={`${i.itemId}-${i.quantity}-${quantityResetNonce}`}
             label={`Quantity for ${i.itemName}`}
             type="number"
             min="0"
@@ -93,7 +93,11 @@ export function InventoryTab({ apparatusId }: { apparatusId: string }) {
             error={quantityError?.itemId === i.itemId ? quantityError.message : undefined}
             onBlur={(e) => {
               const quantity = Number(e.target.value);
-              if (Number.isInteger(quantity) && quantity !== i.quantity) {
+              if (e.target.value.trim() === '' || !Number.isInteger(quantity) || quantity < 0) {
+                e.target.value = String(i.quantity);
+                return;
+              }
+              if (quantity !== i.quantity) {
                 quantityMutation.mutate({ itemId: i.itemId, quantity });
               }
             }}

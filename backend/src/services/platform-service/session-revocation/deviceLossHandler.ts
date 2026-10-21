@@ -8,10 +8,10 @@ import {
   isProtectedTarget,
   mayActOnProtectedTarget,
   readRevocationConfig,
-  resolveMemberDeptId,
+  resolveMemberIdentity,
   revokeMemberSession,
 } from './cognitoRevocationClient.js';
-import type { RevocationConfig } from './cognitoRevocationClient.js';
+import type { ResolvedMember, RevocationConfig } from './cognitoRevocationClient.js';
 import {
   getAccessStoreClient,
   invalidateMemberPush,
@@ -121,9 +121,9 @@ async function revokeLostDevice(
   const { userPoolId } = config;
   const client = getClient();
 
-  let targetDeptId: string | undefined;
+  let target: ResolvedMember;
   try {
-    targetDeptId = await resolveMemberDeptId(client, { userPoolId, username: memberId });
+    target = await resolveMemberIdentity(client, { userPoolId, username: memberId });
   } catch (error) {
     if (error instanceof UserNotFoundException) {
       return problemDetails(
@@ -151,7 +151,7 @@ async function revokeLostDevice(
 
   // Fail closed: a caller may only revoke a member verified as belonging to their own
   // department (F9.6) — including when the target's department cannot be resolved at all.
-  if (targetDeptId !== authorizerContext.deptId) {
+  if (target.deptId !== authorizerContext.deptId) {
     console.error(
       JSON.stringify({
         event: 'deviceLossRevocation.denied',
@@ -161,6 +161,9 @@ async function revokeLostDevice(
       }),
     );
     return problemDetails(403, 'Forbidden', 'memberId is not in the caller’s department.', traceId);
+  }
+  if (target.sub !== memberId) {
+    return problemDetails(404, 'Not Found', `No member found for memberId "${memberId}".`, traceId);
   }
 
   // Security-web MINOR 6: a chief's or admin's sessions are ended only by an admin. Fails
@@ -337,6 +340,6 @@ export const handler = withAuthorization(revokeLostDevice, {
   actionType: 'Boxalarm::Action',
   actionId: 'RevokeSession',
   resourceType: 'Boxalarm::Member',
-  resourceId: (event) => readMemberId(event.body) ?? '',
+  resourceId: (event) => readMemberId(event.body) ?? 'unknown',
   alarmOnInvocation: 'RevokeSessionInvoked',
 });

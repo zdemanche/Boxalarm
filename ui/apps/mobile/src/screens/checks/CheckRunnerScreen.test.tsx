@@ -462,14 +462,16 @@ test('a photo on a failed item goes with its defect; one on a passing item goes 
 });
 
 test('a failed item that already has an open defect from an earlier check is not filed again', async () => {
-  const openSpy = jest.fn().mockResolvedValue([
-    {
-      defectId: 'd-1',
-      description: 'Failed on the APP-ENGINE-2 truck check: Tires and wheels. Cut sidewall',
-      severity: 'MAJOR',
-      reportedAt: 1,
-    },
-  ]);
+  const openSpy = jest.fn().mockResolvedValue({
+    defects: [
+      {
+        defectId: 'd-1',
+        description: 'Failed on the APP-ENGINE-2 truck check: Tires and wheels. Cut sidewall',
+        severity: 'MAJOR',
+        reportedAt: 1,
+      },
+    ],
+  });
   (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects = openSpy;
   const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
   const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
@@ -496,11 +498,11 @@ test('a failed item that already has an open defect from an earlier check is not
   defectSpy.mockRestore();
 });
 
-function withOpenDefects(first: unknown[], later?: unknown[]) {
+function withOpenDefects(first: unknown[], later?: unknown[], unitStatus?: string) {
   const spy = jest
     .fn()
-    .mockResolvedValueOnce(first)
-    .mockResolvedValue(later ?? first);
+    .mockResolvedValueOnce({ defects: first, unitStatus })
+    .mockResolvedValue({ defects: later ?? first, unitStatus });
   (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects = spy;
   return () => {
     delete (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects;
@@ -633,6 +635,65 @@ test('a known defect is matched on its item code, not its description', async ()
   // TIRES is already open (skipped); FLUIDS is new and filed with its item code.
   expect(defectSpy).toHaveBeenCalledTimes(1);
   expect(defectSpy.mock.calls[0]?.[0]).toMatchObject({ itemCode: 'FLUIDS' });
+  restore();
+  defectSpy.mockRestore();
+});
+
+const KNOWN_TIRES_OOS = {
+  defectId: 'd-10',
+  description: 'Failed on the APP-ENGINE-2 truck check: Tires and wheels.',
+  severity: 'OUT_OF_SERVICE',
+  reportedAt: 1,
+};
+
+test('an open Out of service defect on a unit returned to service is filed again', async () => {
+  const restore = withOpenDefects([KNOWN_TIRES_OOS], undefined, 'IN_SERVICE');
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+  await findByText('Known defect — already reported as Out of service now');
+
+  await failTiresAndPassRest(findAllByRole, findByText);
+
+  expect(defectSpy).toHaveBeenCalledTimes(1);
+  expect(defectSpy.mock.calls[0]![0]).toMatchObject({
+    severity: 'OUT_OF_SERVICE',
+    itemCode: expect.any(String),
+  });
+  restore();
+  defectSpy.mockRestore();
+});
+
+test('failing the item before the open defects load still re-files at Out of service', async () => {
+  let release: (value: unknown) => void = () => undefined;
+  const spy = jest
+    .fn()
+    .mockReturnValueOnce(new Promise((resolve) => (release = resolve)))
+    .mockResolvedValue({ defects: [KNOWN_TIRES_OOS], unitStatus: 'IN_SERVICE' });
+  (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects = spy;
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+
+  await failTiresAndPassRest(findAllByRole, findByText, async () => {
+    await act(async () => {
+      release({ defects: [KNOWN_TIRES_OOS], unitStatus: 'IN_SERVICE' });
+    });
+  });
+
+  expect(defectSpy).toHaveBeenCalledTimes(1);
+  expect(defectSpy.mock.calls[0]![0]).toMatchObject({ severity: 'OUT_OF_SERVICE' });
+  delete (mockChecksRepository as { getOpenDefects?: unknown }).getOpenDefects;
+  defectSpy.mockRestore();
+});
+
+test('an open Out of service defect on a unit still out of service is not filed again', async () => {
+  const restore = withOpenDefects([KNOWN_TIRES_OOS], undefined, 'OUT_OF_SERVICE');
+  const defectSpy = jest.spyOn(mockChecksRepository, 'submitDefect');
+  const { findByText, findAllByRole } = await render(<CheckRunnerScreen />);
+  await findByText('Known defect — already reported as Out of service now');
+
+  await failTiresAndPassRest(findAllByRole, findByText);
+
+  expect(defectSpy).not.toHaveBeenCalled();
   restore();
   defectSpy.mockRestore();
 });

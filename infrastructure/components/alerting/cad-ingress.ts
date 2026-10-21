@@ -91,7 +91,7 @@ export function cadWebhookSecretPrefix(env: string): string {
 
 /**
  * The alerting-table grants both ingress Lambdas need, each scoped by partition:
- * read the source copy, claim/release replay markers, and write the dispatch transaction
+ * read the source copy, read (GetItem) and write (conditional PutItem in the dispatch transaction) replay markers, and write the dispatch transaction
  * (idempotency lock, DISPATCH_ALERT, bridge outbox row) exactly as createManualDispatch does.
  */
 export function cadIngressTableStatements(tableArn: string): IamPolicyStatement[] {
@@ -106,7 +106,7 @@ export function cadIngressTableStatements(tableArn: string): IamPolicyStatement[
     {
       Sid: "CadReplayMarkers",
       Effect: "Allow",
-      Action: ["dynamodb:PutItem", "dynamodb:DeleteItem"],
+      Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
       Resource: tableArn,
       Condition: {
         "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CAD_REPLAY#*"] },
@@ -561,6 +561,7 @@ export class CadIngress extends pulumi.ComponentResource {
         reservedConcurrentExecutions: WEBHOOK_RESERVED_CONCURRENCY,
         // A source read, a secret read (cached), a replay put and one transaction.
         timeout: 10,
+        memorySize: 512,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
       },
       { parent: this },

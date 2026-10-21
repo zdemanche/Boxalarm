@@ -11,7 +11,7 @@ import { AccessibilityInfo, Text, TextInput, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
 import { Button, Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useScheduleRepository } from '../../features/schedule/apiScheduleRepository';
-import type { DutyShift } from '../../features/schedule/types';
+import { SHIFT_PROBLEM_MESSAGE, type DutyShift } from '../../features/schedule/types';
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalConnectivity } from '../../sync/ConnectivityContext';
 import { NoCachedDataError } from '../../sync/readThrough';
@@ -21,7 +21,11 @@ import { formatShiftWindow } from './ShiftBoardScreen';
 // else (offline, 409, 500) gets a generic retry prompt, shown on screen and announced for a
 // screen-reader user who isn't focused on this row when the result lands.
 function describeError(e: unknown, forbiddenMessage: string, fallbackMessage: string): string {
-  return e instanceof ApiError && e.problem.status === 403 ? forbiddenMessage : fallbackMessage;
+  if (!(e instanceof ApiError)) return fallbackMessage;
+  return (
+    SHIFT_PROBLEM_MESSAGE[e.problem.type] ??
+    (e.problem.status === 403 ? forbiddenMessage : fallbackMessage)
+  );
 }
 
 // F2.9: a claim made offline (or, here, mid-flight) is queued as PENDING in the UI, never shown
@@ -74,7 +78,10 @@ export function ShiftDetailScreen() {
           // client-side: a position this member already holds from a previous session must
           // read "Claimed by you" on load, not the generic "Claimed" of claimed_by_other, or
           // give-back/propose-swap would be offered with no explanation of why.
-          if (position.claimedByMe) {
+          if (
+            position.claimedByMe ||
+            (position.claimedByMemberId && position.claimedByMemberId === auth?.memberId)
+          ) {
             initial[position.positionCode] = 'claimed_by_you';
           } else if (position.claimedByMemberId) {
             initial[position.positionCode] = 'claimed_by_other';
@@ -97,7 +104,7 @@ export function ShiftDetailScreen() {
     return () => {
       cancelled = true;
     };
-  }, [shiftId, repository]);
+  }, [shiftId, repository, auth?.memberId]);
 
   const STATE_LABEL: Record<ClaimUiState, string> = {
     open: 'Open',
@@ -250,10 +257,7 @@ export function ShiftDetailScreen() {
         <View>
           {shift.positions.map((position, index) => {
             const state = claimState[position.positionCode] ?? 'open';
-            const isMine =
-              state === 'claimed_by_you' ||
-              position.claimedByMe === true ||
-              position.claimedByMemberId === auth?.memberId;
+            const isMine = state === 'claimed_by_you';
             return (
               <View
                 key={position.positionCode}

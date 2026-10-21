@@ -123,7 +123,8 @@ export function SelfTestScreen() {
           ? 'Test page sent on every channel. Did your phone ring?'
           : result.overallResult === 'RUNNING'
             ? 'No final result from the server. Did your phone ring?'
-            : 'Test failed on at least one channel. Check the results below.',
+            : (result.eligibilityReason ??
+              'Test failed on at least one channel. Check the results below.'),
       );
     },
     [repository],
@@ -160,6 +161,7 @@ export function SelfTestScreen() {
   };
 
   const failing = (readiness.items ?? []).filter((item) => item.status !== 'ok');
+  const textReachedYou = run?.channelResults.SMS?.ok === true && !run.eligibilityReason;
   const finished = timedOut || (run !== null && run.overallResult !== 'RUNNING');
 
   const bodyText = { color: theme.fg, fontSize: typeScale.body.size };
@@ -222,6 +224,18 @@ export function SelfTestScreen() {
 
         {run ? (
           <View accessibilityLiveRegion="polite" style={{ marginTop: spacing.sm }}>
+            {run.overallResult === 'FAIL' && run.eligibilityReason ? (
+              <Text
+                accessibilityRole="alert"
+                style={{
+                  color: theme.status.danger,
+                  fontSize: typeScale.body.size,
+                  fontWeight: '700',
+                }}
+              >
+                {run.eligibilityReason}
+              </Text>
+            ) : null}
             <Rows>
               {run.channelsTested.map((channel) => {
                 const result = run.channelResults[channel];
@@ -299,8 +313,10 @@ export function SelfTestScreen() {
                     : 'Turn the alarm volume up - pages ring on the alarm volume, not the ringer - and check Bedtime / Do Not Disturb lets Boxalarm through.'}
                 </Text>
                 <Text style={bodyText}>
-                  • Run the test again. If it still doesn't ring, tell your officer - text and voice
-                  pages still reach you, and radio tone-out is unchanged.
+                  • Run the test again. If it still doesn&apos;t ring, tell your officer
+                  {textReachedYou
+                    ? ' - the test text reached your number, and radio tone-out is unchanged.'
+                    : ' now - text pages are not confirmed for you, so add or fix your phone number. Radio tone-out is unchanged.'}
                 </Text>
               </View>
             ) : null}

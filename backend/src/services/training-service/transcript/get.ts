@@ -76,7 +76,7 @@ async function getTranscriptInner(
         ...record,
         status: deriveCertificationStatus(record.status, record.expiryDate, now),
       })),
-      attendance,
+      attendance.filter((record) => record.hours > 0),
     );
 
     emitTrainingMetric('TranscriptViewed');

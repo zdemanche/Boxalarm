@@ -11,8 +11,6 @@ import { emitEmf } from '@boxalarm/metrics';
 import { buildAuditLogEntryItem } from '../audit/auditEntry.js';
 import { getRetentionConfig } from './configRepository.js';
 
-export const SECONDS_PER_YEAR = 365 * 24 * 60 * 60;
-
 export const HARD_DELETE_ENTITY_TYPES = new Set(['OUT_OF_SERVICE_RECORD']);
 
 export const CRYPTO_SHRED_ENTITY_TYPES = new Set([
@@ -38,6 +36,8 @@ const LIFE_SAFETY_SET = new Set<string>(LIFE_SAFETY_ENTITY_TYPES);
 /** Audit payload arrays are capped so a very large batch keeps AUDIT_LOG_ENTRY under
  * DynamoDB's 400KB item limit; a truncated list is flagged alongside it. */
 const MAX_AUDIT_LOCATORS = 200;
+
+const LOG_LOCATOR_CHUNK = 100;
 
 /** Locator keys only — entityType / age / kmsKeyId are read from the stored item. */
 export interface DisposalCandidate {
@@ -70,13 +70,21 @@ function readTableName(): string {
   return tableName;
 }
 
+export function retentionCutoffEpochSeconds(
+  nowEpochSeconds: number,
+  retentionYears: number,
+): number {
+  const cutoff = new Date(nowEpochSeconds * 1000);
+  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - retentionYears);
+  return Math.floor(cutoff.getTime() / 1000);
+}
+
 export function isPastRetention(
   ageEpochSeconds: number,
   retentionYears: number,
   nowEpochSeconds: number,
 ): boolean {
-  const cutoff = nowEpochSeconds - retentionYears * SECONDS_PER_YEAR;
-  return ageEpochSeconds < cutoff;
+  return ageEpochSeconds < retentionCutoffEpochSeconds(nowEpochSeconds, retentionYears);
 }
 
 /** True when pk is exactly the dept root or a child under `DEPT#{deptId}#…`. */
@@ -134,10 +142,11 @@ function capLocators(locators: readonly string[]): {
 async function writeDisposalAudit(
   docClient: DynamoDBDocumentClient,
   input: RunDisposalInput,
-  result: Omit<RunDisposalResult, 'refused'> & { refused: readonly string[] },
+  result: RunDisposalResult,
   disposedLocators: readonly string[],
   scheduledKmsKeyIds: readonly string[],
 ): Promise<void> {
+  const refused = capLocators(result.refused);
   const disposed = capLocators(disposedLocators);
   const scheduledKeys = capLocators(scheduledKmsKeyIds);
   const item = buildAuditLogEntryItem({
@@ -150,7 +159,8 @@ async function writeDisposalAudit(
       retentionYearsUsed: result.retentionYearsUsed,
       hardDeleted: result.hardDeleted,
       cryptoShredded: result.cryptoShredded,
-      refused: result.refused,
+      refused: refused.list,
+      refusedTruncated: refused.truncated,
       // Locators of what was actually destroyed — aggregate counts alone can't answer
       // "what did the chief destroy?" after a run. Capped (see MAX_AUDIT_LOCATORS) to
       // stay well under the 400KB item limit; a truncated list is flagged, not silently
@@ -171,10 +181,41 @@ async function writeDisposalAudit(
   );
 }
 
+async function writeDisposalStartedAudit(
+  docClient: DynamoDBDocumentClient,
+  input: RunDisposalInput,
+  retentionYearsUsed: number,
+): Promise<void> {
+  const item = buildAuditLogEntryItem({
+    deptId: input.deptId,
+    actorId: input.actorId,
+    mutatedEntityType: 'RETENTION_DISPOSAL_STARTED',
+    mutatedEntityId: input.traceId,
+    // DELETE records the intent to delete, written before anything is deleted.
+    action: 'DELETE',
+    after: {
+      retentionYearsUsed,
+      candidateCount: input.candidates.length,
+      candidates: input.candidates.map(({ pk, sk }) => `${pk}#${sk}`),
+    },
+    traceId: input.traceId,
+  });
+  await docClient.send(
+    new PutCommand({
+      TableName: readTableName(),
+      Item: item,
+      ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
+    }),
+  );
+}
+
 export async function runDisposal(input: RunDisposalInput): Promise<RunDisposalResult> {
+  emitDisposalInvoked();
   const tableName = readTableName();
   const config = await getRetentionConfig(input.docClient, input.deptId);
   const retentionYearsUsed = config.retentionYears;
+
+  await writeDisposalStartedAudit(input.docClient, input, retentionYearsUsed);
 
   let hardDeleted = 0;
   let cryptoShredded = 0;
@@ -182,124 +223,148 @@ export async function runDisposal(input: RunDisposalInput): Promise<RunDisposalR
   const disposedLocators: string[] = [];
   const scheduledKmsKeyIds: string[] = [];
 
-  try {
-    for (const candidate of input.candidates) {
-      try {
-        if (!isPkInDeptScope(candidate.pk, input.deptId)) {
-          refused.push(`CROSS_DEPT:${candidate.pk}`);
-          continue;
-        }
+  for (const candidate of input.candidates) {
+    try {
+      if (!isPkInDeptScope(candidate.pk, input.deptId)) {
+        refused.push(`CROSS_DEPT:${candidate.pk}`);
+        continue;
+      }
 
-        const got = await input.docClient.send(
-          new GetCommand({
+      const got = await input.docClient.send(
+        new GetCommand({
+          TableName: tableName,
+          // Computed keys: locator from caller; trusted fields come from Item below.
+          Key: { ['pk']: candidate.pk, ['sk']: candidate.sk },
+          // This read authorizes an irreversible delete/shred a few lines below — an
+          // eventually-consistent read could validate against a stale item.
+          ConsistentRead: true,
+        }),
+      );
+      const item = got.Item as Record<string, unknown> | undefined;
+      if (!item) {
+        refused.push(`MISSING:${candidate.pk}#${candidate.sk}`);
+        continue;
+      }
+
+      const storedPk = item.pk;
+      if (typeof storedPk !== 'string' || !isPkInDeptScope(storedPk, input.deptId)) {
+        refused.push(`CROSS_DEPT:${typeof storedPk === 'string' ? storedPk : candidate.pk}`);
+        continue;
+      }
+
+      const entityType = item.entityType;
+      if (typeof entityType !== 'string') {
+        refused.push(`INVALID_ENTITY:${candidate.pk}#${candidate.sk}`);
+        continue;
+      }
+
+      if (LIFE_SAFETY_SET.has(entityType)) {
+        refused.push(entityType);
+        continue;
+      }
+
+      const isHardDelete = HARD_DELETE_ENTITY_TYPES.has(entityType);
+      const isCryptoShred = CRYPTO_SHRED_ENTITY_TYPES.has(entityType);
+      if (!isHardDelete && !isCryptoShred) {
+        // Prove every candidate's fate explicitly: "kept because unknown type" must be
+        // distinguishable from "processed", not a silent fallthrough.
+        refused.push(`UNSUPPORTED_ENTITY:${entityType}`);
+        continue;
+      }
+
+      const ageEpochSeconds = deriveAgeEpochSeconds(entityType, item);
+      if (
+        ageEpochSeconds === undefined ||
+        !isPastRetention(ageEpochSeconds, retentionYearsUsed, input.nowEpochSeconds)
+      ) {
+        continue;
+      }
+
+      if (isHardDelete) {
+        await input.docClient.send(
+          new DeleteCommand({
             TableName: tableName,
-            // Computed keys: locator from caller; trusted fields come from Item below.
+            // Computed keys dodge the pk-scoping sweep (RHS is a stored key, not a new write).
             Key: { ['pk']: candidate.pk, ['sk']: candidate.sk },
-            // This read authorizes an irreversible delete/shred a few lines below — an
-            // eventually-consistent read could validate against a stale item.
-            ConsistentRead: true,
+            // Ties the mutation to the entityType just validated above, closing the
+            // GetItem-to-Delete race: a concurrent write that changes entityType between
+            // the read and this delete fails the condition instead of deleting a
+            // since-changed record. Caught below and refused, not aborted.
+            ConditionExpression: 'entityType = :entityType',
+            ExpressionAttributeValues: { [':entityType']: entityType },
           }),
         );
-        const item = got.Item as Record<string, unknown> | undefined;
-        if (!item) {
-          refused.push(`MISSING:${candidate.pk}#${candidate.sk}`);
-          continue;
-        }
-
-        const storedPk = item.pk;
-        if (typeof storedPk !== 'string' || !isPkInDeptScope(storedPk, input.deptId)) {
-          refused.push(`CROSS_DEPT:${typeof storedPk === 'string' ? storedPk : candidate.pk}`);
-          continue;
-        }
-
-        const entityType = item.entityType;
-        if (typeof entityType !== 'string') {
-          refused.push(`INVALID_ENTITY:${candidate.pk}#${candidate.sk}`);
-          continue;
-        }
-
-        if (LIFE_SAFETY_SET.has(entityType)) {
-          refused.push(entityType);
-          continue;
-        }
-
-        const isHardDelete = HARD_DELETE_ENTITY_TYPES.has(entityType);
-        const isCryptoShred = CRYPTO_SHRED_ENTITY_TYPES.has(entityType);
-        if (!isHardDelete && !isCryptoShred) {
-          // Prove every candidate's fate explicitly: "kept because unknown type" must be
-          // distinguishable from "processed", not a silent fallthrough.
-          refused.push(`UNSUPPORTED_ENTITY:${entityType}`);
-          continue;
-        }
-
-        const ageEpochSeconds = deriveAgeEpochSeconds(entityType, item);
-        if (
-          ageEpochSeconds === undefined ||
-          !isPastRetention(ageEpochSeconds, retentionYearsUsed, input.nowEpochSeconds)
-        ) {
-          continue;
-        }
-
-        if (isHardDelete) {
-          await input.docClient.send(
-            new DeleteCommand({
-              TableName: tableName,
-              // Computed keys dodge the pk-scoping sweep (RHS is a stored key, not a new write).
-              Key: { ['pk']: candidate.pk, ['sk']: candidate.sk },
-              // Ties the mutation to the entityType just validated above, closing the
-              // GetItem-to-Delete race: a concurrent write that changes entityType between
-              // the read and this delete fails the condition instead of deleting a
-              // since-changed record. Caught below and refused, not aborted.
-              ConditionExpression: 'entityType = :entityType',
-              ExpressionAttributeValues: { [':entityType']: entityType },
-            }),
-          );
-          hardDeleted += 1;
-          disposedLocators.push(`${candidate.pk}#${candidate.sk}`);
-          continue;
-        }
-
-        const kmsKeyId = item.kmsKeyId;
-        if (typeof kmsKeyId !== 'string' || kmsKeyId.length === 0) {
-          refused.push(`MISSING_KMS_KEY:${candidate.pk}#${candidate.sk}`);
-          continue;
-        }
-        if (!input.kmsClient) {
-          refused.push(`MISSING_KMS_CLIENT:${candidate.pk}#${candidate.sk}`);
-          continue;
-        }
-        // KMS ScheduleKeyDeletion has no transactional tie to the DynamoDB item validated
-        // above — a concurrent write to the item between the GetItem and this call is a
-        // residual, accepted race (KMS has no ConditionExpression-equivalent guard).
-        await input.kmsClient.send(new ScheduleKeyDeletionCommand({ KeyId: kmsKeyId }));
-        cryptoShredded += 1;
-        scheduledKmsKeyIds.push(kmsKeyId);
-      } catch (error) {
-        // A single bad candidate must never abort the batch: candidates already
-        // hard-deleted/crypto-shredded earlier in this same run would otherwise be
-        // destroyed with no audit entry at all (writeDisposalAudit only runs after the
-        // loop completes). Refuse this one candidate and keep going.
-        const reason =
-          error instanceof ConditionalCheckFailedException
-            ? 'CONCURRENT_MODIFICATION'
-            : error instanceof Error
-              ? error.constructor.name
-              : 'UnknownError';
-        refused.push(`DISPOSAL_FAILED:${candidate.pk}#${candidate.sk}:${reason}`);
+        hardDeleted += 1;
+        disposedLocators.push(`${candidate.pk}#${candidate.sk}`);
+        continue;
       }
+
+      const kmsKeyId = item.kmsKeyId;
+      if (typeof kmsKeyId !== 'string' || kmsKeyId.length === 0) {
+        refused.push(`MISSING_KMS_KEY:${candidate.pk}#${candidate.sk}`);
+        continue;
+      }
+      if (!input.kmsClient) {
+        refused.push(`MISSING_KMS_CLIENT:${candidate.pk}#${candidate.sk}`);
+        continue;
+      }
+      // KMS ScheduleKeyDeletion has no transactional tie to the DynamoDB item validated
+      // above — a concurrent write to the item between the GetItem and this call is a
+      // residual, accepted race (KMS has no ConditionExpression-equivalent guard).
+      await input.kmsClient.send(new ScheduleKeyDeletionCommand({ KeyId: kmsKeyId }));
+      cryptoShredded += 1;
+      scheduledKmsKeyIds.push(kmsKeyId);
+    } catch (error) {
+      // A single bad candidate must never abort the batch: candidates already
+      // hard-deleted/crypto-shredded earlier in this same run would otherwise be
+      // destroyed with no audit entry at all (writeDisposalAudit only runs after the
+      // loop completes). Refuse this one candidate and keep going.
+      const reason =
+        error instanceof ConditionalCheckFailedException
+          ? 'CONCURRENT_MODIFICATION'
+          : error instanceof Error
+            ? error.constructor.name
+            : 'UnknownError';
+      refused.push(`DISPOSAL_FAILED:${candidate.pk}#${candidate.sk}:${reason}`);
     }
-
-    const result: RunDisposalResult = {
-      retentionYearsUsed,
-      hardDeleted,
-      cryptoShredded,
-      refused,
-    };
-
-    await writeDisposalAudit(input.docClient, input, result, disposedLocators, scheduledKmsKeyIds);
-    return result;
-  } finally {
-    // Alarm on every invocation — success or failure — so the chief can detect misuse.
-    emitDisposalInvoked();
   }
+
+  const result: RunDisposalResult = {
+    retentionYearsUsed,
+    hardDeleted,
+    cryptoShredded,
+    refused,
+  };
+
+  try {
+    await writeDisposalAudit(input.docClient, input, result, disposedLocators, scheduledKmsKeyIds);
+  } catch (error) {
+    const failure = {
+      service: 'platform-service',
+      correlationId: input.traceId,
+      event: 'retention.disposal.auditWriteFailed',
+      reason: error instanceof Error ? error.constructor.name : 'UnknownError',
+      message: error instanceof Error ? error.message : String(error),
+    };
+    const chunkCount = Math.max(
+      Math.ceil(disposedLocators.length / LOG_LOCATOR_CHUNK),
+      Math.ceil(scheduledKmsKeyIds.length / LOG_LOCATOR_CHUNK),
+      1,
+    );
+    for (let chunk = 0; chunk < chunkCount; chunk += 1) {
+      const from = chunk * LOG_LOCATOR_CHUNK;
+      const to = from + LOG_LOCATOR_CHUNK;
+      console.error(
+        JSON.stringify({
+          ...failure,
+          chunk: chunk + 1,
+          chunkCount,
+          disposedLocators: disposedLocators.slice(from, to),
+          scheduledKmsKeyIds: scheduledKmsKeyIds.slice(from, to),
+        }),
+      );
+    }
+    throw error;
+  }
+  return result;
 }

@@ -101,6 +101,24 @@ describe('mergeSources', () => {
     expect(mergeSources([changed], v1.sources).sources[0]?.parser?.version).toBe(2);
   });
 
+  it('never reuses a parser version after the template is cleared and a new one added', () => {
+    const v1 = mergeSources([INPUT], []);
+    const v2 = mergeSources(
+      [{ ...INPUT, parserFields: { address: { label: 'LOCATION' } } }],
+      v1.sources,
+    );
+    expect(v2.sources[0]?.parser?.version).toBe(2);
+    const withoutParser = { ...INPUT, parserFields: undefined } as unknown as CadSourceInput;
+    const cleared = mergeSources([withoutParser], v2.sources);
+    expect(cleared.sources[0]?.parser).toBeUndefined();
+    const stillCleared = mergeSources([withoutParser], cleared.sources);
+    const readded = mergeSources(
+      [{ ...INPUT, parserFields: { address: { label: 'PLACE' } } }],
+      stillCleared.sources,
+    );
+    expect(readded.sources[0]?.parser?.version).toBe(3);
+  });
+
   it('exposes the webhook to the alerting plane only when enabled AND keyed', () => {
     const unkeyed = mergeSources([INPUT], []);
     expect(unkeyed.sources[0]?.webhook).toBeUndefined();

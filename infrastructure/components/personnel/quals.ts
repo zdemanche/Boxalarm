@@ -41,14 +41,15 @@ const GET_TABLE_STATEMENT = (tableArn: pulumi.Input<string>) =>
     },
   ]);
 
-// PUT: memberExists + readCertStatus are GetItems; putQual is a 2-Put transaction,
-// which IAM authorizes item-by-item as PutItem.
+// PUT: memberExists, readExistingQual and readCertStatus are GetItems; putQual is one
+// transaction of three Puts (qual, outbox, audit) plus a ConditionCheck on the cert row,
+// which IAM authorizes item-by-item as PutItem and ConditionCheckItem.
 const PUT_TABLE_STATEMENT = (tableArn: pulumi.Input<string>) =>
   pulumi.output(tableArn).apply((arn) => [
     {
       Sid: "QualsTableWrite" as const,
       Effect: "Allow" as const,
-      Action: ["dynamodb:GetItem", "dynamodb:PutItem"],
+      Action: ["dynamodb:ConditionCheckItem", "dynamodb:GetItem", "dynamodb:PutItem"],
       Resource: [arn],
     },
     // #257 sweep: every platform-table-writing role carries the audit-row deny.
@@ -171,6 +172,7 @@ export class Quals extends pulumi.ComponentResource {
         lambdaRole: this.eligibilityChangedConsumer.role,
         alarmTopicArn: args.pageTopicArn,
         maxReceiveCount: 5,
+        reportBatchItemFailures: true,
       },
       { parent: this },
     );

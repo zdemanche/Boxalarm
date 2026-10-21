@@ -52,11 +52,16 @@ describe('getIncident handler', () => {
     vi.doMock('./secondaryRepository.js', () => ({
       queryIncidentSecondaries: vi.fn().mockResolvedValue([]),
     }));
+    vi.doMock('./dispatchProjection.js', () => ({
+      queryIncidentResponseUnits: vi.fn().mockResolvedValue([]),
+      queryRosterCopy: vi.fn().mockResolvedValue([]),
+    }));
   });
 
   afterEach(() => {
     vi.doUnmock('./repository.js');
     vi.doUnmock('./secondaryRepository.js');
+    vi.doUnmock('./dispatchProjection.js');
     vi.restoreAllMocks();
   });
 
@@ -115,6 +120,58 @@ describe('getIncident handler', () => {
       secondaryModules: { secondaryType: string }[];
     };
     expect(body.secondaryModules).toEqual([expect.objectContaining({ secondaryType: 'EXPOSURE' })]);
+  });
+
+  it('returns respondingUnits and respondingMembers so a return visit keeps the Units and Exposure steps populated', async () => {
+    mockRepository(
+      vi.fn().mockResolvedValue({ incidentId: 'NICHOLS-4471-1798000000', status: 'DRAFT' }),
+    );
+    const queryIncidentResponseUnits = vi.fn().mockResolvedValue([{ unitId: 'E1' }]);
+    const queryRosterCopy = vi.fn().mockResolvedValue([{ memberId: 'member-1' }]);
+    vi.doMock('./dispatchProjection.js', () => ({ queryIncidentResponseUnits, queryRosterCopy }));
+    const { handler } = await import('./getIncident.js');
+
+    const result = await handler(
+      buildEvent(MEMBER_AUTH, 'NICHOLS-4471-1798000000'),
+      {} as never,
+      () => undefined,
+    );
+
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body.respondingUnits).toEqual([{ unitId: 'E1' }]);
+    expect(body.respondingMembers).toEqual([{ memberId: 'member-1' }]);
+    expect(queryIncidentResponseUnits).toHaveBeenCalledWith(
+      {},
+      'boxalarm-dev-incident',
+      'NICHOLS',
+      'NICHOLS-4471-1798000000',
+    );
+    expect(queryRosterCopy).toHaveBeenCalledWith(
+      {},
+      'boxalarm-dev-incident',
+      'NICHOLS',
+      'NICHOLS-4471-1798000000',
+    );
+  });
+
+  it('returns 503 rather than empty units when the unit query fails', async () => {
+    mockRepository(
+      vi.fn().mockResolvedValue({ incidentId: 'NICHOLS-4471-1798000000', status: 'DRAFT' }),
+    );
+    vi.doMock('./dispatchProjection.js', () => ({
+      queryIncidentResponseUnits: vi.fn().mockRejectedValue(new Error('query failed')),
+      queryRosterCopy: vi.fn().mockResolvedValue([]),
+    }));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./getIncident.js');
+
+    const result = await handler(
+      buildEvent(MEMBER_AUTH, 'NICHOLS-4471-1798000000'),
+      {} as never,
+      () => undefined,
+    );
+
+    expect(result).toMatchObject({ statusCode: 503 });
   });
 
   it('returns 404 when no incident matches', async () => {

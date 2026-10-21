@@ -19,7 +19,8 @@ import { logError } from './logger.js';
 const METRIC_NAMESPACE = 'Boxalarm/AlertingReceipts';
 const SENT_UNCONFIRMED_AFTER_SECONDS = 300;
 
-export type ReceiptStatus = 'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT';
+export type ReceiptStatus =
+  'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT' | 'NOT_SENT';
 
 export function deriveReceiptStatus(
   record: Pick<DeliveryReceiptRecord, 'sentAt' | 'deliveredAt' | 'openedAt' | 'failureReason'>,
@@ -37,6 +38,9 @@ export function deriveReceiptStatus(
   }
   if (record.failureReason) {
     return 'FAILED';
+  }
+  if (typeof record.sentAt !== 'number') {
+    return 'NOT_SENT';
   }
   if (nowSeconds - record.sentAt > SENT_UNCONFIRMED_AFTER_SECONDS) {
     return 'SENT_UNCONFIRMED';

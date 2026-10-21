@@ -24,8 +24,16 @@ export class PpeAssignmentConflictError extends Error {
   }
 }
 
-export function ppeItemIdForType(itemType: string): string {
-  return itemType.replace(/_/g, '-');
+export function normalizePpeItemType(itemType: string): string {
+  return itemType
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+export function buildPpeItemId(normalizedItemType: string, issueDate: string): string {
+  return `${normalizedItemType.replace(/_/g, '-')}-${issueDate}`;
 }
 
 export function computeNfpaExpiryDate(issueDate: string): string {
@@ -90,7 +98,8 @@ export async function issuePpeAssignment(
   params: IssuePpeAssignmentParams,
 ): Promise<PpeAssignmentRecord> {
   const { tableName } = config;
-  const ppeItemId = ppeItemIdForType(params.itemType);
+  const itemType = normalizePpeItemType(params.itemType);
+  const ppeItemId = buildPpeItemId(itemType, params.issueDate);
   const nfpaExpiryDate = computeNfpaExpiryDate(params.issueDate);
   const yearMonth = nfpaExpiryDate.slice(0, 7);
 
@@ -100,7 +109,7 @@ export async function issuePpeAssignment(
     entityType: 'PPE_ASSIGNMENT',
     ppeItemId,
     memberId: params.memberId,
-    itemType: params.itemType,
+    itemType,
     size: params.size,
     issueDate: params.issueDate,
     nfpaExpiryDate,
@@ -113,24 +122,32 @@ export async function issuePpeAssignment(
 
   const ts = Math.floor(params.now.getTime() / 1000);
   const date = params.now.toISOString().slice(0, 10);
+  const auditEntityId = `${params.memberId}-${ppeItemId}`;
   const auditPut = {
     Put: {
       TableName: tableName,
       Item: {
         pk: buildDeptScopedPk(params.deptId, 'AUDIT', date),
-        sk: `${ts}#PPE_ASSIGNMENT#${ppeItemId}#${params.actorId}`,
+        sk: `${ts}#PPE_ASSIGNMENT#${auditEntityId}#${params.actorId}`,
         entityType: 'AUDIT_LOG_ENTRY',
         mutatedEntityType: 'PPE_ASSIGNMENT',
-        mutatedEntityId: ppeItemId,
+        mutatedEntityId: auditEntityId,
         action: 'CREATE',
         actorId: params.actorId,
         changedFields: {
-          itemType: { old: null, new: params.itemType },
+          memberId: { old: null, new: params.memberId },
+          itemType: { old: null, new: itemType },
           size: { old: null, new: params.size },
           issueDate: { old: null, new: params.issueDate },
         },
         ts,
-        gsi3pk: buildDeptScopedPk(params.deptId, 'AUDIT', 'ENTITY', 'PPE_ASSIGNMENT', ppeItemId),
+        gsi3pk: buildDeptScopedPk(
+          params.deptId,
+          'AUDIT',
+          'ENTITY',
+          'PPE_ASSIGNMENT',
+          auditEntityId,
+        ),
         gsi3sk: `${ts}`,
       },
       ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
@@ -166,7 +183,7 @@ export async function issuePpeAssignment(
   return {
     ppeItemId,
     memberId: params.memberId,
-    itemType: params.itemType,
+    itemType,
     size: params.size,
     issueDate: params.issueDate,
     nfpaExpiryDate,

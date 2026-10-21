@@ -13,6 +13,7 @@ import {
 } from './decide.js';
 import { emitAuthzMetric, emitInvocationMetric } from './metrics.js';
 import {
+  badRequestProblem,
   forbiddenProblem,
   serviceUnavailableProblem,
   unauthorizedProblem,
@@ -55,10 +56,15 @@ export function extractBearerToken(event: GuardEvent): string | undefined {
   return token;
 }
 
+const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/;
+const ALL_ZERO_TRACE_ID = '0'.repeat(32);
+
 export function extractTraceId(event: GuardEvent): string {
   const traceparent = event.headers?.traceparent ?? event.headers?.Traceparent;
   const traceId = traceparent?.split('-')[1];
-  return traceId && traceId.length > 0 ? traceId : randomUUID();
+  return traceId !== undefined && TRACE_ID_PATTERN.test(traceId) && traceId !== ALL_ZERO_TRACE_ID
+    ? traceId
+    : randomUUID();
 }
 
 function isValidPrincipal(
@@ -124,13 +130,17 @@ export function withAuthorization<TResult extends APIGatewayProxyResultV2>(
     const { token, principal } = resolved;
 
     try {
+      const resourceId = options.resourceId(event);
+      if (resourceId.trim().length === 0) {
+        return badRequestProblem(traceId, 'The request does not identify a resource.');
+      }
       const client = createAuthzClient(process.env, options.client);
       const config = readAuthzConfig(process.env);
       const allowed = await isAuthorized(client, config, token, {
         actionType: options.actionType,
         actionId: options.actionId,
         resourceType: options.resourceType,
-        resourceId: options.resourceId(event),
+        resourceId,
       });
       if (!allowed) {
         logAuthzOutcome('authz.denied', 'CedarDeny', traceId, principal.deptId);

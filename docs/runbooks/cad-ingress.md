@@ -2,12 +2,12 @@
 
 CAD dispatches reach Boxalarm two ways, both decided in `docs/decisions/2026-09-29-roadmap-defaults.md` (row 3) and `docs/decisions/2026-09-29-cad-ingress-auth.md`:
 
-- **Signed webhook** — `POST <CAD_WEBHOOK_URL>` (stack output), on its own REST API: every source has its own API key (`x-api-key`) with its own throttle (5 rps, burst 5 - at most half the webhook Lambda's reserved concurrency of 10, so one source's burst never starves another department's; raise the concurrency as departments are added), so a flood without a valid key is refused by API Gateway before it touches any source's capacity; optional dispatch-centre IP allowlist (`cadWebhookAllowedCidrs`); no Cognito.
+- **Signed webhook** — `POST <CAD_WEBHOOK_URL>/<deptId>.<sourceId>` (`CAD_WEBHOOK_URL` is a stack output; each source has its own path), on its own REST API: every source has its own API key (`x-api-key`) with its own throttle (5 rps, burst 5 - at most half the webhook Lambda's reserved concurrency of 10, so one source's burst never starves another department's; raise the concurrency as departments are added), so a flood without a valid key is refused by API Gateway before it touches any source's capacity; optional dispatch-centre IP allowlist (`cadWebhookAllowedCidrs`); no Cognito.
 - **SES inbound email** — to `dispatch+<deptId>.<sourceId>.<token>@<cadIngressEmailDomain>` (set-up: `docs/runbooks/first-deploy.md` step 9).
 
 Both run **sender authentication first and fail closed**: a message that fails any check never pages anyone, not even as raw text. Radio tone-out (N1.9) is the compensating control for a genuine dispatch dropped that way. Once authenticated, a message always pages: if the source's parser template cannot find the address it pages as raw text, address `SEE DISPATCH TEXT`, flagged VERIFY.
 
-Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD`, `ingressChannel: cad-email | cad-webhook`, `cadSourceId`, `cadParseStatus`, `verifyRequired`), and the table stream's fan-out pages from there. When the template reads an incident number, that number alone identifies the call (for 24 hours): a later message for it is an **update** of the paged call (recorded, the call refreshed, a non-escalating UPDATE push to the crew already paged - never a second page), and any message seen before is a duplicate. Without an incident number, identical text within 10 minutes is a duplicate and the same text later is a new call (`docs/decisions/2026-09-30-cad-dispatch-updates.md`).
+Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD`, `ingressChannel: cad-email | cad-webhook`, `cadSourceId`, `cadParseStatus`, `verifyRequired`), and the table stream's fan-out pages from there. When the template reads an incident number, that number alone identifies the call (for 24 hours): a later message for it is an **update** of the paged call (recorded, the call refreshed, a non-escalating UPDATE push to the crew already paged - never a second page), and any message seen before is a duplicate. An update that changed a field also re-emits `dispatch.alert.received` with a revision, so the incident draft follows the correction; an update that changes nothing is recorded, pushes nobody and is counted `CadIngressUnchanged`. Without an incident number, identical text within 10 minutes is a duplicate and the same text later is a new call (`docs/decisions/2026-09-30-cad-dispatch-updates.md`).
 
 ## Where the configuration lives
 
@@ -17,7 +17,7 @@ Both write the same `DISPATCH_ALERT` the manual route writes (`sourceSystem: CAD
 | What ingress reads | alerting table `DEPT#<deptId>#CAD_INGRESS` / `METADATA` (`CAD_INGRESS_COPY`) | `boxalarm-<env>-alerting-cad-source-copy-consumer`, from `platform.config.updated` |
 | Webhook HMAC keys `{current, previous}` | Secrets Manager `boxalarm-<env>-cad-webhook/<deptId>/<sourceId>` | `boxalarm-<env>-platform-cad-sources-rotate-key` only |
 | Raw inbound mail | `s3://boxalarm-<env>-cad-mail-<account>/inbound/<SES message id>` (SSE-KMS, expires after 30 days) | SES |
-| Replay markers | alerting table `DEPT#<deptId>#CAD_REPLAY#<sourceId>#<token>` (TTL 15 min webhook; email 24 h with a signed Message-ID, otherwise until the message would fail freshness + 5 min: about 65 min with a signed Date, 15 min with only DKIM `t=`) | the ingress Lambdas |
+| Replay markers | alerting table `DEPT#<deptId>#CAD_REPLAY#<sourceId>#<token>` (TTL 15 min webhook; email 24 h with a Message-ID, otherwise until the message would fail freshness + 5 min: about 65 min with a signed Date, 15 min with only DKIM `t=`). The email token hashes the Message-ID with the Subject and body; the marker's `origin` is the SES message id | the ingress Lambdas |
 
 A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-not-empty` fires, ingress is still using the previous sources: read the consumer's logs, fix, redrive the DLQ.
 
@@ -25,7 +25,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 
 **Webhook** (`cadIngress/webhookHandler.ts`): body ≤ 64 KiB (413) → `X-Boxalarm-Source: <deptId>.<sourceId>` is an enabled source with the webhook on and a key → `X-Boxalarm-Timestamp` (Unix seconds) within ±300 s → `X-Boxalarm-Signature: v1=<hex HMAC-SHA256(key, timestamp + "." + raw body)>` matches the current or previous key → the signature has not been seen in the last 15 minutes (409) → parse and write (202, or 200 `duplicate`). Every authentication failure is the same `401` with no detail.
 
-**Email** (`cadIngress/emailHandler.ts`): recipient address names an enabled source with email on and the right token → SES verdicts SPF `PASS`, DKIM `PASS`, spam and virus not `FAIL`, DMARC not `FAIL` → exactly one `From` header holding exactly one mailbox (display names and comments are never read as addresses) → that mailbox is on the allowlist (an address entry matches that address only; a domain entry matches the domain) → DMARC `PASS`, or, when the domain has no usable DMARC result, **every** DKIM `d=` aligned with the From domain → `Date` (used only when every DKIM signature covers it) within 60 minutes and each DKIM `t=` within 10 minutes - with neither, the message is refused as stale → Subject, Message-ID, To and Cc are likewise read only when every signature covers them → Message-ID + DKIM signature not seen in 24 h → parse and write.
+**Email** (`cadIngress/emailHandler.ts`): recipient address names an enabled source with email on and the right token → SES verdicts SPF `PASS`, DKIM `PASS`, spam and virus not `FAIL`, DMARC not `FAIL` → exactly one `From` header holding exactly one mailbox (display names and comments are never read as addresses) → that mailbox is on the allowlist (an address entry matches that address only; a domain entry matches the domain) → DMARC `PASS`, or, when the domain has no usable DMARC result, **every** DKIM `d=` aligned with the From domain → `Date` (used only when every DKIM signature covers it) within 60 minutes and each DKIM `t=` within 10 minutes - with neither, the message is refused as stale → Subject, Message-ID, To and Cc are likewise read only when every signature covers them → Message-ID + Subject + body not seen in 24 h (the key covers the signed and unsigned reading of each header, so appending or stripping a DKIM signature does not make a replay look new) → parse and write. One email addressed to several departments' ingress addresses is processed once per department, through its first source that passes the sender check; an unknown address among them is counted `CadIngressUnknownRecipient` and never hides a valid one.
 
 ## Alarms (all to alerting-page; some also to chief-notifications)
 
@@ -33,7 +33,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 |---|---|---|
 | `…-alerting-cad-auth-failed` (3 in 5 min; also chief) | Messages failed authentication and did not page. A forgery attempt, or a genuine source that is misconfigured | Logs: `cadIngress.webhook.authFailed` / `cadIngress.email.quarantined` with `reason`. If it is the real CAD, dispatches are NOT reaching the app: make sure the crew is paged by radio, then fix (below) |
 | `…-alerting-cad-quarantined` (also chief) | An email failed authentication and was kept | Read the log line's `quarantine` S3 location. Download with `aws s3 cp` (you need `kms:Decrypt` on `alias/boxalarm-<env>-cad-mail`). Never forward it to the app |
-| `…-alerting-cad-replay-rejected` | A webhook signature or email identical to one already written was refused | The replay marker commits in the same transaction as the dispatch, so the original paged. A CAD retry of identical bytes after a timeout, or a replay attack |
+| `…-alerting-cad-replay-rejected` | A webhook signature or email identical to one already written was refused | The replay marker commits in the same transaction as the dispatch, so the original paged. A CAD retry of identical bytes after a timeout, or a replay attack. A Lambda retry of the same SES message is skipped without counting here |
 | `…-alerting-cad-rejected` | A dependency failed (503 to the CAD, or an email Lambda retry), or a webhook body was too large | The CAD retries a webhook; Lambda retries an email twice. Check the ingress Lambda logs |
 | `…-alerting-cad-source-dropped` (also chief) | A saved source failed re-validation in the alerting plane and is not accepted | Re-save it from Settings → CAD sources; check `alerting.cadSourceCopy.sourceDropped` |
 | `…-alerting-cad-older-message` | A message for a paged incident was stamped earlier than the one already applied and was kept as history only (not applied, not pushed) | Occasional: a delayed email. Frequent: the source's dispatch-time rule or time zone is wrong and real corrections are being discarded - Test parse shows how the time resolves; fix the rule or the source's time zone |
@@ -44,7 +44,7 @@ A saved change reaches ingress in seconds. If `…-alerting-cad-source-copy-dlq-
 | `…-alerting-cad-webhook-errors` / `-throttles` | The webhook Lambda is failing or at its reserved concurrency (10) | A flood with valid source keys, or a CAD retry storm |
 | `…-alerting-cad-email-failures-not-empty` | An email could not be processed after retries and did not page | The message is in the failure queue and the mail bucket. Fix the dependency. A dispatch older than 10 minutes will now fail freshness; tone it out by radio |
 
-Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngressAuthFailed` (`Reason`), `CadIngressStale` (a genuine-looking email past its freshness window - Date 60 min, DKIM `t=` 10 min - counted apart from forgeries), `CadIngressReplayRejected`, `CadIngressQuarantined`, `CadIngressRejected` (`Reason`), `CadIngressParsed` (`Outcome` = PARSED/RAW), `CadIngressRawFallback`, `CadParseTimeout`, `CadIngressDuplicate` (`Identity`), `CadIngressUpdated`, `CadUpdatePushPublished` / `CadUpdatePushFailed`, `CadSourceCopyDropped`, each also by `Channel` where it applies.
+Metrics are in `Boxalarm/alerting-cad-ingress`: `CadIngressAccepted`, `CadIngressAuthFailed` (`Reason`), `CadIngressStale` (a genuine-looking email past its freshness window - Date 60 min, DKIM `t=` 10 min - counted apart from forgeries), `CadIngressReplayRejected`, `CadIngressQuarantined`, `CadIngressRejected` (`Reason`), `CadIngressParsed` (`Outcome` = PARSED/RAW), `CadIngressRawFallback`, `CadParseTimeout`, `CadIngressDuplicate` (`Identity`), `CadIngressUpdated`, `CadIngressUnchanged` (an update that changed nothing; not alarmed), `CadUpdatePushPublished` / `CadUpdatePushFailed`, `CadSourceCopyDropped`, each also by `Channel` where it applies.
 
 ### Common authentication failures
 
@@ -70,6 +70,8 @@ Settings → CAD sources → *Rotate webhook key*. The new key is shown **once**
 2. The CAD operator installs the new key.
 3. Send one test request signed with the new key **and sent with the new `x-api-key`** to the source's own address (test-message procedure below; on prod a negative-safe body is fine - a `200 duplicate` or `202` proves both). A `403` means the API key is wrong: the gateway refused it before the Lambda, and `…-alerting-cad-gateway-refused` fires.
 4. Then *Revoke previous key now* (otherwise it stops working 24 hours after the rotation on its own). Rotating twice in a row also retires the key the CAD is still using.
+
+Rotations for one source are serialized by a lease in the platform table. A rotation creates the new API key first and restores the previous secret on any failure; if a secret or key cannot be deleted or restored, `boxalarm-<env>-cad-sources-cleanup-failed` pages on-call and an orphaned key may still work, so check the log lines `platform.cadSources.secretDeleteFailed`, `…apiKeyDeleteFailed` and `…secretRestoreFailed`.
 
 If a key leaks: rotate, then *Revoke previous key now* - the leaked key stops working within a minute (the webhook caches keys for 60 s). Give the CAD the new key; until it is installed its requests fail (`BadSignature`) — tone out by radio meanwhile. Removing a source deletes its webhook secret at once, so a source re-created with the same id starts with no key.
 
@@ -129,9 +131,15 @@ Negative check (safe on prod): send the same text from a personal address that i
 
 If a source's address has leaked into spam lists (the token is noise reduction, not authentication), Settings → CAD sources → *New email address*. Update the CAD to the new address **first**: the old one stops paging within a minute.
 
+After a key rotation or a new email address, the Settings page keeps any unsaved edits and re-bases its version only if no other chief saved in between. If one did, the next save answers 409 and the page reloads.
+
 ## Dispatch times
 
 CAD updates to a call are ordered by the dispatch time the template reads, but only when it is one of two shapes: a full date and time (`MM/DD/YYYY HH:MM[:SS]` or `YYYY-MM-DD HH:MM[:SS]`, within 24 hours of receipt), or a bare time of day (`HHMM`, `HH:MM`, `HHMMSS`, `HH:MM:SS`), placed on the day (before, of or after the message's own receipt) nearest that receipt - `0003` after `2355` is the next day, and `2130` thirteen hours into a long incident is the same day. In the repeated hour on the DST fall-back night, a time takes the instant nearest receipt, so `0110` EST after `0150` EDT is later. Times are read in the source's time zone (default `America/New_York`). Any other shape leaves updates in the order they arrive, and re-arrivals of earlier messages are still caught as duplicates. Test parse shows how a sample's time resolves.
+
+## After a deploy
+
+A deploy that changes how a CAD message is identified (the webhook identity now includes structured fields, and the email replay key now includes the Subject) can accept a message already stored under the old key once more: up to 24 hours for email, 10 minutes for a text-only identity. Expect at most one repeat page or push for a call that was in flight across the deploy.
 
 ## Request body
 
@@ -145,9 +153,12 @@ The CAD must retry a `429` (its source is over its throttle) and any `5xx` with 
 
 Where the CAD can do both, configure **email and webhook** for the department: a flood or outage on one path then does not stop dispatches arriving on the other.
 
+**Expect a second page.** Enabling both on one source can page the department twice for the same call. The channels share an identity only through the incident number or identical text: with an incident number the second arrival is an update (it pushes nobody if no field differs), and without one the two texts are separate calls. Collapsing the copies across channels was tried and removed because it could merge two different calls. Separate sources never collapse either. Crews who see two pages for one call should check the template reads an incident number.
+
 ## Known limits
 
 - **No test flag.** See above: a CAD test message is a real page.
 - **One active SES receipt rule set per account and region.** Activating `boxalarm-<env>-cad-ingress` replaces any other active set in the account.
 - **Mail with oversized attachments** (over 10 MiB) is refused (`TooLarge`) rather than paged; CAD dispatch mail is text.
+- **Parser labels** may end in `:` or `-`; a trailing `:` or `-` (and surrounding whitespace) is stripped when the template is saved and when it is read.
 - **Parser patterns** are regular expressions validated on save (no nested quantifiers, at most 200 characters, input capped at 16 KiB); there is no execution timeout.

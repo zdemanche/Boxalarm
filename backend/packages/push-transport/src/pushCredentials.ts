@@ -196,12 +196,39 @@ async function fetchSecretJson(
   return record;
 }
 
+function malformedSecret(secretId: string, message: string): PushCredentialsUnavailableError {
+  secretCache.delete(secretId);
+  return new PushCredentialsUnavailableError(
+    `push secret ${secretId} is malformed: ${message}`,
+    secretId,
+  );
+}
+
 function requireString(secret: Record<string, unknown>, field: string, secretId: string): string {
   const value = secret[field];
   if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Secret ${secretId} is missing required field ${field}`);
+    throw malformedSecret(secretId, `missing required field ${field}`);
   }
   return value;
+}
+
+function requirePrivateKey(
+  secret: Record<string, unknown>,
+  field: string,
+  secretId: string,
+  keyType: 'ec' | 'rsa',
+): string {
+  const pem = requireString(secret, field, secretId);
+  let actualType: string | undefined;
+  try {
+    actualType = createPrivateKey(pem).asymmetricKeyType;
+  } catch {
+    throw malformedSecret(secretId, `${field} is not a valid private key`);
+  }
+  if (actualType !== keyType) {
+    throw malformedSecret(secretId, `${field} must be an ${keyType.toUpperCase()} private key`);
+  }
+  return pem;
 }
 
 /**
@@ -217,19 +244,19 @@ export async function loadApnsCredentials(
   const secret = await readSecretJson(secretId, client);
   const declared = secret.environment;
   if (declared !== undefined && declared !== 'production' && declared !== 'sandbox') {
-    throw new Error(`Secret ${secretId} environment must be "production" or "sandbox"`);
+    throw malformedSecret(secretId, 'environment must be "production" or "sandbox"');
   }
   if (options.sandbox && declared === 'production') {
-    throw new Error(`Sandbox secret ${secretId} declares environment "production"; refusing`);
+    throw malformedSecret(secretId, 'sandbox secret declares environment "production"; refusing');
   }
   const level = secret.interruptionLevel;
   if (level !== undefined && level !== 'critical' && level !== 'time-sensitive') {
-    throw new Error(`Secret ${secretId} interruptionLevel must be "critical" or "time-sensitive"`);
+    throw malformedSecret(secretId, 'interruptionLevel must be "critical" or "time-sensitive"');
   }
   return {
     teamId: requireString(secret, 'teamId', secretId),
     keyId: requireString(secret, 'keyId', secretId),
-    privateKey: requireString(secret, 'privateKey', secretId),
+    privateKey: requirePrivateKey(secret, 'privateKey', secretId, 'ec'),
     bundleId: requireString(secret, 'bundleId', secretId),
     environment: options.sandbox ? 'sandbox' : (declared ?? 'production'),
     interruptionLevel: level ?? 'critical',
@@ -245,15 +272,13 @@ export async function loadFcmCredentials(
   const privateKeyId = secret.private_key_id;
   const level = secret.apnsInterruptionLevel;
   if (level !== undefined && level !== 'critical' && level !== 'time-sensitive') {
-    throw new Error(
-      `Secret ${secretId} apnsInterruptionLevel must be "critical" or "time-sensitive"`,
-    );
+    throw malformedSecret(secretId, 'apnsInterruptionLevel must be "critical" or "time-sensitive"');
   }
   return {
     apnsInterruptionLevel: level ?? 'critical',
     projectId: requireString(secret, 'project_id', secretId),
     clientEmail: requireString(secret, 'client_email', secretId),
-    privateKey: requireString(secret, 'private_key', secretId),
+    privateKey: requirePrivateKey(secret, 'private_key', secretId, 'rsa'),
     privateKeyId: typeof privateKeyId === 'string' ? privateKeyId : undefined,
   };
 }

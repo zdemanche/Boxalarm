@@ -5,16 +5,18 @@ import {
   serviceUnavailableProblem,
   withAuthorization,
   type CedarPrincipalContext,
+  type FieldError,
   type GuardEvent,
 } from '@boxalarm/authz';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoDocClient, readReportingServiceConfig } from '../awsClients.js';
 import { logError } from '../logger.js';
-import { readDeliveryBaseline } from './deliveryBaseline.js';
+import { readDeliveryBaseline, type DeliveryBaselineView } from './deliveryBaseline.js';
 import { getCutoverDecision } from './repository.js';
 
 const METRICS_NAMESPACE = 'Boxalarm/ReportingService';
+const MAX_BASELINE_RANGE_SECONDS = 90 * 24 * 60 * 60;
 
 async function innerGetCutoverDecisionHandler(
   event: GuardEvent,
@@ -29,6 +31,12 @@ async function innerGetCutoverDecisionHandler(
   if (wantsBaseline && (!Number.isFinite(from) || !Number.isFinite(to) || from > to)) {
     return badRequestProblem(traceId, 'from and to are required epoch seconds with from <= to');
   }
+  if (wantsBaseline && to - from > MAX_BASELINE_RANGE_SECONDS) {
+    const errors: FieldError[] = [
+      { field: 'to', detail: 'The from/to date range must not exceed 90 days.' },
+    ];
+    return badRequestProblem(traceId, errors);
+  }
   const deptId = toVerifiedDeptId(principal);
   const config = readReportingServiceConfig(process.env);
   const client = createDynamoDocClient();
@@ -36,9 +44,21 @@ async function innerGetCutoverDecisionHandler(
   try {
     const record = await getCutoverDecision(client, config.tableName, deptId);
     const retainedPagingRequired = !record || record.decision !== 'accept';
-    const deliveryBaseline = wantsBaseline
-      ? await readDeliveryBaseline(process.env, event, from, to)
-      : undefined;
+    let deliveryBaseline: DeliveryBaselineView | undefined;
+    let deliveryBaselineUnavailable = false;
+    if (wantsBaseline) {
+      try {
+        deliveryBaseline = await readDeliveryBaseline(process.env, event, from, to);
+      } catch (error) {
+        const reason = error instanceof Error ? error.constructor.name : 'UnknownError';
+        logError('reporting.cutoverDecision.baseline_unavailable', error, {
+          correlationId: traceId,
+          deptId,
+        });
+        emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingCutoverBaselineUnavailable', reason);
+        deliveryBaselineUnavailable = true;
+      }
+    }
     emitOutcomeMetric(METRICS_NAMESPACE, 'ReportingCutoverDecisionGetSucceeded');
     return {
       statusCode: 200,
@@ -49,6 +69,7 @@ async function innerGetCutoverDecisionHandler(
         decidedAt: record?.decidedAt ?? null,
         retainedPagingRequired,
         ...(deliveryBaseline ? { deliveryBaseline } : {}),
+        ...(deliveryBaselineUnavailable ? { deliveryBaselineUnavailable } : {}),
       }),
     };
   } catch (error) {

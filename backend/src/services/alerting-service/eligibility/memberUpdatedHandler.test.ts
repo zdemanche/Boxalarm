@@ -58,6 +58,11 @@ function contactWrite(send: ReturnType<typeof vi.fn>): SentUpdate['input'] | und
     .find((input) => input.ExpressionAttributeValues[':contactChannels'] !== undefined);
 }
 
+function recordFailedMetricCount(logSpy: { mock: { calls: unknown[][] } }): number {
+  return logSpy.mock.calls.filter(([line]) => String(line).includes('"MemberUpdatedRecordFailed"'))
+    .length;
+}
+
 describe('memberUpdatedHandler', () => {
   const originalEnv = { ...process.env };
 
@@ -78,6 +83,7 @@ describe('memberUpdatedHandler', () => {
       readAlertingConfig: () => ({ tableName: 'alerting-table' }),
     }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const { handler } = await import('./memberUpdatedHandler.js');
     await expect(
       handler(
@@ -89,7 +95,9 @@ describe('memberUpdatedHandler', () => {
     ).resolves.toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-1' }] });
     expect(send).not.toHaveBeenCalled();
     expect(errorSpy.mock.calls.some(([line]) => String(line).includes('memberId'))).toBe(true);
+    expect(recordFailedMetricCount(logSpy)).toBe(1);
     errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   it('rejects a bare envelope with no EventBridge `detail` wrapper (never what the rule delivers)', async () => {
@@ -185,6 +193,27 @@ describe('memberUpdatedHandler', () => {
     expect(write.UpdateExpression).toContain(
       'snapshotUpdatedAt = if_not_exists(snapshotUpdatedAt, :eventTime)',
     );
+  });
+
+  it('never writes quals from a member.updated event: eligibilityChangedConsumer owns them', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', () => ({
+      createDynamoClient: () => ({ send }),
+      readAlertingConfig: () => ({ tableName: 'alerting-table' }),
+    }));
+    const { handler } = await import('./memberUpdatedHandler.js');
+    await handler(
+      buildSqsEvent({
+        ...VALID_ENVELOPE,
+        payload: { deptId: 'NICHOLS', memberId: 'mbr-102', quals: ['INTERIOR'] },
+      }),
+    );
+
+    const writes = send.mock.calls.map((call: unknown[]) => (call[0] as SentUpdate).input);
+    for (const write of writes) {
+      expect(write.UpdateExpression ?? '').not.toContain('qualsUpdatedAt');
+      expect(JSON.stringify(write.ExpressionAttributeValues ?? {})).not.toContain('INTERIOR');
+    }
   });
 
   // Review MAJOR-2: a role change was guarded on the snapshot-wide snapshotUpdatedAt, so any
@@ -621,6 +650,7 @@ describe('memberUpdatedHandler', () => {
 
   it('reports a non-conditional DynamoDB failure (never swallows) so SQS retries/DLQs that record', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const send = vi.fn().mockRejectedValue(new Error('ProvisionedThroughputExceededException'));
     vi.doMock('./dynamoClient.js', () => ({
       createDynamoClient: () => ({ send }),
@@ -635,7 +665,9 @@ describe('memberUpdatedHandler', () => {
         String(line).includes('ProvisionedThroughputExceededException'),
       ),
     ).toBe(true);
+    expect(recordFailedMetricCount(logSpy)).toBe(1);
     errorSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   // Post-merge MINOR-7: one bad record no longer fails (and eventually dead-letters) its siblings.

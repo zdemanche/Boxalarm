@@ -85,6 +85,14 @@ describe('createHydrantInner (business logic, AC1)', () => {
     expect(persisted.gsi3pk).toMatch(/^DEPT#NICHOLS#HYDRANT#GEO#/);
   });
 
+  it('records the authenticated member as the audit actor', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    await createHydrantInner(buildEvent({ body: validBody }), validPrincipal);
+    const audit =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[3]?.Put?.Item;
+    expect(audit?.actorId).toBe('mbr-102');
+  });
+
   it('rejects an absent body with 400 RFC7807', async () => {
     const result = (await createHydrantInner(buildEvent({}), validPrincipal)) as {
       statusCode: number;
@@ -119,6 +127,33 @@ describe('createHydrantInner (business logic, AC1)', () => {
       statusCode: number;
     };
     expect(result.statusCode).toBe(400);
+  });
+
+  it.each([
+    ['latitude', 141.24],
+    ['latitude', -90.5],
+    ['longitude', -200],
+    ['longitude', 180.1],
+  ])('rejects out-of-range %s %s with 400 and never writes', async (field, value) => {
+    const body = JSON.stringify({ ...(JSON.parse(validBody) as object), [field]: value });
+    const result = (await createHydrantInner(buildEvent({ body }), validPrincipal)) as {
+      statusCode: number;
+    };
+    expect(result.statusCode).toBe(400);
+    expect(ddbMock.commandCalls(TransactWriteCommand)).toHaveLength(0);
+  });
+
+  it('accepts boundary coordinates', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    const body = JSON.stringify({
+      ...(JSON.parse(validBody) as object),
+      latitude: 90,
+      longitude: -180,
+    });
+    const result = (await createHydrantInner(buildEvent({ body }), validPrincipal)) as {
+      statusCode: number;
+    };
+    expect(result.statusCode).toBe(201);
   });
 
   it('fails closed with 503 when DynamoDB is unavailable (never a defaulted success)', async () => {

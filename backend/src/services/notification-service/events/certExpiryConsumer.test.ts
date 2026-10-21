@@ -39,6 +39,10 @@ function sqsEvent(payload: Record<string, unknown>, messageId = 'msg-1'): SQSEve
   } as unknown as SQSEvent;
 }
 
+function failedIds(...ids: string[]) {
+  return { batchItemFailures: ids.map((itemIdentifier) => ({ itemIdentifier })) };
+}
+
 function mockDdb(send: ReturnType<typeof vi.fn>): void {
   vi.doMock('../dynamoClient.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../dynamoClient.js')>();
@@ -74,6 +78,37 @@ describe('certExpiryConsumer (entrypoint-test obligation)', () => {
     );
   });
 
+  it('titles the member copy by certType and names the holder with a member link on the role copy', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const { handler } = await import('./certExpiryConsumer.js');
+
+    await handler(
+      sqsEvent({
+        deptId: 'NICHOLS',
+        memberId: 'MBR-1',
+        certId: 'CERT-0f8e1c2a-1111-4222-8333-944455556666',
+        certType: 'EMT-B',
+        expiryDate: '2027-01-10',
+      }),
+    );
+
+    const call = send.mock.calls[0]?.[0] as {
+      input: { TransactItems: { Put?: { Item: Record<string, unknown> } }[] };
+    };
+    const items = call.input.TransactItems.map((item) => item.Put?.Item);
+    const byRecipient = (type: string) => items.find((row) => row?.recipientType === type);
+    expect(byRecipient('MEMBER')?.item).toMatchObject({
+      title: 'EMT-B',
+      subjectId: 'CERT-0f8e1c2a-1111-4222-8333-944455556666',
+    });
+    expect(byRecipient('ROLE')?.item).toMatchObject({
+      title: 'EMT-B',
+      detail: 'held by MBR-1, expires 2027-01-10',
+      link: { kind: 'member', id: 'MBR-1' },
+    });
+  });
+
   it('no-ops on a duplicate cert.expiry.due delivery for the same member/certId/day', async () => {
     const dedupConflict = Object.assign(new Error('dup'), {
       name: 'TransactionCanceledException',
@@ -101,15 +136,31 @@ describe('certExpiryConsumer (entrypoint-test obligation)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./certExpiryConsumer.js');
 
-    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).rejects.toThrow(
-      'cert.expiry.due event failed shape validation',
-    );
+    await expect(handler(sqsEvent({ deptId: 'NICHOLS' }))).resolves.toEqual(failedIds('msg-1'));
     expect(send).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain('cert.expiry.due event failed shape');
     errorSpy.mockRestore();
   });
 
-  it('logs the original error and rethrows on a genuine (non-conditional) write failure', async () => {
+  it('reports only the malformed record, still recording the valid records around it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await import('./certExpiryConsumer.js');
+    const valid = (messageId: string) =>
+      sqsEvent(
+        { deptId: 'NICHOLS', memberId: 'MBR-1', certId: 'CERT-1', expiryDate: '2027-01-10' },
+        messageId,
+      ).Records[0]!;
+    const poison = sqsEvent({ deptId: 'NICHOLS' }, 'msg-bad').Records[0]!;
+
+    const result = await handler({ Records: [valid('msg-a'), poison, valid('msg-b')] });
+
+    expect(result).toEqual(failedIds('msg-bad'));
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs the original error and reports the record on a genuine (non-conditional) write failure', async () => {
     const failure = Object.assign(new Error('boom'), { name: 'TransactionCanceledException' });
     const send = vi.fn().mockRejectedValueOnce(failure);
     mockDdb(send);
@@ -125,7 +176,7 @@ describe('certExpiryConsumer (entrypoint-test obligation)', () => {
           expiryDate: '2027-01-10',
         }),
       ),
-    ).rejects.toThrow('boom');
+    ).resolves.toEqual(failedIds('msg-1'));
     expect(errorSpy.mock.calls[0]?.[0] as string).toContain('boom');
     errorSpy.mockRestore();
   });
@@ -154,7 +205,7 @@ describe('certExpiryConsumer (entrypoint-test obligation)', () => {
       ],
     } as unknown as SQSEvent;
 
-    await expect(handler(bare)).rejects.toThrow('cert.expiry.due event failed shape validation');
+    await expect(handler(bare)).resolves.toEqual(failedIds('msg-2'));
     expect(send).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });

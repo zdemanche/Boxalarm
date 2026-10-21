@@ -18,8 +18,13 @@ import {
   type EligibilitySnapshotItem,
 } from '../eligibility/selector.js';
 import { resolvePushTarget, resolveSmsTarget } from '../eligibility/resolvePushTarget.js';
-import { buildChannelPagePayload, type TestDelivery } from '../channels/channelEnvelope.js';
+import {
+  buildChannelPagePayload,
+  TEST_AUDIT_TTL_SECONDS,
+  type TestDelivery,
+} from '../channels/channelEnvelope.js';
 import { getSchedulerClient } from '../escalation/scheduleEscalation.js';
+import { runWithConcurrencyLimit } from './concurrency.js';
 import { scheduleRealtimeFanOutEscalation } from './fanOut.js';
 import {
   SELF_TEST_METRIC_NAMESPACE,
@@ -39,7 +44,6 @@ const TONE_SEQUENCE = 1;
 const FAN_OUT_CHANNELS: readonly FanOutChannel[] = ['push', 'sms'];
 const CHANNEL_TIER = 'primary';
 const MAX_CONCURRENT_FANOUT_TASKS = 10;
-const TEST_AUDIT_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 interface DispatchAlertRecord {
   readonly dispatchId: string;
@@ -105,18 +109,7 @@ function logInfo(event: string, correlationId: string, extra: Record<string, unk
   );
 }
 
-export async function runWithConcurrencyLimit<T>(
-  tasks: readonly T[],
-  limit: number,
-  fn: (task: T) => Promise<void>,
-): Promise<PromiseSettledResult<void>[]> {
-  const results: PromiseSettledResult<void>[] = [];
-  for (let offset = 0; offset < tasks.length; offset += limit) {
-    const chunk = tasks.slice(offset, offset + limit);
-    results.push(...(await Promise.allSettled(chunk.map(fn))));
-  }
-  return results;
-}
+export { runWithConcurrencyLimit };
 
 function parseDispatchAlertRecord(record: DynamoDBRecord): DispatchAlertRecord | undefined {
   if (record.eventName !== 'INSERT') {

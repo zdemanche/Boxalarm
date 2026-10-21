@@ -73,3 +73,15 @@ describe('coveringCells', () => {
     }
   });
 });
+
+describe('encodeGeohash on a cell boundary', () => {
+  it('files a point exactly on a split in a cell the covering set of a bbox starting there includes', () => {
+    const bbox = { minLat: 41.2, minLng: -73.125, maxLat: 41.26, maxLng: -73.05 };
+    expect(coveringCells(bbox)).toContain(encodeGeohash(41.23, -73.125, 5));
+  });
+
+  it('does the same for a point exactly on a latitude split', () => {
+    const bbox = { minLat: 41.220703125, minLng: -73.2, maxLat: 41.26, maxLng: -73.05 };
+    expect(coveringCells(bbox)).toContain(encodeGeohash(41.220703125, -73.1, 5));
+  });
+});

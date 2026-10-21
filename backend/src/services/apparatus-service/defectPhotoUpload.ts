@@ -63,6 +63,10 @@ export interface DefectPhotoUpload {
   readonly contentType: string;
 }
 
+export function defectPhotoKeyPrefix(deptId: VerifiedDeptId, defectId: string): string {
+  return `${deptId}/defect/${defectId}/`;
+}
+
 export const SAFE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 // A defect photo is an image: the shared upload allowlist (inspections-service/assetsSigner.ts,
@@ -103,7 +107,7 @@ export async function createDefectPhotoUploadUrl(
         `(${[...ALLOWED_PHOTO_EXTENSIONS].join(', ')}): received ${JSON.stringify(params.filename)}`,
     );
   }
-  const photoS3Key = `${params.deptId}/defect/${params.defectId}/${params.filename}`;
+  const photoS3Key = `${defectPhotoKeyPrefix(params.deptId, params.defectId)}${params.filename}`;
   const contentType = requireUploadContentType(params.filename);
   const uploadUrl = await presign(
     config.bucketName,
@@ -118,16 +122,20 @@ export async function createDefectPhotoUploadUrl(
  * A fresh upload URL for a defect's stored photo key, for a replayed report whose first link
  * expired before the photo went up - the mobile outbox replays the POST to get one, as it
  * does for field capture. The key comes from the stored defect, never from the request, and
- * must sit under this department's defect prefix (the only prefix the role may write).
+ * must sit under this defect's own prefix, so a client-supplied key naming another defect's
+ * photo is never re-signed.
  */
 export async function resignDefectPhotoUploadUrl(
   config: DefectPhotoUploadConfig,
   deptId: VerifiedDeptId,
+  defectId: string,
   photoS3Key: string,
   presign: PresignPutFn = presignPut,
 ): Promise<{ uploadUrl: string; contentType: string }> {
-  if (!photoS3Key.startsWith(`${deptId}/defect/`) || photoS3Key.includes('..')) {
-    throw new TypeError(`stored photo key is outside ${deptId}/defect/: ${photoS3Key}`);
+  if (!photoS3Key.startsWith(defectPhotoKeyPrefix(deptId, defectId)) || photoS3Key.includes('..')) {
+    throw new TypeError(
+      `stored photo key is outside ${defectPhotoKeyPrefix(deptId, defectId)}: ${photoS3Key}`,
+    );
   }
   const contentType = requireUploadContentType(photoS3Key);
   return {

@@ -107,8 +107,11 @@ describe('selfTest postHandler', () => {
       targetMemberId: string;
       channelsTested: string[];
       testDelivery: string;
+      lockExpiresAt: number;
+      dispatchedAt: number;
       dispatch: { sourceSystem: string };
     };
+    expect(input.lockExpiresAt).toBeGreaterThan(input.dispatchedAt);
     expect(input.targetMemberId).toBe('mbr-102');
     expect(input.dispatch.sourceSystem).toBe('SELF_TEST');
     expect(input.channelsTested).toEqual(['PUSH', 'SMS']);

@@ -97,6 +97,28 @@ async function inner(
         { code: 'MONTH_HAS_INCIDENTS' },
       );
     }
+    const dispatches = await client.send(
+      new QueryCommand({
+        TableName: tableName,
+        IndexName: 'GSI1',
+        KeyConditionExpression: 'gsi1pk = :pk AND gsi1sk BETWEEN :from AND :to',
+        ExpressionAttributeValues: {
+          ':pk': buildDeptScopedPk(deptId),
+          ':from': `DISPATCH#${from}`,
+          ':to': `DISPATCH#${to}`,
+        },
+        Select: 'COUNT',
+      }),
+    );
+    if ((dispatches.Count ?? 0) > 0) {
+      return problemResponse(
+        409,
+        'Conflict',
+        `${month} has dispatched calls; start a report for each one instead of filing a no-activity report.`,
+        traceId,
+        { code: 'MONTH_HAS_DISPATCHES' },
+      );
+    }
 
     const api = await nerisApiFromEnv();
     // Idempotent (review minor 7): if an earlier attempt filed it with NERIS but the local

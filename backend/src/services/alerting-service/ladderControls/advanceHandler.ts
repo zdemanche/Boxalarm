@@ -21,10 +21,12 @@ import {
   LADDER_CONTROL_FAILED_METRIC,
   LADDER_CONTROL_METRIC_NAMESPACE,
   TONE_LADDER_COMPLETED,
+  TEST_DISPATCH_DETAIL,
   TONE_LADDER_HALTED,
   conflictProblem,
   dataUnavailableProblem,
   getDispatchMetadata,
+  isTestDispatch,
   jsonResponse,
   outcomeUnknownProblem,
   parseDispatchId,
@@ -98,6 +100,7 @@ function readErrorType(payload: Uint8Array | undefined): string | undefined {
 }
 
 const MUTUAL_AID_PROMPT_INCOMPLETE = 'MutualAidPromptIncompleteError';
+const MUTUAL_AID_REQUEST_INCOMPLETE = 'MutualAidRequestIncompleteError';
 
 type InvokeResult =
   | { readonly kind: 'outcome'; readonly outcome: ToneOutcome }
@@ -180,6 +183,9 @@ async function advance(
     return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
   }
 
+  if (isTestDispatch(metadata)) {
+    return conflictProblem(traceId, TEST_DISPATCH_DETAIL);
+  }
   const ladder = readLadderState(metadata);
   if (ladder.status === TONE_LADDER_HALTED) {
     return conflictProblem(traceId, 'The tone ladder is halted. No tone was sent.', {
@@ -232,6 +238,12 @@ async function advance(
         `Tone ${toneSequence} was sent to every eligible member, but the mutual-aid prompt did not reach every officer. Make the mutual-aid call now if no officer has confirmed it.`,
       );
     }
+    if (result.reason === MUTUAL_AID_REQUEST_INCOMPLETE) {
+      return outcomeUnknownProblem(
+        traceId,
+        `Tone ${toneSequence} was sent to every eligible member, but mutual aid may not have been requested or its officer prompts sent. Trigger mutual aid now.`,
+      );
+    }
     return outcomeUnknownProblem(
       traceId,
       `Tone ${toneSequence} may not have reached every member. Check the ladder and delivery receipts before advancing again — retrying tone ${toneSequence} will not re-page members who already received it.`,
@@ -265,6 +277,11 @@ async function advance(
       });
     case 'SKIPPED_COMPLETED':
       return conflictProblem(traceId, 'Every tone has already fired. No tone was sent.', {
+        toneSequence,
+        outcome: result.outcome,
+      });
+    case 'SKIPPED_TEST_DISPATCH':
+      return conflictProblem(traceId, TEST_DISPATCH_DETAIL, {
         toneSequence,
         outcome: result.outcome,
       });

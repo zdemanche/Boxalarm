@@ -48,6 +48,9 @@ describe('publishScbaTestDueEvent', () => {
     expect(putCommand).toBeInstanceOf(PutCommand);
     expect(putCommand.input.Item?.pk).toBe('DEPT#NICHOLS#SCBA_TEST_DUE_FLAG#2026-09-14');
     expect(putCommand.input.Item?.sk).toBe('SCBA#SCBA-001#SCBA_FLOW');
+    expect(putCommand.input.Item?.ttl).toBe(
+      Math.floor(baseParams.now.getTime() / 1000) + 7 * 86400,
+    );
 
     const updateCommand = ddbSend.mock.calls[1]?.[0] as UpdateCommand;
     expect(updateCommand).toBeInstanceOf(UpdateCommand);

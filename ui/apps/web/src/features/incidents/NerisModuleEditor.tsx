@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ApiError } from '../../lib/apiClient';
 import { Button } from '../../components/ui/Button';
 import { StatusChip } from '../../components/ui/Chip';
 import { Select, TextInput } from '../../components/ui/Field';
 import { fieldErrorsFromUnknown } from './api';
+import { problemMessage } from './format';
 import {
   asRecord,
   controlId,
@@ -123,7 +123,7 @@ function enumChoices(values: readonly string[]): Choice[] {
 }
 
 function problemText(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? (error.problem.detail ?? error.problem.title) : fallback;
+  return problemMessage(error, fallback);
 }
 
 /** "a.b[2].c" -> ["a.b[2].c", "a.b[2]", "a.b", "a"]: the nearest control that exists wins. */

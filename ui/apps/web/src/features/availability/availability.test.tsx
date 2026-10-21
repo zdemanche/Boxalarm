@@ -96,6 +96,27 @@ test('a preset posts epoch seconds to the signed-in member and confirms', async 
   expect(body?.reason).toBe('Travel');
 });
 
+test('a new mark-off appears in the list with an End now button', async () => {
+  const markOffs: { markoffId: string; startAt: number; endAt: number }[] = [];
+  server.use(
+    http.get('/api/v1/personnel/members/:memberId/availability', () =>
+      HttpResponse.json({ markOffs }),
+    ),
+    http.post('/api/v1/personnel/members/:memberId/availability', async ({ request }) => {
+      const body = (await request.json()) as { startAt: number; endAt: number };
+      markOffs.push({ markoffId: String(body.startAt), ...body });
+      return HttpResponse.json({ affectsAlerting: true, ...body }, { status: 201 });
+    }),
+  );
+  const user = userEvent.setup();
+  renderPage();
+
+  await user.click(await screen.findByRole('radio', { name: '24 hours' }));
+  await user.click(screen.getByRole('button', { name: 'Mark unavailable' }));
+
+  expect(await screen.findByRole('button', { name: /^End the mark-off until/ })).toBeTruthy();
+});
+
 test('custom dates use labelled date-time pickers', async () => {
   const user = userEvent.setup();
   renderPage();
@@ -178,6 +199,31 @@ test('lists the member’s mark-offs and End now ends the current one', async ()
   await vi.waitFor(() =>
     expect(screen.queryByRole('button', { name: /^End the mark-off/ })).toBeNull(),
   );
+});
+
+test('an activated mark-off past its end time reads as overdue, not as a future time', async () => {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/personnel/members/member-7/availability', () =>
+      HttpResponse.json({
+        markOffs: [
+          {
+            markoffId: String(nowSeconds - 7200),
+            startAt: nowSeconds - 7200,
+            endAt: nowSeconds - 3600,
+          },
+        ],
+      }),
+    ),
+  );
+  renderPage();
+
+  expect(await screen.findByText(/^Should have ended /)).toBeTruthy();
+  expect(screen.queryByText(/^Until /)).toBeNull();
+  expect(screen.getByText('Still marked off')).toBeTruthy();
+  expect(
+    screen.getByRole('button', { name: /^End the mark-off that should have ended/ }),
+  ).toBeTruthy();
 });
 
 test('a failed mark-off list gets a real Try again button', async () => {

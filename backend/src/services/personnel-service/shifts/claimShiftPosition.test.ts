@@ -5,16 +5,25 @@ import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { claimShiftPosition, ShiftPositionWriteError } from './claimShiftPosition.js';
 import { createFakeDocumentClient } from './testDynamoFake.js';
-import { buildDutyShift, buildShiftPosition } from './testFixtures.js';
+import { buildDutyShift, buildMemberQualification, buildShiftPosition } from './testFixtures.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const TABLE = 'personnel-table';
 const SHIFT_ID = 'SHIFT-0511';
 
+function openShift(overrides: { startAt?: number; endAt?: number; status?: string } = {}) {
+  const now = Date.now();
+  return buildDutyShift(DEPT_ID, SHIFT_ID, {
+    startAt: now - 3_600_000,
+    endAt: now + 3_600_000,
+    ...overrides,
+  });
+}
+
 describe('claimShiftPosition', () => {
   it('AC1: succeeds via a conditional UpdateItem and sets claimedByMemberId/claimedAt', async () => {
     const doc = createFakeDocumentClient([
-      buildDutyShift(DEPT_ID, SHIFT_ID),
+      openShift(),
       buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER'),
     ]);
 
@@ -26,7 +35,7 @@ describe('claimShiftPosition', () => {
 
   it('AC2: exactly one of two simultaneous claims wins; the other gets a conflict, no double-booking', async () => {
     const doc = createFakeDocumentClient([
-      buildDutyShift(DEPT_ID, SHIFT_ID),
+      openShift(),
       buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER'),
     ]);
 
@@ -50,7 +59,7 @@ describe('claimShiftPosition', () => {
 
   it('writes an OUTBOX_ENTRY for personnel.shift.claimed in the same transaction (PR #320 review, MAJOR)', async () => {
     const doc = createFakeDocumentClient([
-      buildDutyShift(DEPT_ID, SHIFT_ID),
+      openShift(),
       buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER'),
     ]);
 
@@ -90,7 +99,7 @@ describe('claimShiftPosition', () => {
 
   it('AC4: a resubmitted claim by the same member after their own success is idempotent (ALREADY_MINE), not a spurious conflict', async () => {
     const doc = createFakeDocumentClient([
-      buildDutyShift(DEPT_ID, SHIFT_ID),
+      openShift(),
       buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
         claimedByMemberId: 'MBR-0012',
         claimedAt: 1_800_000_100,
@@ -104,7 +113,7 @@ describe('claimShiftPosition', () => {
 
   it('AC4: a delayed offline resubmission that lost the race to a second claimant sees a conflict, never trusting the stale local claimed state', async () => {
     const doc = createFakeDocumentClient([
-      buildDutyShift(DEPT_ID, SHIFT_ID),
+      openShift(),
       buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
         claimedByMemberId: 'MBR-0034',
         claimedAt: 1_800_000_200,
@@ -151,6 +160,75 @@ describe('claimShiftPosition', () => {
     await expect(
       claimShiftPosition(failingDoc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012'),
     ).rejects.toMatchObject({ reason: 'CustomAwsError' });
+  });
+
+  it('B1-018: refuses a claim on a shift that has already ended and writes nothing', async () => {
+    const doc = createFakeDocumentClient([
+      openShift({ startAt: Date.now() - 9 * 3_600_000, endAt: Date.now() - 3_600_000 }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER'),
+    ]);
+
+    const outcome = await claimShiftPosition(doc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012');
+
+    expect(outcome).toEqual({ kind: 'SHIFT_CLOSED' });
+    const pk = buildDeptScopedPk(DEPT_ID, 'SHIFT', SHIFT_ID);
+    expect(doc.peek(pk, 'POSITION#DRIVER')?.claimedByMemberId).toBeUndefined();
+    expect([...doc.all()].filter((item) => item.entityType === 'OUTBOX_ENTRY')).toHaveLength(0);
+  });
+
+  it('B1-018: a retry by the member who already holds the position after the shift ended is ALREADY_MINE, not SHIFT_CLOSED', async () => {
+    const heldSince = Date.now() - 5 * 3_600_000;
+    const doc = createFakeDocumentClient([
+      openShift({ startAt: Date.now() - 9 * 3_600_000, endAt: Date.now() - 3_600_000 }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', {
+        claimedByMemberId: 'MBR-0012',
+        claimedAt: heldSince,
+      }),
+    ]);
+
+    const outcome = await claimShiftPosition(doc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012');
+
+    expect(outcome).toEqual({ kind: 'ALREADY_MINE', claimedAt: heldSince });
+  });
+
+  it('B1-018: refuses a claim on a cancelled shift', async () => {
+    const doc = createFakeDocumentClient([
+      openShift({ status: 'CANCELLED' }),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER'),
+    ]);
+
+    const outcome = await claimShiftPosition(doc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012');
+
+    expect(outcome).toEqual({ kind: 'SHIFT_CLOSED' });
+  });
+
+  it('B1-021: a member without the required qualification gets NOT_QUALIFIED and the position stays unclaimed', async () => {
+    const doc = createFakeDocumentClient([
+      openShift(),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', { requiredQual: 'DRIVER_OPERATOR' }),
+      buildMemberQualification(DEPT_ID, 'MBR-0012', 'DRIVER_OPERATOR', {
+        currentlyEligible: false,
+      }),
+    ]);
+
+    const outcome = await claimShiftPosition(doc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012');
+
+    expect(outcome).toEqual({ kind: 'NOT_QUALIFIED', requiredQual: 'DRIVER_OPERATOR' });
+    const pk = buildDeptScopedPk(DEPT_ID, 'SHIFT', SHIFT_ID);
+    expect(doc.peek(pk, 'POSITION#DRIVER')?.claimedByMemberId).toBeUndefined();
+    expect([...doc.all()].filter((item) => item.entityType === 'OUTBOX_ENTRY')).toHaveLength(0);
+  });
+
+  it('B1-021: a member holding the required qualification claims the position', async () => {
+    const doc = createFakeDocumentClient([
+      openShift(),
+      buildShiftPosition(DEPT_ID, SHIFT_ID, 'DRIVER', { requiredQual: 'DRIVER_OPERATOR' }),
+      buildMemberQualification(DEPT_ID, 'MBR-0012', 'DRIVER_OPERATOR'),
+    ]);
+
+    const outcome = await claimShiftPosition(doc, TABLE, DEPT_ID, SHIFT_ID, 'DRIVER', 'MBR-0012');
+
+    expect(outcome.kind).toBe('CLAIMED');
   });
 
   it('never issues a batch write for the claim (it cannot carry a ConditionExpression)', () => {

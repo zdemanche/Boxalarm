@@ -130,6 +130,60 @@ describe('setServiceStatus', () => {
     logSpy.mockRestore();
   });
 
+  it('emits apparatus.serviceStatus.changed with origin DEFECT for a defect-driven OUT_OF_SERVICE flip so the alerting status copy sees it', async () => {
+    const { setServiceStatus } = await import('./repository.js');
+    const send = vi.fn((command: unknown) => {
+      const lookup = registryLookup(command, ENGINE_METADATA);
+      if (lookup) return Promise.resolve(lookup);
+      if (command instanceof TransactWriteCommand) {
+        return Promise.resolve({});
+      }
+      throw new Error('unexpected command');
+    });
+
+    await setServiceStatus({ send } as unknown as DynamoDBDocumentClient, TABLE, {
+      deptId: DEPT_ID,
+      unitId: 'E1',
+      status: 'OUT_OF_SERVICE',
+      reason: 'Pump failure',
+      changedBy: 'MBR-1',
+      correlationId: 'corr-1',
+      origin: 'DEFECT',
+    });
+
+    const outbox = lastTransactItems(send).find(
+      (item) => item.Put?.Item?.entityType === 'OUTBOX_ENTRY',
+    )?.Put?.Item;
+    expect(outbox).toMatchObject({ eventType: 'apparatus.serviceStatus.changed' });
+    expect(outbox?.payload).toMatchObject({ origin: 'DEFECT', status: 'OUT_OF_SERVICE' });
+  });
+
+  it('leaves origin out of the status event payload for a manual status change', async () => {
+    const { setServiceStatus } = await import('./repository.js');
+    const send = vi.fn((command: unknown) => {
+      const lookup = registryLookup(command, ENGINE_METADATA);
+      if (lookup) return Promise.resolve(lookup);
+      if (command instanceof TransactWriteCommand) {
+        return Promise.resolve({});
+      }
+      throw new Error('unexpected command');
+    });
+
+    await setServiceStatus({ send } as unknown as DynamoDBDocumentClient, TABLE, {
+      deptId: DEPT_ID,
+      unitId: 'E1',
+      status: 'OUT_OF_SERVICE',
+      reason: 'Pump failure',
+      changedBy: 'MBR-1',
+      correlationId: 'corr-1',
+    });
+
+    const outbox = lastTransactItems(send).find(
+      (item) => item.Put?.Item?.entityType === 'OUTBOX_ENTRY',
+    )?.Put?.Item;
+    expect(outbox?.payload).not.toHaveProperty('origin');
+  });
+
   it('closes the same open OUT_OF_SERVICE_RECORD (not a different one) and flips APPARATUS back to IN_SERVICE, clearing the denormalized summary (AC2, core-harm)', async () => {
     const { setServiceStatus } = await import('./repository.js');
     const send = vi.fn((command: unknown) => {

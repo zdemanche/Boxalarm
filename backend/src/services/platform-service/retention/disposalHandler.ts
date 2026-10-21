@@ -29,6 +29,8 @@ interface ProblemDetails {
 // or a Lambda timeout mid-batch.
 const MAX_CANDIDATES = 500;
 
+const MAX_LOCATOR_LENGTH = 256;
+
 function problemResponse(
   status: number,
   title: string,
@@ -81,7 +83,7 @@ function parseCandidates(body: string | undefined): DisposalCandidate[] | { erro
   }
   const candidates = (raw as Record<string, unknown>).candidates;
   if (candidates === undefined) {
-    return [];
+    return { error: 'candidates is required.' };
   }
   if (!Array.isArray(candidates)) {
     return { error: 'candidates must be an array.' };
@@ -99,6 +101,9 @@ function parseCandidates(body: string | undefined): DisposalCandidate[] | { erro
       return {
         error: 'each candidate requires pk and sk (entityType/age/kms are read from DynamoDB).',
       };
+    }
+    if (record.pk.length > MAX_LOCATOR_LENGTH || record.sk.length > MAX_LOCATOR_LENGTH) {
+      return { error: `candidate pk and sk must not exceed ${MAX_LOCATOR_LENGTH} characters.` };
     }
     parsed.push({
       // Computed keys: locator only — trusted fields are derived from GetItem in runDisposal.
@@ -131,7 +136,7 @@ async function handlePost(
       nowEpochSeconds: Math.floor(Date.now() / 1000),
       candidates,
     });
-    return jsonResponse(200, result);
+    return jsonResponse(200, { ...result, traceId });
   } catch (error) {
     log('error', 'retention.disposal.failed', errorContext(error), traceId);
     return problemResponse(503, 'Disposal unavailable', 'Unable to run records disposal.', traceId);

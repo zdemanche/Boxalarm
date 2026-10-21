@@ -19,8 +19,9 @@ jest.mock('../../features/alerts/pushNotificationDisplay', () => ({
 }));
 jest.mock('../../features/alerts/apiAlertsRepository', () => ({ useAlertsRepository: jest.fn() }));
 const mockNavigate = jest.fn();
+const mockFocus = { current: true };
 jest.mock('@react-navigation/native', () => ({
-  useNavigation: () => ({ navigate: mockNavigate }),
+  useNavigation: () => ({ navigate: mockNavigate, isFocused: () => mockFocus.current }),
   useRoute: () => ({
     params: {
       dispatchId: 'D-MA',
@@ -48,6 +49,7 @@ let repository: { getDispatch: jest.Mock; acknowledgeMutualAid: jest.Mock };
 
 beforeEach(() => {
   mockNavigate.mockClear();
+  mockFocus.current = true;
   mockLocked.value = false;
   (AppState as { currentState: string }).currentState = 'active';
   mockShowOverLock.mockClear();
@@ -209,4 +211,44 @@ test('already confirmed by another officer: it stops ringing and leaves the lock
 
   expect(mockSilence).toHaveBeenCalledWith('D-MA');
   expect(mockShowOverLock).toHaveBeenLastCalledWith(false);
+});
+
+test('B2-226: a detail read that comes back without the mutual-aid record offers Check again, never an endless Checking', async () => {
+  repository.getDispatch.mockResolvedValueOnce({
+    dispatchId: 'D-MA',
+    incidentType: 'Structure fire',
+    address: '21 Main St',
+  });
+  await render(<MutualAidPromptScreen />);
+
+  expect(
+    await screen.findByText(/couldn't check whether the call has been confirmed/i),
+  ).toBeTruthy();
+  expect(screen.queryByText(/^Checking whether/)).toBeNull();
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Check again' }));
+
+  expect(await screen.findByText(/Requested at/)).toBeTruthy();
+});
+
+test('B2-068: an unfocused prompt going to the background does not take a newer call off the keyguard', async () => {
+  const listeners: ((status: string) => void)[] = [];
+  const addEventListener = AppState.addEventListener as unknown as jest.Mock;
+  const previous = addEventListener.getMockImplementation();
+  addEventListener.mockImplementation((type: string, listener: (status: string) => void) => {
+    if (type === 'change') listeners.push(listener);
+    return { remove: () => {} };
+  });
+  await render(<MutualAidPromptScreen />);
+  await screen.findByText(/has not been confirmed yet/);
+  mockShowOverLock.mockClear();
+
+  mockFocus.current = false;
+  listeners.forEach((listener) => listener('background'));
+  expect(mockShowOverLock).not.toHaveBeenCalledWith(false);
+
+  mockFocus.current = true;
+  listeners.forEach((listener) => listener('background'));
+  expect(mockShowOverLock).toHaveBeenCalledWith(false);
+  addEventListener.mockImplementation(previous ?? (() => ({ remove: () => {} })));
 });

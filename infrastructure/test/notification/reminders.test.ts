@@ -65,6 +65,17 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
     ["apparatus-status", "apparatus-service", ["apparatus.serviceStatus.changed"]],
     ["inventory-reorder", "inventory-service", ["inventory.reorder.due"]],
     ["ppe-expiry", "inventory-service", ["ppe.expiry.due", "inventory.expiry.due"]],
+    [
+      "neris-rejected",
+      "incident-service",
+      [
+        "neris.incident.rejected",
+        "neris.incident.failed",
+        "neris.submission.failed",
+        "neris.incident.missing",
+        "neris.incident.deleted",
+      ],
+    ],
   ])(
     "%s: a platform-bus rule matching its producer's Source and DetailType",
     async (key, source, types) => {
@@ -108,6 +119,14 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
         isGranted(statementsForRole(fn(key)), "sqs:ReceiveMessage", (r) => r.includes(queueName)),
       ).toBe(true);
       expect(lambdaByName(fn(key)).inputs.timeout as number).toBeLessThan(30);
+    },
+  );
+
+  it.each([...ALL, "neris-rejected", "neris-no-activity"])(
+    "%s: reports batch item failures, so a failed record is retried instead of deleted",
+    async (key) => {
+      await build();
+      expect(esmFor(fn(key)).inputs.functionResponseTypes).toEqual(["ReportBatchItemFailures"]);
     },
   );
 
@@ -191,6 +210,17 @@ describe("notification reminder consumers", { timeout: 30_000 }, () => {
     const alarm = alarmByName("boxalarm-dev-notification-apparatus-oos-no-recipients");
     expect(alarm.inputs.namespace).toBe("Boxalarm/NotificationDigest");
     expect(alarm.inputs.metricName).toBe("ApparatusDefectImmediateNoRecipients");
+    expect(alarm.inputs.threshold).toBe(0);
+    expect(alarm.inputs.comparisonOperator).toBe("GreaterThanThreshold");
+    expect(alarm.inputs.alarmActions).toEqual([CHIEF_TOPIC]);
+    expect((alarm.inputs.alarmActions as string[]).some((a) => a.includes("alerting"))).toBe(false);
+  });
+
+  it("an apparatus status change with nobody to tell alarms to the chief topic, never the alerting plane", async () => {
+    await build();
+    const alarm = alarmByName("boxalarm-dev-notification-apparatus-status-no-recipients");
+    expect(alarm.inputs.namespace).toBe("Boxalarm/NotificationDigest");
+    expect(alarm.inputs.metricName).toBe("ApparatusStatusImmediateNoRecipients");
     expect(alarm.inputs.threshold).toBe(0);
     expect(alarm.inputs.comparisonOperator).toBe("GreaterThanThreshold");
     expect(alarm.inputs.alarmActions).toEqual([CHIEF_TOPIC]);

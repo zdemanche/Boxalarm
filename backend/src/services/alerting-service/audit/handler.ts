@@ -12,6 +12,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
 import {
   InvalidCursorError,
+  isEpochSeconds,
   queryDepartmentAuditLog,
   queryMemberDeliveryHistory,
   type DepartmentAuditPage,
@@ -71,7 +72,7 @@ function parseQuery(
   }
   const from = Number(fromRaw);
   const to = Number(toRaw);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) {
+  if (!isEpochSeconds(from) || !isEpochSeconds(to) || from > to) {
     return undefined;
   }
   return { from, to, cursor };

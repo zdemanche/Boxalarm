@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Text } from 'react-native';
 import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { useInventoryRepository } from '../../features/inventory/apiInventoryRepository';
 import type { PpeAssignment, PpeStatus } from '../../features/inventory/types';
 import { InfoRow, Rows } from './MeRows';
@@ -18,14 +19,27 @@ export function MyPpeScreen() {
   const theme = useTheme();
   const repository = useInventoryRepository();
   const { memberId } = useAuth();
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [ppe, setPpe] = useState<PpeAssignment[]>([]);
 
   useEffect(() => {
     if (!memberId) return;
     let cancelled = false;
-    repository.getMyPpe(memberId).then((result) => {
-      if (!cancelled) setPpe(result);
-    });
+    setLoadError(null);
+    repository
+      .getMyPpe(memberId)
+      .then((result) => {
+        if (!cancelled) setPpe(result);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setLoadError(
+          error instanceof ApiError &&
+            (error.problem.status === 401 || error.problem.status === 403)
+            ? 'You do not have access to your PPE.'
+            : 'Your PPE could not be loaded. Check your connection and try again.',
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -34,7 +48,14 @@ export function MyPpeScreen() {
   return (
     <Screen>
       <Card>
-        {ppe.length === 0 ? (
+        {loadError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {loadError}
+          </Text>
+        ) : ppe.length === 0 ? (
           <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
             No PPE issued to you.
           </Text>

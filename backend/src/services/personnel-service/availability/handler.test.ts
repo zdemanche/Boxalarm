@@ -58,7 +58,7 @@ describe('personnel availability handler', () => {
     const body = JSON.parse((result as { body: string }).body) as { affectsAlerting: boolean };
     expect(body.affectsAlerting).toBe(true);
 
-    const transactCall = send.mock.calls[0]?.[0] as {
+    const transactCall = send.mock.calls[1]?.[0] as {
       input: { TransactItems: { Put: { Item: Record<string, unknown> } }[] };
     };
     const items = transactCall.input.TransactItems.map((t) => t.Put.Item);
@@ -86,6 +86,28 @@ describe('personnel availability handler', () => {
     expect(scheduleCall.input.Target.RoleArn).toBe('arn:aws:iam::1:role/scheduler');
   });
 
+  it('gives every schedule the dead-letter queue so a revert Scheduler gives up on is recorded', async () => {
+    process.env.AVAILABILITY_SCHEDULE_DLQ_ARN =
+      'arn:aws:sqs:us-east-1:123456789012:availability-dlq';
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    });
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const { createAvailability } = await import('./handler.js');
+    await createAvailability(buildEvent(), PRINCIPAL, {
+      schedulerClient: { send: schedulerSend } as unknown as SchedulerClient,
+    });
+
+    const scheduleCall = schedulerSend.mock.calls[0]?.[0] as {
+      input: { Target: { DeadLetterConfig?: { Arn: string } } };
+    };
+    expect(scheduleCall.input.Target.DeadLetterConfig).toEqual({
+      Arn: 'arn:aws:sqs:us-east-1:123456789012:availability-dlq',
+    });
+  });
+
   it('does not emit a MARKED_OFF outbox entry at creation for a future-dated window, and schedules both ACTIVATE and REVERT (AC3 future-window)', async () => {
     const send = vi.fn().mockResolvedValue({});
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
@@ -101,7 +123,7 @@ describe('personnel availability handler', () => {
     );
 
     expect(result).toMatchObject({ statusCode: 201 });
-    const transactCall = send.mock.calls[0]?.[0] as {
+    const transactCall = send.mock.calls[1]?.[0] as {
       input: { TransactItems: { Put: { Item: Record<string, unknown> } }[] };
     };
     expect(transactCall.input.TransactItems).toHaveLength(1);
@@ -246,7 +268,7 @@ describe('personnel availability handler', () => {
   });
 
   it('returns 503 and cleans up the created schedule when the DynamoDB transact write fails (no stranded schedule)', async () => {
-    const send = vi.fn().mockRejectedValue(new Error('ddb unavailable'));
+    const send = vi.fn().mockResolvedValueOnce({}).mockRejectedValue(new Error('ddb unavailable'));
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
       return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
@@ -274,7 +296,7 @@ describe('personnel availability handler', () => {
       name: 'TransactionCanceledException',
       CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
     });
-    const send = vi.fn().mockRejectedValue(conflictError);
+    const send = vi.fn().mockResolvedValueOnce({}).mockRejectedValue(conflictError);
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
       return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
@@ -289,8 +311,90 @@ describe('personnel availability handler', () => {
     errorSpy.mockRestore();
   });
 
+  it('returns 409 without touching Scheduler when the markoff row already exists (replayed or double-tapped request)', async () => {
+    const send = vi.fn().mockResolvedValue({ Item: { sk: `MARKOFF#${PAST_START}` } });
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    });
+    const schedulerSend = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('exists'), { name: 'ConflictException' }));
+    const { createAvailability } = await import('./handler.js');
+    const result = await createAvailability(buildEvent(), PRINCIPAL, {
+      schedulerClient: { send: schedulerSend } as unknown as SchedulerClient,
+    });
+    expect(result).toMatchObject({ statusCode: 409 });
+    expect(schedulerSend).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
+    expect(
+      (send.mock.calls[0]?.[0] as { input: { ConsistentRead?: boolean } }).input.ConsistentRead,
+    ).toBe(true);
+  });
+
+  it('returns 503 and never deletes the original schedules when CreateSchedule hits ConflictException in a concurrent double-tap race', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const schedulerSend = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('exists'), { name: 'ConflictException' }));
+    const { createAvailability } = await import('./handler.js');
+    const result = await createAvailability(buildEvent(), PRINCIPAL, {
+      schedulerClient: { send: schedulerSend } as unknown as SchedulerClient,
+    });
+    expect(result).toMatchObject({ statusCode: 503 });
+    const schedulerCommands = schedulerSend.mock.calls.map(
+      (call) => (call[0] as { constructor: { name: string } }).constructor.name,
+    );
+    expect(schedulerCommands).not.toContain('DeleteScheduleCommand');
+    expect(send).toHaveBeenCalledOnce();
+    errorSpy.mockRestore();
+  });
+
+  it('returns 503 without scheduling when the duplicate check read fails', async () => {
+    const send = vi.fn().mockRejectedValue(new Error('ddb unavailable'));
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const { createAvailability } = await import('./handler.js');
+    const result = await createAvailability(buildEvent(), PRINCIPAL, {
+      schedulerClient: { send: schedulerSend } as unknown as SchedulerClient,
+    });
+    expect(result).toMatchObject({ statusCode: 503 });
+    expect(schedulerSend).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it('gives every schedule a bounded retry policy so a failing fire reaches the dead-letter queue within the hour', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
+    });
+    const schedulerSend = vi.fn().mockResolvedValue({});
+    const { createAvailability } = await import('./handler.js');
+    await createAvailability(
+      buildEvent({}, PRINCIPAL, { startAt: FUTURE_START, endAt: FUTURE_END }),
+      PRINCIPAL,
+      { schedulerClient: { send: schedulerSend } as unknown as SchedulerClient },
+    );
+    expect(schedulerSend).toHaveBeenCalledTimes(2);
+    for (const call of schedulerSend.mock.calls) {
+      expect(
+        (call[0] as { input: { Target: { RetryPolicy: unknown } } }).input.Target.RetryPolicy,
+      ).toEqual({ MaximumRetryAttempts: 3, MaximumEventAgeInSeconds: 3600 });
+    }
+  });
+
   it('returns 503 (never rethrows uncontrolled) and never writes to DynamoDB when Scheduler CreateSchedule fails', async () => {
-    const send = vi.fn();
+    const send = vi.fn().mockResolvedValue({});
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
       return { ...actual, createDdbClient: () => ({ send }) as unknown as DynamoDBDocumentClient };
@@ -302,7 +406,7 @@ describe('personnel availability handler', () => {
       schedulerClient: { send: schedulerSend } as unknown as SchedulerClient,
     });
     expect(result).toMatchObject({ statusCode: 503 });
-    expect(send).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('availability.schedule_failed'));
     errorSpy.mockRestore();
   });

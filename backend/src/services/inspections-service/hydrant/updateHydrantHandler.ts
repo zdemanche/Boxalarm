@@ -144,7 +144,7 @@ export async function updateHydrantInner(
   const deptId = toVerifiedDeptId(principal);
 
   try {
-    const hydrant = await updateHydrant(deptId, hydrantId, validated, correlationId);
+    const hydrant = await updateHydrant(deptId, hydrantId, validated, correlationId, principal.sub);
     emitMetric('HydrantUpdated');
     return {
       statusCode: 200,

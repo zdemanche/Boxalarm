@@ -52,6 +52,27 @@ describe('validateCreateOccupancyInput', () => {
     expect(result.longitude).toBe(-73.2004);
   });
 
+  it.each([
+    [{ latitude: 91 }, 'latitude'],
+    [{ longitude: -181 }, 'longitude'],
+    [{ longitude: undefined }, 'longitude'],
+    [{ latitude: undefined }, 'latitude'],
+  ])('rejects invalid coordinates %j', (override, field) => {
+    try {
+      validateCreateOccupancyInput({ ...validCreateBody, ...override });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as ValidationError).errors.map((e) => e.field)).toContain(field);
+    }
+  });
+
+  it('accepts a create with neither coordinate', () => {
+    const { latitude, longitude, ...rest } = validCreateBody;
+    expect(latitude).toBeDefined();
+    expect(longitude).toBeDefined();
+    expect(validateCreateOccupancyInput(rest).latitude).toBeUndefined();
+  });
+
   it('accepts empty contacts and hazards arrays (routine input)', () => {
     const result = validateCreateOccupancyInput({ ...validCreateBody, contacts: [], hazards: [] });
     expect(result.contacts).toEqual([]);

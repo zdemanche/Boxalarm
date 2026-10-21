@@ -35,6 +35,11 @@ const AUDIT_ENTITY_TYPES: readonly { value: string; label: string; help: string 
     help: 'The ID at the end of the member’s page address, e.g. m-24',
   },
   {
+    value: 'MEMBER_QUALIFICATION',
+    label: 'Member qualification',
+    help: 'The member’s ID and the qualification code, e.g. m-24-INTERIOR',
+  },
+  {
     value: 'EQUIPMENT_ASSET',
     label: 'Equipment asset',
     help: 'The ID at the end of the asset’s page address, e.g. eq-3',

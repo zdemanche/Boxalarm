@@ -5,6 +5,7 @@ import { ApiError, problemFieldErrors, type ProblemFieldError } from '../../lib/
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Checkbox, Skeleton, TextInput } from '../../components/ui';
 import { Plus } from '../../components/ui/icons';
+import { RetryableApiGate } from './RetryableApiGate';
 import { getConfig, putConfig } from './api';
 import type { ConfigResponse } from './types';
 import styles from './Settings.module.css';
@@ -163,9 +164,9 @@ export function CheckSheetEditor() {
       {configQuery.isLoading ? (
         <Skeleton lines={3} />
       ) : configQuery.error ? (
-        <ApiForbiddenGate error={configQuery.error} embedded>
+        <RetryableApiGate error={configQuery.error} onRetry={() => void configQuery.refetch()}>
           <p role="alert">Unable to load the check sheet.</p>
-        </ApiForbiddenGate>
+        </RetryableApiGate>
       ) : (
         <form aria-label="Check sheet" onSubmit={handleSubmit} className={styles.form}>
           {items.length === 0 ? (

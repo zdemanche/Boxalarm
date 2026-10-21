@@ -46,6 +46,11 @@ vi.mock('./repository.js', () => ({
   getCutoverDecision: vi.fn(),
 }));
 
+vi.mock('./deliveryBaseline.js', () => ({
+  readDeliveryBaseline: vi.fn(),
+}));
+
+import { readDeliveryBaseline } from './deliveryBaseline.js';
 import { getCutoverDecision } from './repository.js';
 import { handler } from './get.js';
 
@@ -143,6 +148,56 @@ describe('cutover decision get handler', () => {
     expect(emitOutcomeMetric).toHaveBeenCalledWith(
       'Boxalarm/ReportingService',
       'ReportingCutoverDecisionGetSucceeded',
+    );
+  });
+
+  it('rejects a baseline range wider than 90 days with 400 before reading anything', async () => {
+    const result = (await handler(
+      buildEvent({ queryStringParameters: { from: '0', to: String(91 * 86_400) } }),
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(400);
+    expect(getCutoverDecision).not.toHaveBeenCalled();
+    expect(readDeliveryBaseline).not.toHaveBeenCalled();
+  });
+
+  it('accepts a full 90-day inclusive range', async () => {
+    vi.mocked(getCutoverDecision).mockResolvedValue(undefined);
+    vi.mocked(readDeliveryBaseline).mockResolvedValue({} as never);
+    const result = (await handler(
+      buildEvent({ queryStringParameters: { from: '0', to: String(90 * 86_400 - 1) } }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(200);
+  });
+
+  it('still returns the decision and retained paging when the baseline lambda is rejected', async () => {
+    const failure = new Error('delivery baseline lambda returned status 403');
+    vi.mocked(getCutoverDecision).mockResolvedValue(undefined);
+    vi.mocked(readDeliveryBaseline).mockRejectedValue(failure);
+    const result = (await handler(
+      buildEvent({ queryStringParameters: { from: '0', to: '86399' } }),
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({
+      decision: null,
+      decider: null,
+      decidedAt: null,
+      retainedPagingRequired: true,
+      deliveryBaselineUnavailable: true,
+    });
+    expect(logError).toHaveBeenCalledWith(
+      'reporting.cutoverDecision.baseline_unavailable',
+      failure,
+      expect.objectContaining({ deptId: 'NICHOLS' }),
+    );
+    expect(emitOutcomeMetric).toHaveBeenCalledWith(
+      'Boxalarm/ReportingService',
+      'ReportingCutoverBaselineUnavailable',
+      'Error',
+    );
+    expect(emitOutcomeMetric).not.toHaveBeenCalledWith(
+      'Boxalarm/ReportingService',
+      'ReportingCutoverDecisionGetFailed',
+      expect.anything(),
     );
   });
 });

@@ -10,9 +10,12 @@ import { InvokeCommand, type LambdaClient } from '@aws-sdk/client-lambda';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { buildAuditLogEntryTransactItem } from '../audit/auditEntry.js';
 import type { AuthorizerContext } from '../authorizer/handler.js';
 import { assertChiefOrAdmin, ForbiddenError } from './authz.js';
 import { getDynamoDocClient, getLambdaClient, getS3Client } from './awsClients.js';
+
+const EXPORT_STALE_MS = 16 * 60 * 1000;
 
 interface Deps {
   readonly docClient?: DynamoDBDocumentClient;
@@ -161,8 +164,6 @@ async function handlePost(
   const docClient = getDynamoDocClient(deps.docClient);
   const jobId = randomUUID();
   const requestedAt = new Date();
-  const ts = Math.floor(requestedAt.getTime() / 1000);
-  const date = requestedAt.toISOString().slice(0, 10);
 
   try {
     await docClient.send(
@@ -183,28 +184,15 @@ async function handlePost(
               },
             },
           },
-          {
-            Put: {
-              // TODO: E8-S5 — route this write through the shared outbox helper once it
-              // lands, instead of a direct PutItem (architecture:2617 requires audit
-              // writes be separated from the services whose mutations they record).
-              TableName: process.env.PLATFORM_TABLE_NAME,
-              Item: {
-                pk: buildDeptScopedPk(deptId, 'AUDIT', date),
-                sk: `${ts}#EXPORT_JOB#${jobId}#${actorId}`,
-                entityType: 'AUDIT_LOG_ENTRY',
-                mutatedEntityType: 'EXPORT_JOB',
-                mutatedEntityId: jobId,
-                action: 'CREATE',
-                actorId,
-                changedFields: {},
-                ts,
-                gsi3pk: buildDeptScopedPk(deptId, 'AUDIT', 'ENTITY', 'EXPORT_JOB', jobId),
-                gsi3sk: ts,
-              },
-              ConditionExpression: 'attribute_not_exists(pk) AND attribute_not_exists(sk)',
-            },
-          },
+          buildAuditLogEntryTransactItem(process.env.PLATFORM_TABLE_NAME ?? '', {
+            deptId,
+            actorId,
+            mutatedEntityType: 'EXPORT_JOB',
+            mutatedEntityId: jobId,
+            action: 'CREATE',
+            ts: requestedAt.getTime(),
+            traceId,
+          }),
         ],
       }),
     );
@@ -289,6 +277,11 @@ async function handleGet(
             'Unable to check export status.',
             traceId,
           );
+        }
+        const requestedAtMs = Date.parse(String(job.Item.requestedAt));
+        if (Number.isFinite(requestedAtMs) && Date.now() - requestedAtMs > EXPORT_STALE_MS) {
+          log('error', 'export.job.abandoned', { jobId }, traceId);
+          return jsonResponse(200, { status: 'FAILED' });
         }
         return jsonResponse(200, { status: 'PENDING' });
       }

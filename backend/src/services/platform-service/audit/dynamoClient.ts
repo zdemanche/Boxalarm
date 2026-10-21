@@ -14,6 +14,7 @@ import pino from 'pino';
 
 export interface AuditConfig {
   readonly tableName: string;
+  readonly incidentTableName: string;
 }
 
 export class AuditConfigError extends Error {}
@@ -23,7 +24,11 @@ export function readAuditConfig(env: NodeJS.ProcessEnv): AuditConfig {
   if (!tableName) {
     throw new AuditConfigError('AUDIT_TABLE_NAME is required and was not set');
   }
-  return { tableName };
+  const incidentTableName = env.INCIDENT_AUDIT_TABLE_NAME;
+  if (!incidentTableName) {
+    throw new AuditConfigError('INCIDENT_AUDIT_TABLE_NAME is required and was not set');
+  }
+  return { tableName, incidentTableName };
 }
 
 let cachedClient: DynamoDBDocumentClient | undefined;

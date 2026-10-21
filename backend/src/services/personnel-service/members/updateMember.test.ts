@@ -41,6 +41,40 @@ function fakeDocClient(docSend: ReturnType<typeof vi.fn>): DynamoDBDocumentClien
   return { send: docSend } as unknown as DynamoDBDocumentClient;
 }
 
+const STORED_ROW = {
+  memberId: 'mbr-1',
+  firstName: 'Sam',
+  lastName: 'Adams',
+  phone: '+12705550100',
+  email: 'sam@example.com',
+  roles: ['MEMBER'],
+};
+
+type DocCommand = { constructor: { name: string }; input: Record<string, unknown> };
+
+function memberRow(
+  transact: () => Promise<unknown> = () => Promise.resolve({}),
+  item: Record<string, unknown> | null = STORED_ROW,
+) {
+  return vi.fn((command: DocCommand) =>
+    command.constructor.name === 'GetCommand'
+      ? Promise.resolve(item ? { Item: item } : {})
+      : transact(),
+  );
+}
+
+type TransactItem = {
+  Update?: { UpdateExpression: string; ExpressionAttributeValues: Record<string, unknown> };
+  Put?: { Item: Record<string, unknown> };
+};
+
+function transactItems(docSend: ReturnType<typeof vi.fn>): TransactItem[] {
+  const command = docSend.mock.calls
+    .map(([c]) => c as DocCommand)
+    .find((c) => c.constructor.name === 'TransactWriteCommand');
+  return command?.input.TransactItems as TransactItem[];
+}
+
 describe('updateMember handler', () => {
   const originalEnv = { ...process.env };
 
@@ -56,7 +90,7 @@ describe('updateMember handler', () => {
 
   it('advances updatedAt and persists the self-edit (AC1)', async () => {
     const { createHandler } = await import('./updateMember.js');
-    const docSend = vi.fn().mockResolvedValue({});
+    const docSend = memberRow();
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
@@ -82,21 +116,12 @@ describe('updateMember handler', () => {
     expect(body.phone).toBe('+12705550142');
     expect(typeof body.updatedAt).toBe('number');
 
-    const call = docSend.mock.calls[0]?.[0] as {
-      input: {
-        TransactItems: Array<{
-          Update?: { Key: { pk: string; sk: string } };
-          Put?: { Item: { pk: string; sk: string; entityType: string } };
-        }>;
-      };
-    };
-    const transactInput = call.input;
-    expect(transactInput.TransactItems[0]?.Update?.Key).toEqual({
-      pk: 'DEPT#NICHOLS#MEMBER#mbr-1',
-      sk: 'METADATA',
+    const items = transactItems(docSend);
+    expect(items[0]?.Update).toMatchObject({
+      Key: { pk: 'DEPT#NICHOLS#MEMBER#mbr-1', sk: 'METADATA' },
     });
-    expect(transactInput.TransactItems[1]?.Put?.Item.pk).toBe('DEPT#NICHOLS#OUTBOX#mbr-1');
-    expect(transactInput.TransactItems[1]?.Put?.Item.entityType).toBe('OUTBOX_ENTRY');
+    expect(items[1]?.Put?.Item.pk).toBe('DEPT#NICHOLS#OUTBOX#mbr-1');
+    expect(items[1]?.Put?.Item.entityType).toBe('OUTBOX_ENTRY');
   });
 
   it('denies a cross-member edit with 403 before touching DynamoDB (AC2)', async () => {
@@ -135,7 +160,7 @@ describe('updateMember handler', () => {
 
     it('lets a MEMBER update their own profile under SelfUpdateMember', async () => {
       const { createHandler } = await import('./updateMember.js');
-      const docSend = vi.fn().mockResolvedValue({});
+      const docSend = memberRow();
       const vp = memberVpClient();
       const wrapped = createHandler({ client: fakeDocClient(docSend), vpClient: vp.client });
 
@@ -150,7 +175,7 @@ describe('updateMember handler', () => {
 
       expect(result).toMatchObject({ statusCode: 200 });
       expect(vp.send.mock.calls[0]?.[0].input.action.actionId).toBe('SelfUpdateMember');
-      expect(docSend).toHaveBeenCalledOnce();
+      expect(transactItems(docSend)).toHaveLength(3);
     });
 
     it("403s a MEMBER editing another member's profile (UpdateMember) without touching DynamoDB", async () => {
@@ -175,7 +200,7 @@ describe('updateMember handler', () => {
 
     it("lets an admin (UpdateMember ALLOW) edit another member's profile", async () => {
       const { createHandler } = await import('./updateMember.js');
-      const docSend = vi.fn().mockResolvedValue({});
+      const docSend = memberRow();
       const vp = fakeVpClient('ALLOW');
       const wrapped = createHandler({ client: fakeDocClient(docSend), vpClient: vp });
 
@@ -252,12 +277,18 @@ describe('updateMember handler', () => {
 
   it('returns 404 when the MEMBER row does not exist (transaction condition fails)', async () => {
     const { createHandler } = await import('./updateMember.js');
-    const docSend = vi.fn().mockRejectedValue(
-      new TransactionCanceledException({
-        message: 'Transaction cancelled',
-        $metadata: {},
-        CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
-      }),
+    const docSend = memberRow(() =>
+      Promise.reject(
+        new TransactionCanceledException({
+          message: 'Transaction cancelled',
+          $metadata: {},
+          CancellationReasons: [
+            { Code: 'ConditionalCheckFailed' },
+            { Code: 'None' },
+            { Code: 'None' },
+          ],
+        }),
+      ),
     );
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
@@ -280,7 +311,7 @@ describe('updateMember handler', () => {
     const { createHandler } = await import('./updateMember.js');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const docSend = vi.fn().mockRejectedValue(new Error('table throttled'));
+    const docSend = memberRow(() => Promise.reject(new Error('table throttled')));
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
@@ -311,7 +342,7 @@ describe('updateMember handler', () => {
   it('emits a MemberProfileUpdated business metric on success', async () => {
     const { createHandler } = await import('./updateMember.js');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const docSend = vi.fn().mockResolvedValue({});
+    const docSend = memberRow();
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
@@ -362,7 +393,7 @@ describe('updateMember handler', () => {
 
   it('rejects a phone it cannot read as a US or international number, with a clear 400 and no write', async () => {
     const { createHandler } = await import('./updateMember.js');
-    const docSend = vi.fn().mockResolvedValue({});
+    const docSend = memberRow();
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
@@ -386,7 +417,7 @@ describe('updateMember handler', () => {
 
   it('emits the normalised E.164 phone on personnel.member.updated', async () => {
     const { createHandler } = await import('./updateMember.js');
-    const docSend = vi.fn().mockResolvedValue({});
+    const docSend = memberRow();
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
@@ -401,19 +432,17 @@ describe('updateMember handler', () => {
       ),
     );
 
-    const items = (
-      docSend.mock.calls[0]?.[0] as {
-        input: { TransactItems: Array<{ Put?: { Item: { payload?: { phone?: string } } } }> };
-      }
-    ).input.TransactItems;
-    expect(items.find((item) => item.Put)?.Put?.Item.payload?.phone).toBe('+12705550142');
+    const items = transactItems(docSend);
+    expect(items.find((item) => item.Put)?.Put?.Item.payload).toMatchObject({
+      phone: '+12705550142',
+    });
   });
 
   // Review MINOR-1: clearing a phone removes it from the row and tells the alerting plane, which
   // removes the member's SMS and voice targets - never keeps paging the old number.
   it('phone: null removes the phone and emits phone: null', async () => {
     const { createHandler } = await import('./updateMember.js');
-    const docSend = vi.fn().mockResolvedValue({});
+    const docSend = memberRow();
     const wrapped = createHandler({
       client: fakeDocClient(docSend),
       vpClient: fakeVpClient('ALLOW'),
@@ -424,23 +453,105 @@ describe('updateMember handler', () => {
     );
 
     expect(result).toMatchObject({ statusCode: 200 });
-    const items = (
-      docSend.mock.calls[0]?.[0] as {
-        input: {
-          TransactItems: Array<{
-            Update?: {
-              UpdateExpression: string;
-              ExpressionAttributeValues: Record<string, unknown>;
-            };
-            Put?: { Item: { payload?: Record<string, unknown> } };
-          }>;
-        };
-      }
-    ).input.TransactItems;
+    const items = transactItems(docSend);
     const update = items.find((item) => item.Update)!.Update!;
     expect(update.UpdateExpression).toMatch(/ REMOVE #phone$/);
     expect(update.ExpressionAttributeValues).not.toHaveProperty(':phone');
     expect(items.find((item) => item.Put)?.Put?.Item.payload).toMatchObject({ phone: null });
+  });
+
+  it('writes an AUDIT_LOG_ENTRY with the old and new value of every changed field (F9.4)', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = memberRow();
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    await wrapped(
+      buildEvent(
+        'mbr-1',
+        JSON.stringify({ phone: null, firstName: 'Sam' }),
+        { authorization: 'Bearer token' },
+        SELF,
+      ),
+    );
+
+    const audit = transactItems(docSend)[2]?.Put;
+    expect(audit?.Item).toMatchObject({
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'MEMBER',
+      mutatedEntityId: 'mbr-1',
+      action: 'UPDATE',
+      actorId: 'mbr-1',
+      changedFields: { phone: { old: '+12705550100', new: null } },
+      gsi3pk: 'DEPT#NICHOLS#AUDIT#ENTITY#MEMBER#mbr-1',
+    });
+    expect(audit?.Item.gsi3sk).toBe(String(audit?.Item.ts));
+    expect(audit?.Item.changedFields).not.toHaveProperty('firstName');
+  });
+
+  it('rewrites gsi3sk when the last name changes, so the roster re-sorts', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = memberRow();
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    await wrapped(
+      buildEvent(
+        'mbr-1',
+        JSON.stringify({ lastName: 'Young' }),
+        { authorization: 'Bearer token' },
+        SELF,
+      ),
+    );
+
+    const update = transactItems(docSend)[0]?.Update;
+    expect(update?.UpdateExpression).toContain('gsi3sk = :gsi3sk');
+    expect(update?.ExpressionAttributeValues[':gsi3sk']).toBe('Young#mbr-1');
+  });
+
+  it('leaves gsi3sk alone on an edit that does not rename the member', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = memberRow();
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    await wrapped(
+      buildEvent(
+        'mbr-1',
+        JSON.stringify({ phone: '(270) 555-0142' }),
+        { authorization: 'Bearer token' },
+        SELF,
+      ),
+    );
+
+    expect(transactItems(docSend)[0]?.Update?.UpdateExpression).not.toContain('gsi3sk');
+  });
+
+  it('404s a non-email edit for a member that does not exist, writing nothing', async () => {
+    const { createHandler } = await import('./updateMember.js');
+    const docSend = memberRow(undefined, null);
+    const wrapped = createHandler({
+      client: fakeDocClient(docSend),
+      vpClient: fakeVpClient('ALLOW'),
+    });
+
+    const result = await wrapped(
+      buildEvent(
+        'mbr-1',
+        JSON.stringify({ firstName: 'Sam' }),
+        { authorization: 'Bearer token' },
+        SELF,
+      ),
+    );
+
+    expect(result).toMatchObject({ statusCode: 404 });
+    expect(transactItems(docSend)).toBeUndefined();
   });
 });
 
@@ -645,6 +756,15 @@ describe('updateMember email changes', () => {
       { Name: 'email_verified', Value: 'true' },
     ]);
     logSpy.mockRestore();
+  });
+
+  it('writes nothing, not even an audit row, when the only submitted field is an unchanged email', async () => {
+    const idp = cognito();
+    const docSend = table('mine@example.com');
+    const result = await run('mbr-1', { email: ' Mine@Example.COM ' }, SELF, docSend, idp);
+    expect(result).toMatchObject({ statusCode: 200 });
+    expect(idp.send).not.toHaveBeenCalled();
+    expect(docSend.mock.calls.map(([c]) => c.constructor.name)).toEqual(['GetCommand']);
   });
 
   it('writes nothing when Cognito refuses the change', async () => {

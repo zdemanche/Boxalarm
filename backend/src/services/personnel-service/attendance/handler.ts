@@ -13,6 +13,7 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
+import { buildOutboxRecord } from '@boxalarm/outbox';
 import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { createDynamoClient, readAttendanceTableConfig } from '../dynamoClient.js';
@@ -22,6 +23,8 @@ import { logInfo } from '../lib/logger.js';
 import { getLosapPointRules } from '../losap/configRepository.js';
 import { computeLosapPoints } from '../losap/rules.js';
 import { buildLosapEntryItem } from '../losap/repository.js';
+import { getLosapYear } from '../losap/departmentYear.js';
+import { isPlausibleEpochSeconds } from '../epochSeconds.js';
 
 export const ACTIVITY_TYPES = ['CALL', 'DRILL', 'MEETING', 'WORK_DETAIL', 'STANDBY'] as const;
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
@@ -95,7 +98,7 @@ function validateAttendanceBody(raw: string | undefined): AttendanceInput | unde
   if (!isActivityType(activityType)) {
     return undefined;
   }
-  if (typeof occurredAt !== 'number' || !Number.isFinite(occurredAt)) {
+  if (typeof occurredAt !== 'number' || !isPlausibleEpochSeconds(occurredAt)) {
     return undefined;
   }
   if (typeof hours !== 'number' || !Number.isFinite(hours) || hours < 0) {
@@ -141,12 +144,11 @@ async function recordAttendanceFor(
     emitAttendanceMetric('Failed', 'ValidationError');
     return validationProblem(
       traceId,
-      'The request body must supply activityType (one of CALL/DRILL/MEETING/WORK_DETAIL/STANDBY), a numeric occurredAt, and a non-negative numeric hours.',
+      'The request body must supply activityType (one of CALL/DRILL/MEETING/WORK_DETAIL/STANDBY), a whole-number epoch-second occurredAt, and a non-negative numeric hours.',
     );
   }
 
   const keys = buildAttendanceKeys(deptId, memberId, input.occurredAt);
-  const year = new Date(input.occurredAt * 1000).getUTCFullYear();
 
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
@@ -166,6 +168,10 @@ async function recordAttendanceFor(
     const losapPointsAwarded = rules
       ? computeLosapPoints(input.activityType, rules.pointsByActivityType)
       : 0;
+
+    const year = rules
+      ? await getLosapYear(client, tableName, deptId, input.occurredAt)
+      : undefined;
 
     const item = {
       ...keys,
@@ -188,7 +194,25 @@ async function recordAttendanceFor(
               ConditionExpression: 'attribute_not_exists(sk)',
             },
           },
-          ...(rules
+          {
+            Put: {
+              TableName: tableName,
+              Item: buildOutboxRecord(
+                deptId,
+                'personnel-service',
+                'personnel.attendance.recorded',
+                memberId,
+                {
+                  deptId,
+                  memberId,
+                  activityType: input.activityType,
+                  activityId: input.refId ?? keys.sk,
+                  losapPoints: losapPointsAwarded,
+                },
+              ),
+            },
+          },
+          ...(rules && year !== undefined
             ? [
                 {
                   Put: {

@@ -53,6 +53,32 @@ describe('queryMemberDiagnostics', () => {
     expect(result.timeline).toEqual([]);
   });
 
+  it('reports a member paged only at tone 2 as on the eligible roster with their timeline', async () => {
+    const pk = 'DEPT#NICHOLS#DISPATCH#dispatch-1';
+    const client = fakeClient({
+      [`${pk}#RECEIPT#mbr-1#push#2`]: {
+        pk,
+        sk: 'RECEIPT#mbr-1#push#2',
+        entityType: 'DELIVERY_RECEIPT',
+        memberId: 'mbr-1',
+        channel: 'push',
+        toneSequence: 2,
+        sentAt: 100,
+      },
+    });
+
+    const result = await queryMemberDiagnostics(
+      client,
+      'alerting-table',
+      DEPT_ID,
+      'dispatch-1',
+      'mbr-1',
+    );
+
+    expect(result.onEligibleRoster).toBe(true);
+    expect(result.timeline).toHaveLength(1);
+  });
+
   it('returns the member-filtered timeline and device state when the member is on the roster (AC1, AC2)', async () => {
     const pk = 'DEPT#NICHOLS#DISPATCH#dispatch-1';
     const client = fakeClient({

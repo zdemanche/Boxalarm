@@ -42,7 +42,9 @@ export type CadMetric =
   /** Sweep: updates still owing their push after 10 minutes (alarmed). */
   | 'CadUpdateUnnotified'
   /** A CAD resend of a dispatch already written: not paged again. */
-  | 'CadIngressDuplicate';
+  | 'CadIngressDuplicate'
+  /** A repeat of content already applied (a new timestamp only): not paged, not alarmed. */
+  | 'CadIngressUnchanged';
 
 /**
  * One count, with the dimensionless set (what the alarms read) plus one set carrying every

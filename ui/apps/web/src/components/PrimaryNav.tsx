@@ -117,7 +117,7 @@ export function NavListContent({ onNavigate }: NavListContentProps) {
           type="button"
           onClick={() => {
             onNavigate?.();
-            void signOut();
+            signOut().catch(() => undefined);
           }}
           className={[styles.navLink, styles.navButton].join(' ')}
         >

@@ -1,10 +1,11 @@
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
-import type { SQSEvent } from 'aws-lambda';
+import type { SQSBatchResponse, SQSEvent } from 'aws-lambda';
 import { createDynamoClient, readNotificationConfig } from '../dynamoClient.js';
 import { APPARATUS_DEFECT_CATEGORY } from '../reminders/categories.js';
 import { deliverImmediately, type ImmediateDeliverySpec } from './immediateDelivery.js';
 import {
+  handleRecords,
   logError,
   MalformedEventError,
   METRIC_NAMESPACE,
@@ -72,11 +73,11 @@ function toDefectReminder({ payload, eventTime }: EventEnvelope): DefectReminder
  * interruption-level alert. Recording it for the digest too means an out-of-service
  * defect reaches at least every channel a minor one does, even if the immediate email fails.
  */
-export const handler = async (event: SQSEvent): Promise<void> => {
+export const handler = async (event: SQSEvent): Promise<SQSBatchResponse> => {
   const { tableName } = readNotificationConfig(process.env);
   const ddb = createDynamoClient(process.env);
 
-  for (const record of event.Records) {
+  return handleRecords(event, async (record) => {
     let envelope: EventEnvelope;
     let reminder: DefectReminder;
     try {
@@ -122,5 +123,5 @@ export const handler = async (event: SQSEvent): Promise<void> => {
         throw error;
       }
     }
-  }
+  });
 };

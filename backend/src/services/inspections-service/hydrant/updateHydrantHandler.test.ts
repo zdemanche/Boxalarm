@@ -98,6 +98,31 @@ describe('updateHydrantInner (business logic, AC2/AC3)', () => {
     expect(outboxItem?.source).toBe('inspections-service');
   });
 
+  it('a flow test recorded alone advances nextFlowTestDue a year past the test date (AC2)', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock
+      .on(GetCommand)
+      .resolves({ Item: { status: 'IN_SERVICE', nextFlowTestDue: '2026-09-01' } });
+    const body = JSON.stringify({ lastFlowTestDate: '2026-10-13', status: 'IN_SERVICE' });
+    const result = (await updateHydrantInner(buildEvent({ body }), validPrincipal)) as {
+      statusCode: number;
+    };
+    expect(result.statusCode).toBe(200);
+    const update =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[0]?.Update;
+    expect(update?.ExpressionAttributeValues?.[':nextFlowTestDue']).toBe('2027-10-13');
+  });
+
+  it('records the authenticated member as the audit actor (F9.4)', async () => {
+    ddbMock.on(TransactWriteCommand).resolves({});
+    ddbMock.on(GetCommand).resolves({ Item: { status: 'IN_SERVICE' } });
+    const body = JSON.stringify({ status: 'OUT_OF_SERVICE' });
+    await updateHydrantInner(buildEvent({ body }), validPrincipal);
+    const audit =
+      ddbMock.commandCalls(TransactWriteCommand)[0]?.args[0].input.TransactItems?.[2]?.Put?.Item;
+    expect(audit?.actorId).toBe('mbr-102');
+  });
+
   it('rejects an absent body with 400 RFC7807', async () => {
     const result = (await updateHydrantInner(buildEvent({}), validPrincipal)) as {
       statusCode: number;

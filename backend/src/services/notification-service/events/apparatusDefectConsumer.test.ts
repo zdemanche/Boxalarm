@@ -75,6 +75,8 @@ interface CommandLike {
   input: Record<string, unknown>;
 }
 
+const FAILED_MSG = { batchItemFailures: [{ itemIdentifier: 'msg-1' }] };
+
 type TableSend = Mock<(command: CommandLike) => Promise<unknown>>;
 
 interface Table {
@@ -112,7 +114,19 @@ function fakeTable(mutes: Record<string, { push: boolean; email: boolean }> = {}
         (existing.claimedAt as number) < staleBefore;
       if (command.input.ConditionExpression && existing && !takeover) {
         return Promise.reject(
-          Object.assign(new Error('exists'), { name: 'ConditionalCheckFailedException' }),
+          Object.assign(new Error('exists'), {
+            name: 'ConditionalCheckFailedException',
+            ...(command.input.ReturnValuesOnConditionCheckFailure === 'ALL_OLD'
+              ? {
+                  Item: Object.fromEntries(
+                    Object.entries(existing).map(([k, v]) => [
+                      k,
+                      typeof v === 'number' ? { N: String(v) } : { S: String(v) },
+                    ]),
+                  ),
+                }
+              : {}),
+          }),
         );
       }
       rows.set(key, item);
@@ -250,9 +264,7 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await load(table.send, push);
 
-    await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow(
-      'immediate delivery failed for 1 recipient(s)',
-    );
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
     expect(
       inboxRows(table)
         .map((row) => row.memberId)
@@ -276,7 +288,7 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     const { handler } = await load(table.send, push);
 
     for (let receive = 1; receive <= 5; receive += 1) {
-      await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow();
+      await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
     }
 
     expect(push).toHaveBeenCalledTimes(10);
@@ -299,8 +311,8 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await load(table.send, push);
 
-    await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow();
-    await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow();
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
 
     expect(push).not.toHaveBeenCalled();
     expect(inboxRows(table)).toHaveLength(2);
@@ -341,7 +353,39 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     expect(push).toHaveBeenCalledTimes(2);
   });
 
-  it('a fresh claim held by a concurrent invocation is not taken over (no double push)', async () => {
+  it('a fresh claim without sentAt is in flight: the message fails to be retried, not acked, and no push doubles', async () => {
+    const table = fakeTable();
+    const push = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { handler, CLAIM_STALE_MS } = await load(table.send, push);
+    const lt1Claim = {
+      pk: 'DEPT#NICHOLS#MEMBER#LT-1',
+      sk: 'DEFECTPUSH#evt-9',
+      claimedAt: Date.now() - 6_000,
+    };
+    table.rows.set('DEPT#NICHOLS#MEMBER#LT-1|DEFECTPUSH#evt-9', lt1Claim);
+
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
+    expect(push.mock.calls.map((call) => (call[1] as { memberId: string }).memberId)).toEqual([
+      'APP-1',
+    ]);
+    expect(warnSpy.mock.calls[0]![0]).toContain('claim_in_flight');
+
+    table.rows.set('DEPT#NICHOLS#MEMBER#LT-1|DEFECTPUSH#evt-9', {
+      ...lt1Claim,
+      claimedAt: Date.now() - CLAIM_STALE_MS - 1_000,
+    });
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual({
+      batchItemFailures: [],
+    });
+    expect(push.mock.calls.map((call) => (call[1] as { memberId: string }).memberId)).toEqual([
+      'APP-1',
+      'LT-1',
+    ]);
+  });
+
+  it('a claim already stamped sentAt is acked as AlreadySent, never sent again', async () => {
     const table = fakeTable();
     const push = vi.fn().mockResolvedValue(undefined);
     const { handler } = await load(table.send, push);
@@ -349,10 +393,12 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
       pk: 'DEPT#NICHOLS#MEMBER#LT-1',
       sk: 'DEFECTPUSH#evt-9',
       claimedAt: Date.now(),
+      sentAt: Date.now(),
     });
 
-    await handler(sqsEvent(defect({ outOfService: true })));
-
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual({
+      batchItemFailures: [],
+    });
     expect(push.mock.calls.map((call) => (call[1] as { memberId: string }).memberId)).toEqual([
       'APP-1',
     ]);
@@ -381,9 +427,7 @@ describe('apparatusDefectConsumer — out-of-service defect (immediate path)', (
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await load(send, push);
 
-    await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow(
-      'roster unavailable',
-    );
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
     expect(push).not.toHaveBeenCalled();
   });
 });
@@ -412,7 +456,7 @@ describe('apparatusDefectConsumer — out-of-service email (review M1)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await load(table.send, vi.fn().mockResolvedValue(undefined), email);
 
-    await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow();
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
 
     const transact = table.send.mock.calls
       .map((call) => call[0])
@@ -437,7 +481,7 @@ describe('apparatusDefectConsumer — out-of-service email (review M1)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await load(table.send, push, email);
 
-    await expect(handler(sqsEvent(defect({ outOfService: true })))).rejects.toThrow();
+    await expect(handler(sqsEvent(defect({ outOfService: true })))).resolves.toEqual(FAILED_MSG);
     await handler(sqsEvent(defect({ outOfService: true })));
 
     expect(push).toHaveBeenCalledTimes(2);
@@ -487,6 +531,29 @@ describe('apparatusDefectConsumer — nobody to tell', () => {
   });
 });
 
+describe('apparatusDefectConsumer — batch', () => {
+  it('reports only the malformed record and still handles the valid records around it', async () => {
+    const table = fakeTable();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { handler } = await load(table.send, vi.fn().mockResolvedValue(undefined));
+    const valid = (id: string, defectId: string) => ({
+      ...sqsEvent(defect({ defectId })).Records[0]!,
+      messageId: id,
+    });
+    const malformed = { ...valid('msg-bad', 'DEF-X'), body: '{"detail":{}}' };
+
+    const result = await handler({
+      Records: [valid('msg-a', 'DEF-A'), malformed, valid('msg-b', 'DEF-B')],
+    });
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'msg-bad' }] });
+    const transacts = table.send.mock.calls.filter(
+      (call) => call[0].constructor.name === 'TransactWriteCommand',
+    );
+    expect(transacts).toHaveLength(2);
+  });
+});
+
 describe('apparatusDefectConsumer — malformed', () => {
   it.each([null, 'not-a-date'])(
     'rejects an event whose eventTime is %s rather than keying the inbox on the clock',
@@ -495,8 +562,8 @@ describe('apparatusDefectConsumer — malformed', () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const { handler } = await load(send, vi.fn());
 
-      await expect(handler(sqsEvent(defect({ outOfService: true }), eventTime))).rejects.toThrow(
-        'apparatus.defect.reported event failed shape validation',
+      await expect(handler(sqsEvent(defect({ outOfService: true }), eventTime))).resolves.toEqual(
+        FAILED_MSG,
       );
       expect(send).not.toHaveBeenCalled();
     },
@@ -507,9 +574,7 @@ describe('apparatusDefectConsumer — malformed', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await load(send, vi.fn());
 
-    await expect(handler(sqsEvent(defect({ unitLabel: undefined })))).rejects.toThrow(
-      'apparatus.defect.reported event failed shape validation',
-    );
+    await expect(handler(sqsEvent(defect({ unitLabel: undefined })))).resolves.toEqual(FAILED_MSG);
     expect(send).not.toHaveBeenCalled();
   });
 });

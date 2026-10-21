@@ -4,7 +4,6 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   buildLosapEntryItem,
   getMemberLosapTotal,
-  getYearEndReport,
   LosapRepositoryUnavailableError,
 } from './repository.js';
 
@@ -95,62 +94,6 @@ describe('getMemberLosapTotal', () => {
     const send = vi.fn().mockRejectedValue(new Error('DynamoDB unavailable'));
     await expect(
       getMemberLosapTotal(fakeClient(send), TABLE, DEPT_ID, 'mbr-102', 2026),
-    ).rejects.toThrow(LosapRepositoryUnavailableError);
-  });
-});
-
-describe('getYearEndReport', () => {
-  it('reports a per-member total for the full department (AC4)', async () => {
-    const send = vi
-      .fn()
-      .mockImplementation(
-        (command: { input: { ExpressionAttributeValues: Record<string, string> } }) => {
-          const pk = command.input.ExpressionAttributeValues[':pk'];
-          return Promise.resolve(
-            pk === 'DEPT#NICHOLS#MEMBER#mbr-1'
-              ? { Items: [{ points: 4 }] }
-              : { Items: [{ points: 1 }, { points: 1 }] },
-          );
-        },
-      );
-
-    const report = await getYearEndReport(
-      fakeClient(send),
-      TABLE,
-      DEPT_ID,
-      ['mbr-1', 'mbr-2'],
-      2026,
-    );
-
-    expect(report).toEqual([
-      { memberId: 'mbr-1', totalPoints: 4 },
-      { memberId: 'mbr-2', totalPoints: 2 },
-    ]);
-  });
-
-  it('chunks a large roster instead of firing one unbounded concurrent query per member (P1)', async () => {
-    const memberIds = Array.from({ length: 63 }, (_, index) => `mbr-${index}`);
-    let maxInFlight = 0;
-    let inFlight = 0;
-    const send = vi.fn().mockImplementation(async () => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await Promise.resolve();
-      inFlight -= 1;
-      return { Items: [{ points: 1 }] };
-    });
-
-    const report = await getYearEndReport(fakeClient(send), TABLE, DEPT_ID, memberIds, 2026);
-
-    expect(report).toHaveLength(63);
-    expect(send).toHaveBeenCalledTimes(63);
-    expect(maxInFlight).toBeLessThanOrEqual(25);
-  });
-
-  it('wraps a DynamoDB failure in LosapRepositoryUnavailableError', async () => {
-    const send = vi.fn().mockRejectedValue(new Error('DynamoDB unavailable'));
-    await expect(
-      getYearEndReport(fakeClient(send), TABLE, DEPT_ID, ['mbr-1'], 2026),
     ).rejects.toThrow(LosapRepositoryUnavailableError);
   });
 });

@@ -1,11 +1,13 @@
 import { Component, lazy, Suspense, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { AppShell } from './components/AppShell';
 import { SignInPage } from './pages/SignInPage';
 import { RequireAuth } from './routing/RequireAuth';
 import { RequireRole } from './routing/RequireRole';
+import { reportClientError } from './lib/telemetry';
+import { safeReturnPath } from './routing/returnTo';
 import { GlobalTokensStyle } from './styles/GlobalTokensStyle';
 
 const AuthCallbackPage = lazy(() =>
@@ -143,6 +145,10 @@ class ConfigErrorBoundary extends Component<{ children: ReactNode }, { failed: b
     return { failed: true };
   }
 
+  componentDidCatch(error: unknown) {
+    reportClientError(error, { boundary: 'config' });
+  }
+
   render() {
     if (this.state.failed) {
       return (
@@ -158,9 +164,10 @@ class ConfigErrorBoundary extends Component<{ children: ReactNode }, { failed: b
 
 function LoginRoute() {
   const { isAuthenticated, isLoading } = useAuth();
+  const returnTo = safeReturnPath((useLocation().state as { from?: unknown } | null)?.from);
   if (isLoading) return null;
-  if (isAuthenticated) return <Navigate to="/" replace />;
-  return <SignInPage />;
+  if (isAuthenticated) return <Navigate to={returnTo} replace />;
+  return <SignInPage returnTo={returnTo} />;
 }
 
 function roleGuarded(element: ReactNode) {

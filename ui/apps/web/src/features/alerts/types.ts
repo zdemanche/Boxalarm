@@ -2,7 +2,6 @@ export type AckStatus = 'RESPONDING' | 'NOT_RESPONDING' | 'DIRECT_TO_SCENE' | 'U
 
 export interface RosterEntry {
   memberId: string;
-  name: string;
   ackStatus: AckStatus;
   eta: number | null;
   assignedApparatusId: string | null;
@@ -186,14 +185,15 @@ export interface ActiveDispatchList {
   truncated: boolean;
 }
 
-export type DeliveryReceiptStatus = 'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT';
+export type DeliveryReceiptStatus =
+  'FAILED' | 'OPENED' | 'DELIVERED' | 'SENT_UNCONFIRMED' | 'SENT' | 'NOT_SENT';
 
 export interface DeliveryReceipt {
   memberId: string;
   channel: string;
   toneSequence: number;
   status: DeliveryReceiptStatus;
-  sentAt: number;
+  sentAt?: number;
   deliveredAt: number | null;
   openedAt: number | null;
   failureReason: string | null;
@@ -241,6 +241,7 @@ export interface RidingSeatPosition {
   code: string;
   label: string;
   requiredQual?: string;
+  version: number;
   assignment?: RidingSeatAssignment;
 }
 
@@ -301,11 +302,18 @@ export interface DiagnosticsResult {
 
 export type CanaryResult = 'PASS' | 'FAIL';
 
+export interface CanaryChannelResult {
+  ok: boolean;
+  ms: number;
+  reason?: string;
+  delivered?: boolean;
+}
+
 export interface CanaryRun {
   ranAt: number;
   result: CanaryResult;
   latencyMs: number;
-  channelResults: Record<string, unknown>;
+  channelResults: Record<string, CanaryChannelResult>;
 }
 
 export interface CanaryStatus {

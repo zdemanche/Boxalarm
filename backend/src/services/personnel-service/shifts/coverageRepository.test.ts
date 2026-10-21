@@ -57,8 +57,9 @@ describe('coverageRepository (real DynamoDB via LocalStack)', () => {
     await container.stop();
   });
 
-  function memberItem(deptId: typeof DEPT_ID, memberId: string) {
+  function memberItem(deptId: typeof DEPT_ID, memberId: string, status?: string) {
     return {
+      ...(status === undefined ? {} : { status }),
       pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
       sk: 'METADATA',
       entityType: 'MEMBER',
@@ -153,6 +154,25 @@ describe('coverageRepository (real DynamoDB via LocalStack)', () => {
 
       expect(eligibleQualCodes.has('DRIVER_OPERATOR')).toBe(true);
       expect(eligibleQualCodes.has('OFFICER_CERT')).toBe(false);
+    });
+
+    it('B1-073: ignores qualifications held only by RETIRED or LOA members', async () => {
+      const rosterDeptId = toVerifiedDeptId({ deptId: `INACTIVE-${Date.now()}` });
+      await put(memberItem(rosterDeptId, 'retired', 'RETIRED'));
+      await put(memberItem(rosterDeptId, 'on-loa', 'LOA'));
+      await put(memberItem(rosterDeptId, 'probie', 'PROBATIONARY'));
+      await put(buildMemberQualification(rosterDeptId, 'retired', 'DRIVER_OPERATOR'));
+      await put(buildMemberQualification(rosterDeptId, 'on-loa', 'OFFICER_CERT'));
+      await put(buildMemberQualification(rosterDeptId, 'probie', 'EMT'));
+
+      const eligibleQualCodes = await buildEligibleQualCodeIndex(
+        client,
+        TABLE_NAME,
+        rosterDeptId,
+        'corr-4',
+      );
+
+      expect([...eligibleQualCodes]).toEqual(['EMT']);
     });
 
     it('returns an empty set when the dept roster has zero members', async () => {

@@ -28,8 +28,12 @@ A dropped *genuine* dispatch is covered by N1.9: parallel radio tone-out is reta
 **Recipient address.** Each department has its own address, with a random token in the local part (`dispatch+<token>@<ingress-domain>`). The token only cuts noise. It is **not** authentication, because anyone who has seen one page email knows it.
 
 **Replay and duplicates:**
-- Before paging, do a conditional put (`attribute_not_exists`) keyed on the RFC 5322 `Message-ID` plus the DKIM `b=` signature hash, with a TTL of 24 h. The SES `messageId` alone is not enough, because a re-sent copy gets a new one.
+- Before paging, do a conditional put (`attribute_not_exists`) keyed on the RFC 5322 `Message-ID` (or `NOMSGID` when there is none) plus a hash of the **Subject** and the decoded body, with a TTL of 24 h for a Message-ID key. The SES `messageId` alone is not enough, because a re-sent copy gets a new one. **Amended 2026-10-14:** the DKIM `b=` and `bh=` values are never part of the key, because an appended signature would change it. For each of Message-ID and Subject, when every signature covers the header the key uses the header as received; when none covers it, the key uses the weak value (`NOMSGID`, no Subject); when only some cover it, the weak key is used and the strong key is written and checked too. A copy with signatures appended or stripped therefore finds the original's marker, and all of those markers are written in the dispatch transaction. A key with no Message-ID lives until the message could no longer pass freshness.
+- The marker records the SES message id as its `origin`. A retry of the same SES message is skipped and is not counted as `CadIngressReplayRejected`.
+- **Deploy note.** Messages stored under the earlier key can be accepted once more inside their replay TTL (24 h) across the deploy that introduced the Subject-based key.
 - Reject any message whose DKIM `t=` or `Date` header is more than 10 minutes old.
+
+**One email to several sources.** A message addressed to several departments' ingress addresses (mutual aid) pages each department once, through its first source that passes the sender check, so two addresses of one department never page it twice. An unknown or stale address among them never hides a valid one, one department's failed source lookup does not hold up the others, and skipped recipients are counted (`CadIngressUnknownRecipient`). *(Amended 2026-10-14.)*
 
 **A CAD that cannot pass DKIM+SPF cannot use this path.** For example, a county relay that rewrites or does not sign mail. Put a relay that signs in front of it, or use the webhook. There is no allowlist-only mode, because a `From` header on its own is trivially forged.
 
@@ -107,7 +111,7 @@ WAF evaluates before API Gateway counts the request, so a blocked flood never re
 
 That is **about $7 per month per stack** at CAD volumes. It is the simpler of the two paid options and is recommended for prod. Both options wait on the user's approval, because they are fixed monthly costs.
 
-**Operational recommendation.** Where the CAD supports both, configure **both** email and webhook for the department. A flood or outage on one path then does not stop dispatches arriving on the other. Radio tone-out (N1.9) remains the page of record regardless.
+**Operational recommendation.** Where the CAD supports both, configure **both** email and webhook for the department. A flood or outage on one path then does not stop dispatches arriving on the other. Radio tone-out (N1.9) remains the page of record regardless. **Amended 2026-10-14:** the same call arriving on both channels can page the department twice (`docs/decisions/2026-09-30-cad-dispatch-updates.md` rule 8, `docs/runbooks/cad-ingress.md`). That is accepted as the safe failure.
 
 ## Observability and tests
 

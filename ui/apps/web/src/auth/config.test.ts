@@ -49,3 +49,14 @@ test('buildForgotPasswordUrl throws when the hosted UI origin is missing', async
   const { buildForgotPasswordUrl } = await import('./config');
   expect(() => buildForgotPasswordUrl()).toThrow(/COGNITO_HOSTED_UI_ORIGIN/);
 });
+
+test('buildLogoutUrl targets the hosted-UI /logout with the web client and the registered logout origin', async () => {
+  vi.stubEnv('COGNITO_HOSTED_UI_ORIGIN', 'https://boxalarm.auth.us-east-1.amazoncognito.com/');
+  const { buildLogoutUrl } = await import('./config');
+  const url = new URL(buildLogoutUrl());
+  expect(url.origin + url.pathname).toBe(
+    'https://boxalarm.auth.us-east-1.amazoncognito.com/logout',
+  );
+  expect(url.searchParams.get('client_id')).toBe('test-web-client');
+  expect(url.searchParams.get('logout_uri')).toBe(window.location.origin);
+});

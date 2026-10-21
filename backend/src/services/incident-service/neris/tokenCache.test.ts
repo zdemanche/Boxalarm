@@ -173,6 +173,16 @@ describe('getAccessToken', () => {
   });
 });
 
+describe('NerisCredentialsRejectedError', () => {
+  it('does not expose the client secret when serialized', async () => {
+    const { NerisCredentialsRejectedError } = await import('./tokenCache.js');
+    const error = new NerisCredentialsRejectedError(401, CONFIG);
+    expect(JSON.stringify(error)).not.toContain(CONFIG.clientSecret);
+    expect(Object.keys(error)).toEqual([]);
+    expect(error.rejectedConfig).toBe(CONFIG);
+  });
+});
+
 describe('getTokenCache', () => {
   beforeEach(() => {
     vi.resetModules();

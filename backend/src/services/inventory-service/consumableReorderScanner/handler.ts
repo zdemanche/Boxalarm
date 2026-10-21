@@ -95,6 +95,7 @@ export async function publishReorderDueEvent(
           entityType: 'CONSUMABLE_REORDER_FLAG',
           flaggedAt: params.now.toISOString(),
           eventId,
+          ttl: Math.floor(params.now.getTime() / 1000) + 7 * 86400,
         },
         ConditionExpression: 'attribute_not_exists(pk) OR attribute_not_exists(publishedAt)',
       }),

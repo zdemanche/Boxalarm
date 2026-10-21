@@ -148,15 +148,21 @@ describe('eligibility snapshot writers are accepted by DynamoDB', () => {
     const { handler } = await import('./eligibilityChangedConsumer.js');
 
     // No snapshot yet.
-    await handler(eligibilityChanged('q-1', 'mbr-b', 'INTERIOR', true), {} as never, () => {});
+    expect(
+      await handler(eligibilityChanged('q-1', 'mbr-b', 'INTERIOR', true), {} as never, () => {}),
+    ).toEqual({ batchItemFailures: [] });
     expect((await snapshot('mbr-b'))?.quals).toEqual(['INTERIOR']);
 
     // A snapshot the member.updated consumer created (quals seeded to []).
     await memberHandler(
       memberUpdated('2026-09-14T00:00:03.000Z', { memberId: 'mbr-c', active: true }),
     );
-    await handler(eligibilityChanged('q-2', 'mbr-c', 'DRIVER', true), {} as never, () => {});
-    await handler(eligibilityChanged('q-3', 'mbr-c', 'INTERIOR', true), {} as never, () => {});
+    expect(
+      await handler(eligibilityChanged('q-2', 'mbr-c', 'DRIVER', true), {} as never, () => {}),
+    ).toEqual({ batchItemFailures: [] });
+    expect(
+      await handler(eligibilityChanged('q-3', 'mbr-c', 'INTERIOR', true), {} as never, () => {}),
+    ).toEqual({ batchItemFailures: [] });
     expect((await snapshot('mbr-c'))?.quals).toEqual(['DRIVER', 'INTERIOR']);
     expect((await snapshot('mbr-c'))?.roles).toEqual([]);
   }, 60_000);

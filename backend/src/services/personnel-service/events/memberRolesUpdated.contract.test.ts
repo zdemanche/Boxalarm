@@ -45,6 +45,7 @@ async function produceOutboxItem(): Promise<Record<string, unknown>> {
     ['MEMBER'],
     ['MEMBER', 'OFFICER', 'CHIEF'],
     'chief-1',
+    1,
   );
   const transact = (producerSend.mock.calls[0]?.[0] as SentCommand).input as {
     TransactItems: Array<{ Put?: { Item: Record<string, unknown> } }>;

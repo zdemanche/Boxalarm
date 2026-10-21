@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { RidingBoardWriteError } from './entity.js';
 import { assignSeat, getRidingBoard } from './repository.js';
 import { createRidingBoardFakeClient } from './testDynamoFake.js';
 
@@ -257,7 +259,113 @@ describe('assignSeat', () => {
   });
 });
 
+describe('assignSeat cancellation branches', () => {
+  const baseInput = {
+    unitId: 'ENGINE-2',
+    positionCode: 'DRIVER',
+    memberId: 'MBR-0012',
+    expectedVersion: 0,
+    assignedBy: 'officer-1',
+  };
+
+  it('B2-101: two concurrent calls with the same clientAssignmentId yield one ASSIGNED and one ALREADY_APPLIED', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem()]);
+
+    const outcomes = await Promise.all([
+      assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, { ...baseInput, clientAssignmentId: 'C-1' }),
+      assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, { ...baseInput, clientAssignmentId: 'C-1' }),
+    ]);
+
+    expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual(['ALREADY_APPLIED', 'ASSIGNED']);
+  });
+
+  it('B2-101: an apparatus that goes out of service between lookup and write is reported OUT_OF_SERVICE', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem()]);
+    const realSend = client.send.bind(client) as (command: unknown) => Promise<unknown>;
+    vi.spyOn(client, 'send').mockImplementation(((command: unknown) => {
+      if (
+        (command as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand'
+      ) {
+        client.put(apparatusItem({ status: 'OUT_OF_SERVICE' }));
+      }
+      return realSend(command);
+    }) as never);
+
+    const outcome = await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...baseInput,
+      clientAssignmentId: 'C-1',
+    });
+
+    expect(outcome).toEqual({ kind: 'OUT_OF_SERVICE' });
+  });
+
+  it('B2-101: a cancellation with no ConditionalCheckFailed reason throws RidingBoardWriteError', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem()]);
+    const realSend = client.send.bind(client) as (command: unknown) => Promise<unknown>;
+    vi.spyOn(client, 'send').mockImplementation(((command: unknown) => {
+      if (
+        (command as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand'
+      ) {
+        return Promise.reject(
+          new TransactionCanceledException({
+            message: 'cancelled',
+            CancellationReasons: [{ Code: 'None' }, { Code: 'TransactionConflict' }],
+            $metadata: {},
+          }),
+        );
+      }
+      return realSend(command);
+    }) as never);
+
+    await expect(
+      assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, { ...baseInput, clientAssignmentId: 'C-1' }),
+    ).rejects.toBeInstanceOf(RidingBoardWriteError);
+  });
+
+  it('B2-269: a failed transaction does not emit RidingAssignmentFailed itself (the handler owns it)', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem()]);
+    const realSend = client.send.bind(client) as (command: unknown) => Promise<unknown>;
+    vi.spyOn(client, 'send').mockImplementation(((command: unknown) => {
+      if (
+        (command as { constructor: { name: string } }).constructor.name === 'TransactWriteCommand'
+      ) {
+        return Promise.reject(new Error('boom'));
+      }
+      return realSend(command);
+    }) as never);
+    const written = [vi.spyOn(console, 'log'), vi.spyOn(process.stdout, 'write')];
+
+    await expect(
+      assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, { ...baseInput, clientAssignmentId: 'C-1' }),
+    ).rejects.toBeInstanceOf(RidingBoardWriteError);
+
+    const output = written.flatMap((spy) => spy.mock.calls.map((call) => String(call[0])));
+    expect(output.some((line) => line.includes('RidingAssignmentFailed'))).toBe(false);
+  });
+});
+
 describe('getRidingBoard', () => {
+  it('B2-096: a seat holding an unkeyable memberId does not fail the whole board read', async () => {
+    const client = createRidingBoardFakeClient([
+      apparatusItem(),
+      configItem(),
+      {
+        pk: DISPATCH_PK,
+        sk: 'SEAT#APP-ENGINE-2#DRIVER',
+        apparatusId: 'APP-ENGINE-2',
+        positionCode: 'DRIVER',
+        memberId: '',
+        version: 1,
+        assignedAt: 1,
+        assignedBy: 'officer-1',
+      },
+    ]);
+
+    const board = await getRidingBoard(client, TABLE, DEPT_ID, DISPATCH_ID);
+
+    expect(board.apparatus[0]?.positions[0]?.assignment?.memberId).toBe('');
+  });
+
   it('AC1: renders in-service apparatus with configured riding positions', async () => {
     const client = createRidingBoardFakeClient([apparatusItem(), configItem()]);
 
@@ -357,5 +465,35 @@ describe('getRidingBoard', () => {
     expect(
       board.apparatus[0]?.positions.every((position) => position.assignment === undefined),
     ).toBe(true);
+  });
+
+  it('B2-005: a vacated seat still exposes its stored version so the next assign can pass the version condition', async () => {
+    const client = createRidingBoardFakeClient([apparatusItem(), configItem()]);
+    const seat = { unitId: 'ENGINE-2', positionCode: 'DRIVER', assignedBy: 'officer-1' };
+    await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...seat,
+      memberId: 'MBR-0012',
+      expectedVersion: 0,
+      clientAssignmentId: 'CLIENT-1',
+    });
+    await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...seat,
+      memberId: null,
+      expectedVersion: 1,
+      clientAssignmentId: 'CLIENT-2',
+    });
+
+    const board = await getRidingBoard(client, TABLE, DEPT_ID, DISPATCH_ID);
+    const driver = board.apparatus[0]?.positions.find((position) => position.code === 'DRIVER');
+    expect(driver?.assignment).toBeUndefined();
+    expect(driver?.version).toBe(2);
+
+    const outcome = await assignSeat(client, TABLE, DEPT_ID, DISPATCH_ID, {
+      ...seat,
+      memberId: 'MBR-0034',
+      expectedVersion: driver?.version ?? 0,
+      clientAssignmentId: 'CLIENT-3',
+    });
+    expect(outcome).toMatchObject({ kind: 'ASSIGNED', memberId: 'MBR-0034', version: 3 });
   });
 });

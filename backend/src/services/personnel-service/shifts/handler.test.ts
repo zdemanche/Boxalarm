@@ -76,6 +76,8 @@ const validCreateBody = JSON.stringify({
   positions: [{ positionCode: 'DRIVER', requiredQual: 'DRIVER_OPERATOR' }],
 });
 
+const FUTURE_SHIFT = { startAt: Date.now(), endAt: Date.now() + 86_400_000 };
+
 describe('shifts handler', () => {
   const originalEnv = { ...process.env };
   const mockSend = vi.fn();
@@ -122,7 +124,7 @@ describe('shifts handler', () => {
     };
     expect(body.status).toBe('OPEN');
     expect(body.positions).toHaveLength(1);
-    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a non-officer member with 403 (AC3)', async () => {
@@ -469,7 +471,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   it('AC1: POST /shifts/{id}/release clears the claim and re-triggers status recalculation', async () => {
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
     ]);
     const { handler } = await import('./handler.js');
@@ -485,6 +487,62 @@ describe('shifts handler — release/swap/approve routes', () => {
     expect(result).toMatchObject({ statusCode: 200 });
     const body = JSON.parse((result as { body: string }).body) as { released: boolean };
     expect(body.released).toBe(true);
+  });
+
+  it('emits scheduling.coverage_gap.detected for a newly created, unclaimed shift', async () => {
+    const fakeDoc = createFakeDocumentClient([]);
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocClient: () => fakeDoc,
+      readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+      GSI3_INDEX_NAME: 'GSI3',
+    }));
+    const { handler } = await import('./handler.js');
+    const result = await handler(
+      buildEvent({ body: validCreateBody }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 201 });
+    const { shiftId } = JSON.parse((result as { body: string }).body) as { shiftId: string };
+    const outbox = [...fakeDoc.all()].filter((item) => item.entityType === 'OUTBOX_ENTRY');
+    expect(outbox).toMatchObject([
+      {
+        eventType: 'scheduling.coverage_gap.detected',
+        payload: { deptId: DEPT_ID, shiftId, requiredQuals: ['DRIVER_OPERATOR'] },
+      },
+    ]);
+  });
+
+  it('emits scheduling.coverage_gap.detected when a release leaves the shift short', async () => {
+    const fakeDoc = createFakeDocumentClient([
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
+      buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
+    ]);
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocClient: () => fakeDoc,
+      readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+      GSI3_INDEX_NAME: 'GSI3',
+    }));
+    const { handler } = await import('./handler.js');
+    const result = await handler(
+      buildEvent({
+        rawPath: '/api/v1/personnel/shifts/shift-1/release',
+        body: JSON.stringify({ positionCode: 'DRIVER' }),
+        sub: 'member-1',
+      }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 200 });
+    const gapEvents = [...fakeDoc.all()].filter(
+      (item) => typeof item.eventType === 'string' && item.eventType.startsWith('scheduling.'),
+    );
+    expect(gapEvents).toMatchObject([
+      {
+        eventType: 'scheduling.coverage_gap.detected',
+        payload: { deptId: DEPT_ID, shiftId: 'shift-1', gapReason: 'short' },
+      },
+    ]);
   });
 
   it('AC1: POST /shifts/{id}/release with a missing positionCode returns 400', async () => {
@@ -503,7 +561,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   it('AC1: POST /shifts/{id}/release returns 409 when not claimed by the caller', async () => {
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-2' }),
     ]);
     const { handler } = await import('./handler.js');
@@ -541,7 +599,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('AC1: release succeeds with 200 even when the post-commit status recalculation fails', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const realDoc = createFakeDocumentClient([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
     ]);
     const wrappedDoc = {
@@ -577,7 +635,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   it('AC2: POST /shifts/{id}/swap creates a PENDING request when requiresOfficerApproval is true', async () => {
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       buildMember(VERIFIED_DEPT_ID, 'member-2'),
     ]);
@@ -616,7 +674,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   it('POST /shifts/{id}/swap returns 409 when the caller does not currently hold the position', async () => {
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-9' }),
       buildMember(VERIFIED_DEPT_ID, 'member-2'),
     ]);
@@ -635,7 +693,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   it('POST /shifts/{id}/swap returns 404 when toMemberId does not resolve to a real department member', async () => {
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
     ]);
     const { handler } = await import('./handler.js');
@@ -653,7 +711,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   it('POST /shifts/{id}/swap returns 400 when toMemberId equals the caller', async () => {
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
     ]);
     const { handler } = await import('./handler.js');
@@ -672,7 +730,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('AC4: POST /shifts/{id}/swap/{swapId}/approve by a non-officer returns 403 when requiresOfficerApproval is true', async () => {
     const requestedAt = 1_800_000_500;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -703,7 +761,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('AC4: POST /shifts/{id}/swap/{swapId}/approve by an officer approves and transfers the claim', async () => {
     const requestedAt = 1_800_000_600;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -757,7 +815,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('POST /shifts/{id}/swap/{swapId}/approve routes the officer decision through Cedar and returns 403 on a Cedar deny', async () => {
     const requestedAt = 1_800_000_650;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -792,7 +850,7 @@ describe('shifts handler — release/swap/approve routes', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const requestedAt = 1_800_000_660;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -828,7 +886,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('AC3: POST /shifts/{id}/swap/{swapId}/approve self-accept by the target member transfers without officer role', async () => {
     const requestedAt = 1_800_000_700;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -859,7 +917,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('POST /shifts/{id}/swap/{swapId}/approve self-accept by someone other than the target member returns 403', async () => {
     const requestedAt = 1_800_000_800;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -888,7 +946,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   });
 
   it('POST /shifts/{id}/swap/{swapId}/approve returns 404 when the swap does not exist', async () => {
-    mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1')]);
+    mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT)]);
     const { handler } = await import('./handler.js');
     const result = await handler(
       buildEvent({
@@ -920,7 +978,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   it('POST /shifts/{id}/swap/{swapId}/approve returns 409 when the swap is already resolved (not PENDING)', async () => {
     const requestedAt = 1_800_001_000;
     mockFakeDoc([
-      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
       buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-2' }),
       {
         pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
@@ -949,6 +1007,86 @@ describe('shifts handler — release/swap/approve routes', () => {
     expect(result).toMatchObject({ statusCode: 409 });
   });
 
+  it('B1-018: POST /shifts/{id}/swap/{swapId}/approve returns 409 shift-closed once the shift has ended', async () => {
+    const requestedAt = 1_800_001_000;
+    mockFakeDoc([
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', {
+        startAt: Date.now() - 9 * 3_600_000,
+        endAt: Date.now() - 3_600_000,
+      }),
+      buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', { claimedByMemberId: 'member-1' }),
+      {
+        pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
+        sk: `SWAP#${requestedAt}`,
+        entityType: 'SHIFT_SWAP_REQUEST',
+        positionCode: 'DRIVER',
+        fromMemberId: 'member-1',
+        toMemberId: 'member-2',
+        status: 'PENDING',
+        requiresOfficerApproval: true,
+        requestedAt,
+      },
+    ]);
+    authzSend.mockResolvedValue({ decision: Decision.ALLOW });
+    const { handler } = await import('./handler.js');
+    const result = await handler(
+      buildEvent({
+        rawPath: `/api/v1/personnel/shifts/shift-1/swap/${requestedAt}/approve`,
+        body: undefined,
+        groups: 'OFFICER',
+        authorization: 'Bearer token',
+        requestId: 'req-swap-closed',
+      }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 409 });
+    expect(JSON.parse((result as { body: string }).body)).toMatchObject({
+      type: 'https://boxalarm.dev/problems/shift-closed',
+      traceId: 'req-swap-closed',
+    });
+  });
+
+  it('B1-021: POST /shifts/{id}/swap/{swapId}/approve returns 403 shift-position-not-qualified when the target lacks the qualification', async () => {
+    const requestedAt = 1_800_001_000;
+    mockFakeDoc([
+      buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
+      buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', {
+        claimedByMemberId: 'member-1',
+        requiredQual: 'DRIVER_OPERATOR',
+      }),
+      {
+        pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
+        sk: `SWAP#${requestedAt}`,
+        entityType: 'SHIFT_SWAP_REQUEST',
+        positionCode: 'DRIVER',
+        fromMemberId: 'member-1',
+        toMemberId: 'member-2',
+        status: 'PENDING',
+        requiresOfficerApproval: true,
+        requestedAt,
+      },
+    ]);
+    authzSend.mockResolvedValue({ decision: Decision.ALLOW });
+    const { handler } = await import('./handler.js');
+    const result = await handler(
+      buildEvent({
+        rawPath: `/api/v1/personnel/shifts/shift-1/swap/${requestedAt}/approve`,
+        body: undefined,
+        groups: 'OFFICER',
+        authorization: 'Bearer token',
+        requestId: 'req-swap-qual',
+      }),
+      {} as never,
+      () => undefined,
+    );
+    expect(result).toMatchObject({ statusCode: 403 });
+    expect(JSON.parse((result as { body: string }).body)).toMatchObject({
+      type: 'https://boxalarm.dev/problems/shift-position-not-qualified',
+      traceId: 'req-swap-qual',
+    });
+  });
+
   it('returns 500 when the authorizer deptId claim is malformed on the release route', async () => {
     mockFakeDoc([]);
     const { handler } = await import('./handler.js');
@@ -967,7 +1105,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   describe('POST .../shifts/{id}/claim', () => {
     it('AC1: atomically claims an open SHIFT_POSITION via a conditional update', async () => {
       mockFakeDoc([
-        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
         buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
       ]);
       const { handler } = await import('./handler.js');
@@ -987,9 +1125,41 @@ describe('shifts handler — release/swap/approve routes', () => {
       expect(body.claimedByMemberId).toBe('member-1');
     });
 
+    it('emits scheduling.coverage_gap.resolved when the claim fills the last open position', async () => {
+      const fakeDoc = createFakeDocumentClient([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
+      ]);
+      vi.doMock('./dynamoClient.js', () => ({
+        getDocClient: () => fakeDoc,
+        readPersonnelTableConfig: () => ({ tableName: 'platform-service' }),
+        GSI3_INDEX_NAME: 'GSI3',
+      }));
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          sub: 'member-1',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 201 });
+      const gapEvents = [...fakeDoc.all()].filter(
+        (item) => typeof item.eventType === 'string' && item.eventType.startsWith('scheduling.'),
+      );
+      expect(gapEvents).toMatchObject([
+        {
+          eventType: 'scheduling.coverage_gap.resolved',
+          payload: { deptId: DEPT_ID, shiftId: 'shift-1' },
+        },
+      ]);
+    });
+
     it('never uses BatchWriteItem for the claim (test note): only Get/TransactWrite commands are issued', async () => {
       const fakeDoc = createFakeDocumentClient([
-        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
         buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
       ]);
       const sendSpy = vi.spyOn(fakeDoc, 'send');
@@ -1015,7 +1185,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
     it('AC2: returns 409 with no double-booking when the position is already claimed', async () => {
       mockFakeDoc([
-        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
         buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', {
           claimedByMemberId: 'member-2',
         }),
@@ -1033,8 +1203,59 @@ describe('shifts handler — release/swap/approve routes', () => {
       expect(result).toMatchObject({ statusCode: 409 });
     });
 
+    it('B1-018: returns 409 shift-closed with a problem body when the shift has ended', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', {
+          startAt: Date.now() - 9 * 3_600_000,
+          endAt: Date.now() - 3_600_000,
+        }),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER'),
+      ]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          requestId: 'req-closed',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 409 });
+      expect(JSON.parse((result as { body: string }).body)).toMatchObject({
+        type: 'https://boxalarm.dev/problems/shift-closed',
+        status: 409,
+        traceId: 'req-closed',
+      });
+    });
+
+    it('B1-021: returns 403 shift-position-not-qualified when the member lacks the qualification', async () => {
+      mockFakeDoc([
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
+        buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', {
+          requiredQual: 'DRIVER_OPERATOR',
+        }),
+      ]);
+      const { handler } = await import('./handler.js');
+      const result = await handler(
+        buildEvent({
+          rawPath: '/api/v1/personnel/shifts/shift-1/claim',
+          body: JSON.stringify({ positionCode: 'DRIVER' }),
+          requestId: 'req-qual',
+        }),
+        {} as never,
+        () => undefined,
+      );
+      expect(result).toMatchObject({ statusCode: 403 });
+      expect(JSON.parse((result as { body: string }).body)).toMatchObject({
+        type: 'https://boxalarm.dev/problems/shift-position-not-qualified',
+        status: 403,
+        traceId: 'req-qual',
+      });
+    });
+
     it('returns 404 when the shift position does not exist', async () => {
-      mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1')]);
+      mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT)]);
       const { handler } = await import('./handler.js');
       const result = await handler(
         buildEvent({
@@ -1065,7 +1286,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   describe('GET .../shifts/{id}', () => {
     it('returns the shift with positions and claim state, including claimedByMe for the caller', async () => {
       mockFakeDoc([
-        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
         buildShiftPosition(VERIFIED_DEPT_ID, 'shift-1', 'DRIVER', {
           claimedByMemberId: 'member-1',
         }),
@@ -1113,7 +1334,7 @@ describe('shifts handler — release/swap/approve routes', () => {
   describe('GET .../shifts/swaps/mine', () => {
     it('returns only pending swaps where the caller is the proposer or the target', async () => {
       mockFakeDoc([
-        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
         {
           pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
           sk: 'SWAP#1',
@@ -1160,7 +1381,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
   describe('GET .../shifts/swaps/pending', () => {
     it('rejects a non-officer with 403 on a Cedar deny', async () => {
-      mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1')]);
+      mockFakeDoc([buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT)]);
       authzSend.mockResolvedValue({ decision: Decision.DENY });
       const { handler } = await import('./handler.js');
       const result = await handler(
@@ -1179,7 +1400,7 @@ describe('shifts handler — release/swap/approve routes', () => {
 
     it('returns pending swaps that require officer approval when Cedar allows', async () => {
       mockFakeDoc([
-        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1'),
+        buildDutyShift(VERIFIED_DEPT_ID, 'shift-1', FUTURE_SHIFT),
         {
           pk: `DEPT#${DEPT_ID}#SHIFT#shift-1`,
           sk: 'SWAP#1',

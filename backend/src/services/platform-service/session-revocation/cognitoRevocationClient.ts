@@ -102,14 +102,28 @@ export interface ResolveMemberDeptIdInput {
   readonly username: string;
 }
 
+export interface ResolvedMember {
+  readonly deptId: string | undefined;
+  readonly sub: string | undefined;
+}
+
+export async function resolveMemberIdentity(
+  client: CognitoIdentityProviderClient,
+  input: ResolveMemberDeptIdInput,
+): Promise<ResolvedMember> {
+  const result = await client.send(
+    new AdminGetUserCommand({ UserPoolId: input.userPoolId, Username: input.username }),
+  );
+  const attribute = (name: string): string | undefined =>
+    result.UserAttributes?.find((candidate) => candidate.Name === name)?.Value;
+  return { deptId: attribute('custom:deptId'), sub: attribute('sub') };
+}
+
 export async function resolveMemberDeptId(
   client: CognitoIdentityProviderClient,
   input: ResolveMemberDeptIdInput,
 ): Promise<string | undefined> {
-  const result = await client.send(
-    new AdminGetUserCommand({ UserPoolId: input.userPoolId, Username: input.username }),
-  );
-  return result.UserAttributes?.find((attribute) => attribute.Name === 'custom:deptId')?.Value;
+  return (await resolveMemberIdentity(client, input)).deptId;
 }
 
 /**

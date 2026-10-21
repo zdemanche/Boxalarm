@@ -3,17 +3,21 @@ import type { VerifiedAccessToken } from '../../platform-service/authorizer/toke
 import { readPersonnelConfig } from '../lib/config.js';
 import { problemResponse, resolveTraceId } from '../lib/problemDetails.js';
 import { ForbiddenError, requireAdminRole } from '../lib/authz.js';
-import { createMember } from '../lib/memberRepository.js';
+import { createMember, getMember } from '../lib/memberRepository.js';
 import type { NewMemberInput } from '../lib/memberRepository.js';
 import { logError, logInfo } from '../lib/logger.js';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
+  InvalidMemberEmailError,
   MemberLoginExistsError,
+  adoptExistingLogin,
   createMemberLogin,
   deleteMemberLogin,
   getCognitoClient,
   readMemberLoginConfig,
 } from '../lib/memberLogin.js';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { normalizeEmail } from '../lib/email.js';
 import { INVALID_PHONE_MESSAGE, normalizePhoneE164 } from '../lib/phone.js';
 
 const REQUIRED_FIELDS = [
@@ -51,10 +55,11 @@ function parseCreateInput(body: string | undefined): NewMemberInput {
     throw new Error(INVALID_PHONE_MESSAGE);
   }
   input.phone = phone;
+  input.email = normalizeEmail(input.email!);
   return input as NewMemberInput;
 }
 
-function emitMemberCreatedMetric(): void {
+function emitMemberMetric(name: 'MemberCreated' | 'MemberLoginOrphaned'): void {
   console.log(
     JSON.stringify({
       _aws: {
@@ -63,11 +68,11 @@ function emitMemberCreatedMetric(): void {
           {
             Namespace: 'Boxalarm/personnel',
             Dimensions: [[]],
-            Metrics: [{ Name: 'MemberCreated', Unit: 'Count' }],
+            Metrics: [{ Name: name, Unit: 'Count' }],
           },
         ],
       },
-      MemberCreated: 1,
+      [name]: 1,
     }),
   );
 }
@@ -111,23 +116,45 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
 
   // The login comes first: its sub is the memberId (lib/memberLogin.ts).
   const cognito = getCognitoClient();
+  const deptId = toVerifiedDeptId(ctx);
   let memberId: string;
+  let adopted = false;
   try {
-    memberId = await createMemberLogin(cognito, loginConfig, {
-      email: input.email,
-      deptId: toVerifiedDeptId(ctx),
-    });
+    memberId = await createMemberLogin(cognito, loginConfig, { email: input.email, deptId });
   } catch (error) {
-    if (error instanceof MemberLoginExistsError) {
+    if (!(error instanceof MemberLoginExistsError)) {
+      if (error instanceof InvalidMemberEmailError) {
+        logError('member.create.invalid_email', traceId, error);
+        return problemResponse(400, 'Bad Request', 'email is not a valid email address.', traceId);
+      }
+      logError('member.create.login_failed', traceId, error);
+      return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
+    }
+    let adoptedSub: string | undefined;
+    try {
+      adoptedSub = await adoptExistingLogin(cognito, loginConfig, { email: input.email, deptId });
+    } catch (lookupError) {
+      logError('member.create.login_lookup_failed', traceId, lookupError);
+      return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
+    }
+    if (!adoptedSub) {
       return problemResponse(409, 'Conflict', error.message, traceId);
     }
-    logError('member.create.login_failed', traceId, error);
-    return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
+    memberId = adoptedSub;
+    adopted = true;
   }
 
   try {
+    if (adopted && (await getMember(config.tableName, ctx, memberId))) {
+      return problemResponse(
+        409,
+        'Conflict',
+        new MemberLoginExistsError(input.email).message,
+        traceId,
+      );
+    }
     const member = await createMember(config.tableName, ctx, input, ctx.sub, memberId);
-    emitMemberCreatedMetric();
+    emitMemberMetric('MemberCreated');
     logInfo('member.created', traceId, { memberId: member.memberId });
     return {
       statusCode: 201,
@@ -136,11 +163,25 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     };
   } catch (error) {
     logError('member.create.failed', traceId, error);
-    try {
-      await deleteMemberLogin(cognito, loginConfig, input.email);
-    } catch (cleanupError) {
-      // The login now exists with no member row; re-adding the member will answer 409.
-      logError('member.create.login_orphaned', traceId, cleanupError, { memberId });
+    if (
+      !adopted &&
+      error instanceof TransactionCanceledException &&
+      error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
+      return problemResponse(
+        409,
+        'Conflict',
+        new MemberLoginExistsError(input.email).message,
+        traceId,
+      );
+    }
+    if (!adopted) {
+      try {
+        await deleteMemberLogin(cognito, loginConfig, input.email);
+      } catch (cleanupError) {
+        logError('member.create.login_orphaned', traceId, cleanupError, { memberId });
+        emitMemberMetric('MemberLoginOrphaned');
+      }
     }
     return problemResponse(503, 'Service Unavailable', 'unable to create member', traceId);
   }

@@ -1,5 +1,5 @@
 import { certExpiryItem, CERT_EXPIRY_CATEGORY } from '../reminders/categories.js';
-import { createReminderConsumer, requireString } from './reminderIngest.js';
+import { createReminderConsumer, optionalString, requireString } from './reminderIngest.js';
 
 const LABEL = 'cert.expiry.due';
 
@@ -20,11 +20,17 @@ export const handler = createReminderConsumer({
   toReminder: ({ payload }) => {
     const certId = requireString(payload, 'certId', LABEL);
     const expiryDate = requireString(payload, 'expiryDate', LABEL);
+    const memberId = requireString(payload, 'memberId', LABEL);
+    const item = {
+      ...certExpiryItem(certId, expiryDate, optionalString(payload, 'certType')),
+      link: { kind: 'member' as const, id: memberId },
+    };
     return {
       deptId: requireString(payload, 'deptId', LABEL),
       category: CERT_EXPIRY_CATEGORY,
-      memberId: requireString(payload, 'memberId', LABEL),
-      item: certExpiryItem(certId, expiryDate),
+      memberId,
+      item,
+      roleItem: { ...item, detail: `held by ${memberId}, expires ${expiryDate}` },
     };
   },
 });

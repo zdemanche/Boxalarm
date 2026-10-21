@@ -159,3 +159,16 @@ test('a truck-check defect is queued with the check-sheet item code', async () =
   );
   enqueueSpy.mockRestore();
 });
+
+test('getOpenDefects returns the unit status from the same read', async () => {
+  mockApiRequest.mockResolvedValue({
+    json: async () => ({ status: 'IN_SERVICE', openDefects: [{ defectId: 'd-1' }] }),
+  });
+
+  const { result } = await renderHook(() => useChecksRepository());
+
+  await expect(result.current.getOpenDefects!('E1')).resolves.toEqual({
+    defects: [{ defectId: 'd-1' }],
+    unitStatus: 'IN_SERVICE',
+  });
+});

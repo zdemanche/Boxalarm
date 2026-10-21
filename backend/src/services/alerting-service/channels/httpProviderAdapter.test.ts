@@ -126,6 +126,80 @@ describe('sendViaHttpProvider', () => {
   });
 });
 
+describe('sendViaHttpProvider — rotated vendor key', () => {
+  function rotatingSecretsClient(keys: string[]) {
+    const send = vi.fn().mockImplementation(() => Promise.resolve({ SecretString: keys.shift() }));
+    return { client: { send } as unknown as SecretsManagerClient, send };
+  }
+
+  function bearerFetch(acceptedKey: string) {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
+      const bearer = ((init as RequestInit).headers as Record<string, string>).authorization;
+      const ok = bearer === `Bearer ${acceptedKey}`;
+      return Promise.resolve({ ok, status: ok ? 200 : 401 } as Response);
+    });
+    globalThis.fetch = fetchMock;
+    return fetchMock;
+  }
+
+  it('evicts the refused cached key on 401, re-reads the secret and succeeds with the new key', async () => {
+    const { client, send } = rotatingSecretsClient(['old-key', 'new-key']);
+    const fetchMock = bearerFetch('new-key');
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await sendViaHttpProvider('sms', 't', 'msg', process.env, { secretsClient: client });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws after a single re-read when the refused key is unchanged', async () => {
+    const { client, send } = rotatingSecretsClient(['same-key', 'same-key']);
+    const fetchMock = bearerFetch('other-key');
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await expect(
+      sendViaHttpProvider('sms', 't', 'msg', process.env, { secretsClient: client }),
+    ).rejects.toThrow('sms provider responded 401');
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads the secret at most once per window while the refusal persists', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, send } = rotatingSecretsClient(['same-key', 'same-key', 'same-key']);
+      bearerFetch('other-key');
+      const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+      const attempt = () =>
+        sendViaHttpProvider('sms', 't', 'msg', process.env, { secretsClient: client });
+
+      await expect(attempt()).rejects.toThrow('401');
+      await expect(attempt()).rejects.toThrow('401');
+      expect(send).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(Date.now() + 31_000);
+      await expect(attempt()).rejects.toThrow('401');
+      expect(send).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not touch the cached key on a 5xx', async () => {
+    const { client, send } = rotatingSecretsClient(['key-1']);
+    globalThis.fetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue({ ok: false, status: 500 } as Response);
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await expect(
+      sendViaHttpProvider('sms', 't', 'msg', process.env, { secretsClient: client }),
+    ).rejects.toThrow('sms provider responded 500');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('sendViaHttpProvider — isTest selects the sandbox credentials (architecture §1.3)', () => {
   function secretsClientBySecretId(): {
     client: SecretsManagerClient;
@@ -200,5 +274,35 @@ describe('sendViaHttpProvider — isTest selects the sandbox credentials (archit
     expect(authHeader(fetchMock, 0)).toBe('Bearer key-for-sms-secret');
     expect(authHeader(fetchMock, 1)).toBe('Bearer key-for-sms-sandbox-secret');
     expect(authHeader(fetchMock, 2)).toBe('Bearer key-for-sms-secret');
+  });
+
+  it('retries once on a fresh connection when a keep-alive socket was closed while the Lambda was frozen', async () => {
+    const { client } = fakeSecretsClient('api-key-1');
+    const socketClosed = Object.assign(new TypeError('fetch failed'), {
+      cause: { code: 'UND_ERR_SOCKET' },
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(socketClosed)
+      .mockResolvedValue({ ok: true, status: 200 } as Response);
+    globalThis.fetch = fetchMock;
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await sendViaHttpProvider('sms', '+12035550101', 'msg', process.env, { secretsClient: client });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a timeout', async () => {
+    const { client } = fakeSecretsClient('api-key-1');
+    const timeout = new DOMException('timed out', 'TimeoutError');
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(timeout);
+    globalThis.fetch = fetchMock;
+    const { sendViaHttpProvider } = await import('./httpProviderAdapter.js');
+
+    await expect(
+      sendViaHttpProvider('sms', '+12035550101', 'msg', process.env, { secretsClient: client }),
+    ).rejects.toBe(timeout);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

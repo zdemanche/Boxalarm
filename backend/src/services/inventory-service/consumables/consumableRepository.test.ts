@@ -1,9 +1,15 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  PutCommand,
+  QueryCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { describe, expect, it, vi } from 'vitest';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import {
+  createConsumable,
   listConsumables,
   queryConsumablesBelowThreshold,
   restockConsumable,
@@ -207,6 +213,28 @@ describe('restockConsumable', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
+  it('records the prior stockLevel as old and returns the new value (audit before/after)', async () => {
+    let auditFields: unknown;
+    const { client } = fakeDocClient((command) => {
+      if (command instanceof UpdateCommand) {
+        expect(command.input.ReturnValues).toBe('ALL_OLD');
+        return { Attributes: consumableItem('GLOVES-L', { stockLevel: 12, reorderThreshold: 5 }) };
+      }
+      if (command instanceof PutCommand) {
+        auditFields = command.input.Item?.changedFields;
+      }
+      return {};
+    });
+
+    const consumable = await restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', {
+      stockLevel: 3,
+    });
+
+    expect(auditFields).toEqual({ stockLevel: { old: 12, new: 3 } });
+    expect(consumable?.stockLevel).toBe(3);
+    expect(consumable?.reorderFlagged).toBe(true);
+  });
+
   it('returns undefined (no audit write) when the item does not exist', async () => {
     const { client, send } = fakeDocClient(() => {
       throw new ConditionalCheckFailedException({ message: 'condition failed', $metadata: {} });
@@ -228,5 +256,72 @@ describe('restockConsumable', () => {
     await expect(
       restockConsumable(client, TABLE, DEPT_ID, 'chief-1', 'GLOVES-L', { stockLevel: 40 }),
     ).rejects.toThrow('boom');
+  });
+});
+
+describe('createConsumable', () => {
+  const input = {
+    itemName: 'Nitrile gloves',
+    stockLevel: 40,
+    reorderThreshold: 10,
+    location: 'Station 1',
+  };
+
+  it('writes a GSI3-indexed CONSUMABLE_STOCK with itemName and a CREATE audit entry, so the new item is listable', async () => {
+    const puts: PutCommand['input'][] = [];
+    const { client } = fakeDocClient((command) => {
+      if (command instanceof TransactWriteCommand) {
+        for (const transactItem of command.input.TransactItems ?? []) {
+          if (transactItem.Put) {
+            puts.push(transactItem.Put);
+          }
+        }
+        return {};
+      }
+      throw new Error(`unexpected command: ${String(command)}`);
+    });
+
+    const created = await createConsumable(client, TABLE, DEPT_ID, 'MBR-1', input);
+
+    const item = puts[0]?.Item;
+    expect(item).toMatchObject({
+      entityType: 'CONSUMABLE_STOCK',
+      sk: 'METADATA',
+      itemName: 'Nitrile gloves',
+      stockLevel: 40,
+      reorderThreshold: 10,
+      location: 'Station 1',
+      gsi3pk: 'DEPT#NICHOLS#CONSUMABLE',
+    });
+    expect(item?.pk).toBe(`DEPT#NICHOLS#CONSUMABLE#${created.itemId}`);
+    expect(item?.gsi3sk).toBe(created.itemId);
+    expect(puts[0]?.ConditionExpression).toBe('attribute_not_exists(pk)');
+    expect(puts[1]?.Item).toMatchObject({
+      mutatedEntityType: 'CONSUMABLE_STOCK',
+      mutatedEntityId: created.itemId,
+      action: 'CREATE',
+      actorId: 'MBR-1',
+    });
+    expect(created).toMatchObject({
+      itemName: 'Nitrile gloves',
+      deptId: 'NICHOLS',
+      reorderFlagged: false,
+    });
+  });
+
+  it('round-trips through the list read path', async () => {
+    let stored: Record<string, unknown> | undefined;
+    const { client } = fakeDocClient((command) => {
+      if (command instanceof TransactWriteCommand) {
+        stored ??= command.input.TransactItems?.[0]?.Put?.Item;
+        return {};
+      }
+      return { Items: [stored] };
+    });
+
+    const created = await createConsumable(client, TABLE, DEPT_ID, 'MBR-1', input);
+    const listed = await listConsumables(client, TABLE, DEPT_ID);
+
+    expect(listed).toEqual([created]);
   });
 });

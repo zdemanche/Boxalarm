@@ -59,8 +59,8 @@ describe('deliveryBaselineHandler', () => {
     }));
 
     const { handler } = await import('./deliveryBaselineHandler.js');
-    const from = 0;
-    const to = 91 * 24 * 60 * 60; // 91 days — over the cap
+    const from = 1_700_000_000;
+    const to = from + 91 * 24 * 60 * 60; // 91 days — over the cap
     const result = await handler(buildEvent({ from: String(from), to: String(to) }));
 
     expect(result).toMatchObject({ statusCode: 400 });
@@ -79,11 +79,30 @@ describe('deliveryBaselineHandler', () => {
     }));
 
     const { handler } = await import('./deliveryBaselineHandler.js');
-    const from = 0;
-    const to = 89 * 24 * 60 * 60; // 89 days — within the cap
+    const from = 1_700_000_000;
+    const to = from + 89 * 24 * 60 * 60; // 89 days — within the cap
     const result = await handler(buildEvent({ from: String(from), to: String(to) }));
 
     expect(result).toMatchObject({ statusCode: 200 });
+  });
+
+  it.each([
+    ['unpadded small epoch values', '1', '2'],
+    ['millisecond values', '1760000000000', '1760000001000'],
+    ['fractional values', '1700000000.5', '1700000001'],
+  ])('returns 400 and queries nothing for %s', async (_name, from, to) => {
+    mockVerifiedPermissions('ALLOW');
+    const send = vi.fn();
+    vi.doMock('../eligibility/dynamoClient.js', () => ({
+      createDynamoClient: vi.fn(() => ({ send })),
+      readAlertingConfig: vi.fn(() => ({ tableName: 'alerting-table' })),
+    }));
+
+    const { handler } = await import('./deliveryBaselineHandler.js');
+    const result = await handler(buildEvent({ from, to }));
+
+    expect(result).toMatchObject({ statusCode: 400 });
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('returns 400 when from/to are missing', async () => {

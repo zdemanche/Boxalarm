@@ -60,7 +60,9 @@ export function setSettingsSecretsClient(override: SecretsManagerClient | undefi
 /**
  * Deletes removed sources' webhook secrets - only names under this stack's CAD webhook prefix
  * (IAM allows nothing else). Never throws: the config is already saved and ingress already
- * refuses the removed source; a failure is logged, returned, and alarmed by the log metric.
+ * refuses the removed source; a failure is logged and returned as secretCleanupFailed. It is not
+ * retried by a later save (the source is gone from the config); a re-created source overwrites
+ * the orphan secret on its first rotation (rotateKey.ts).
  */
 async function deleteWebhookSecrets(
   names: readonly string[],
@@ -71,6 +73,11 @@ async function deleteWebhookSecrets(
   for (const name of names) {
     if (!prefix || !name.startsWith(prefix)) {
       failed++;
+      logger.error({
+        event: 'platform.cadSources.secretDeleteFailed',
+        correlationId,
+        message: 'secret name is outside the CAD webhook prefix',
+      });
       continue;
     }
     try {

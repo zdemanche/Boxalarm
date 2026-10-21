@@ -7,7 +7,9 @@ import {
   etaFor,
   formatEta,
   getLocalAnswer,
+  onLocalAnswerSaved,
   queueAlertResponse,
+  saveLocalAnswer,
   responseBody,
 } from './alertResponses';
 
@@ -93,4 +95,22 @@ test("M1: another member on this phone never sees the previous member's answer a
 
   await clearMemberCache('A');
   await expect(getLocalAnswer('A', 'D8')).resolves.toBeNull();
+});
+
+test('a throwing listener never fails the save', async () => {
+  const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const seen = jest.fn();
+  const offThrowing = onLocalAnswerSaved(() => {
+    throw new Error('listener');
+  });
+  const offSeen = onLocalAnswerSaved(seen);
+  const answer = { ackStatus: 'RESPONDING', eta: null, outboxId: 'o1' } as never;
+
+  await expect(saveLocalAnswer('m1', 'D1', answer)).resolves.toBeUndefined();
+
+  expect(seen).toHaveBeenCalledTimes(1);
+  expect(consoleError).toHaveBeenCalled();
+  offThrowing();
+  offSeen();
+  consoleError.mockRestore();
 });

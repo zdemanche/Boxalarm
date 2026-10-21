@@ -6,6 +6,7 @@ import {
   TransactWriteCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
+import { marshall } from '@aws-sdk/util-dynamodb';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
 
 const originalEnv = { ...process.env };
@@ -145,6 +146,10 @@ describe('resolveDefectHandler (entrypoint)', () => {
       actorId: 'officer-1',
     });
     expect(String(audit.Put.Item.pk)).toMatch(/^DEPT#dept-001#AUDIT#/);
+    expect(() => marshall(audit.Put.Item)).not.toThrow();
+    expect(audit.Put.Item.changedFields).toMatchObject({
+      resolutionNote: { old: null, new: 'Replaced the pump seal' },
+    });
   });
 
   it('warns — never refuses — when the unit is still out of service (MAJOR-2 coupling)', async () => {

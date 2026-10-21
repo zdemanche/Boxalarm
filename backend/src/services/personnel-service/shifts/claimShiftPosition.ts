@@ -11,7 +11,9 @@ export type ClaimOutcome =
   | { readonly kind: 'CLAIMED'; readonly claimedAt: number }
   | { readonly kind: 'ALREADY_MINE'; readonly claimedAt: number }
   | { readonly kind: 'NOT_FOUND' }
-  | { readonly kind: 'CONFLICT' };
+  | { readonly kind: 'CONFLICT' }
+  | { readonly kind: 'SHIFT_CLOSED' }
+  | { readonly kind: 'NOT_QUALIFIED'; readonly requiredQual: string };
 
 export class ShiftPositionWriteError extends Error {
   readonly reason: string;
@@ -36,6 +38,7 @@ export async function claimShiftPosition(
   const sk = `POSITION#${positionCode}`;
   const claimedAt = Date.now();
   const eventId = randomUUID();
+  let requiredQual: string | undefined;
 
   try {
     const shiftMetadata = await doc.send(
@@ -53,7 +56,27 @@ export async function claimShiftPosition(
         ),
       );
     }
+    const endAt: unknown = shiftMetadata.Item?.endAt;
     const gsi1sk = typeof startAt === 'number' ? `SHIFT_POSITION#${startAt}` : undefined;
+
+    const positionItem = await doc.send(
+      new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
+    );
+    if (
+      shiftMetadata.Item?.status === 'CANCELLED' ||
+      (typeof endAt === 'number' && endAt <= claimedAt)
+    ) {
+      if (positionItem.Item?.claimedByMemberId === memberId) {
+        const heldSince: unknown = positionItem.Item.claimedAt;
+        return {
+          kind: 'ALREADY_MINE',
+          claimedAt: typeof heldSince === 'number' ? heldSince : claimedAt,
+        };
+      }
+      return { kind: 'SHIFT_CLOSED' };
+    }
+    const positionQual: unknown = positionItem.Item?.requiredQual;
+    requiredQual = typeof positionQual === 'string' ? positionQual : undefined;
 
     await doc.send(
       new TransactWriteCommand({
@@ -63,7 +86,9 @@ export async function claimShiftPosition(
               TableName: tableName,
               Key: { pk, sk },
               ConditionExpression:
-                'attribute_exists(pk) AND attribute_not_exists(claimedByMemberId)',
+                requiredQual === undefined
+                  ? 'attribute_exists(pk) AND attribute_not_exists(claimedByMemberId) AND attribute_not_exists(requiredQual)'
+                  : 'attribute_exists(pk) AND attribute_not_exists(claimedByMemberId) AND requiredQual = :requiredQual',
               UpdateExpression:
                 gsi1sk === undefined
                   ? 'SET claimedByMemberId = :memberId, claimedAt = :claimedAt'
@@ -71,6 +96,7 @@ export async function claimShiftPosition(
               ExpressionAttributeValues: {
                 ':memberId': memberId,
                 ':claimedAt': claimedAt,
+                ...(requiredQual === undefined ? {} : { ':requiredQual': requiredQual }),
                 ...(gsi1sk === undefined
                   ? {}
                   : { ':gsi1pk': `MEMBER#${memberId}`, ':gsi1sk': gsi1sk }),
@@ -97,6 +123,21 @@ export async function claimShiftPosition(
               },
             },
           },
+          ...(requiredQual === undefined
+            ? []
+            : [
+                {
+                  ConditionCheck: {
+                    TableName: tableName,
+                    Key: {
+                      pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
+                      sk: `QUAL#${requiredQual}`,
+                    },
+                    ConditionExpression: 'currentlyEligible = :eligible',
+                    ExpressionAttributeValues: { ':eligible': true },
+                  },
+                },
+              ]),
         ],
       }),
     );
@@ -110,6 +151,9 @@ export async function claimShiftPosition(
     }
     const reasons = error.CancellationReasons?.map((reason) => reason.Code) ?? [];
     if (reasons[0] !== 'ConditionalCheckFailed') {
+      if (requiredQual !== undefined && reasons[2] === 'ConditionalCheckFailed') {
+        return { kind: 'NOT_QUALIFIED', requiredQual };
+      }
       throw new ShiftPositionWriteError(error);
     }
   }

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { RetryableApiGate } from './RetryableApiGate';
 import { Button, Card, ConfirmDialog } from '../../components/ui';
 import { Download } from '../../components/ui/icons';
 import { startExport, getExportStatus } from './api';
@@ -86,9 +87,9 @@ export function ExportSection() {
           </p>
         ) : null}
         {jobId && statusQuery.error ? (
-          <ApiForbiddenGate error={statusQuery.error} embedded>
+          <RetryableApiGate error={statusQuery.error} onRetry={() => void statusQuery.refetch()}>
             <p role="alert">Could not check export status.</p>
-          </ApiForbiddenGate>
+          </RetryableApiGate>
         ) : jobId && status === 'FAILED' ? (
           <p role="alert" className={styles.message}>
             The export failed. Try again.

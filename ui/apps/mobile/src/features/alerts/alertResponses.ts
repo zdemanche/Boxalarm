@@ -89,12 +89,33 @@ export async function clearLocalAnswer(memberId: string | null, dispatchId: stri
   await kvDelete(answerKey(memberId, dispatchId));
 }
 
+type LocalAnswerListener = (
+  memberId: string | null,
+  dispatchId: string,
+  answer: LocalAnswer,
+) => void;
+const localAnswerListeners = new Set<LocalAnswerListener>();
+
+export function onLocalAnswerSaved(listener: LocalAnswerListener): () => void {
+  localAnswerListeners.add(listener);
+  return () => {
+    localAnswerListeners.delete(listener);
+  };
+}
+
 export async function saveLocalAnswer(
   memberId: string | null,
   dispatchId: string,
   answer: LocalAnswer,
 ): Promise<void> {
   await kvSet(answerKey(memberId, dispatchId), answer);
+  localAnswerListeners.forEach((listener) => {
+    try {
+      listener(memberId, dispatchId, answer);
+    } catch (error) {
+      console.error('[alert] a local-answer listener failed', error);
+    }
+  });
 }
 
 /** A Not responding answer never carries an ETA. */

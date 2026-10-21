@@ -71,6 +71,47 @@ describe("Export", () => {
     });
   }
 
+  it("runs the worker with no automatic retry and routes a dropped or crashed run to an alarmed failure queue", async () => {
+    const exp = await build();
+    const [retries, maxAge, destination, queueArn, queueName, functionName] = await resolve(
+      pulumi.all([
+        exp.workerInvokeConfig.maximumRetryAttempts,
+        exp.workerInvokeConfig.maximumEventAgeInSeconds,
+        exp.workerInvokeConfig.destinationConfig,
+        exp.workerFailureQueue.arn,
+        exp.workerFailureQueue.name,
+        exp.workerInvokeConfig.functionName,
+      ]),
+    );
+    expect(functionName).toBe("boxalarm-dev-platform-export-worker");
+    expect(retries).toBe(0);
+    expect(maxAge).toBe(60);
+    expect(destination?.onFailure?.destination).toBe(queueArn);
+    const [metric, dimensions, actions] = await resolve(
+      pulumi.all([
+        exp.workerFailureDepthAlarm.metricName,
+        exp.workerFailureDepthAlarm.dimensions,
+        exp.workerFailureDepthAlarm.alarmActions,
+      ]),
+    );
+    expect(metric).toBe("ApproximateNumberOfMessagesVisible");
+    expect(dimensions).toEqual({ QueueName: queueName });
+    expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+  });
+
+  it("lets the read-only worker role send to the failure queue only", async () => {
+    const exp = await build();
+    const [policyJson, queueArn] = await resolve(
+      pulumi.all([exp.workerRolePolicy.policy, exp.workerFailureQueue.arn]),
+    );
+    const policy = JSON.parse(policyJson) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const statement = policy.Statement.find((s) => s.Sid === "ExportWorkerOnFailure");
+    expect(statement?.Action).toEqual(["sqs:SendMessage"]);
+    expect(statement?.Resource).toBe(queueArn);
+  });
+
   it("wires the real alerting/incident table names into the worker's environment", async () => {
     const exp = await build();
     const env = await resolve(exp.workerLambda.environment);
@@ -101,6 +142,12 @@ describe("Export", () => {
     const exp = await build();
     const policyJson = await resolve(exp.workerRolePolicy.policy);
     expect(policyJson).toContain("arn:aws:dynamodb:us-east-1:123456789012:table/alerting");
+  });
+
+  it("logs the worker in Text format so console.log EMF reaches CloudWatch (B2-003)", async () => {
+    const exp = await build();
+    const logging = await resolve(exp.workerLambda.loggingConfig);
+    expect(logging?.logFormat).toBe("Text");
   });
 
   it("gives the export worker Lambda the dedicated read-only role, not a fresh ServiceLambda role", async () => {
@@ -170,6 +217,17 @@ describe("Export", () => {
       expect.arrayContaining(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]),
     );
     expect(policyJson).not.toContain("TransactWriteItems");
+  });
+
+  it("lets the handler list the export bucket so a missing manifest is a 404, not a 403", async () => {
+    const exp = await build();
+    const policy = JSON.parse(await resolve(exp.handlerLambda.rolePolicy.policy)) as {
+      Statement: Array<{ Sid: string; Action: string[]; Resource: string }>;
+    };
+    const list = policy.Statement.find((s) => s.Sid === "ListExportBucket");
+    expect(list?.Action).toEqual(["s3:ListBucket"]);
+    expect(list?.Resource).toBe("arn:aws:s3:::boxalarm-dev-exports-staging");
+    expect(policy.Statement.flatMap((s) => s.Action)).not.toContain("s3:HeadObject");
   });
 
   // #257 sweep: markJobFailed's UpdateItem makes the handler a mutating role.

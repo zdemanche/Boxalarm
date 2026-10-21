@@ -18,12 +18,15 @@ import { conductInspection, listDueInspections, listOccupancies, scheduleInspect
 import type { Inspection, Violation, ViolationStatus } from './types';
 import { daysUntil, dueLabel, formatCalendarDate } from '../../lib/dates';
 import { humanize } from '../../lib/labels';
+import { listMembers } from '../personnel/api';
 import styles from './Inspections.module.css';
 
 const emptyViolation: Violation = { code: '', description: '', status: 'open' };
 
 /** Inside this many days an inspection reads as due soon. */
 const DUE_SOON_DAYS = 30;
+
+const DUE_HORIZON_DAYS = 365;
 
 /** Dates are compared character by character down a column, so they read in mono (§2.4). */
 const MONO_DATE = { fontFamily: 'var(--bx-font-mono)', whiteSpace: 'nowrap' } as const;
@@ -62,8 +65,8 @@ export function InspectionsPage() {
   const [violations, setViolations] = useState<Violation[]>([]);
 
   const listQuery = useQuery({
-    queryKey: ['inspections', 'due'],
-    queryFn: () => listDueInspections(auth),
+    queryKey: ['inspections', 'due', DUE_HORIZON_DAYS],
+    queryFn: () => listDueInspections(auth, { leadDays: DUE_HORIZON_DAYS }),
   });
   // Occupancies are picked by address, never typed as an internal id (docs/design.md §4.8). The
   // same list names each inspection row.
@@ -71,6 +74,14 @@ export function InspectionsPage() {
     queryKey: ['inspections', 'occupancies'],
     queryFn: () => listOccupancies(auth),
   });
+  const membersQuery = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+  });
+  const memberName = (memberId: string) => {
+    const member = membersQuery.data?.find((m) => m.memberId === memberId);
+    return member ? `${member.firstName} ${member.lastName}` : 'a member';
+  };
   const occupancyLabel = (id: string) => {
     const occupancy = occupanciesQuery.data?.find((o) => o.occupancyId === id);
     return occupancy ? `${occupancy.address} (${occupancy.occupancyType})` : id;
@@ -145,7 +156,7 @@ export function InspectionsPage() {
         i.conductedDate ? (
           <span style={{ ...WRAPPING_CELL, minWidth: '8rem' }}>
             <span style={MONO_DATE}>{formatCalendarDate(i.conductedDate)}</span>
-            {i.conductedBy ? ` by ${i.conductedBy}` : null}
+            {i.conductedBy ? ` by ${memberName(i.conductedBy)}` : null}
           </span>
         ) : (
           <span style={{ ...WRAPPING_CELL, minWidth: '8rem', color: 'var(--bx-fg-muted)' }}>
@@ -170,20 +181,21 @@ export function InspectionsPage() {
           {
             key: 'actions',
             header: 'Actions',
-            render: (i: Inspection) => (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  conductMutation.reset();
-                  setConducting(i);
-                  setViolations(i.violations.length > 0 ? i.violations : []);
-                }}
-              >
-                Conduct
-              </Button>
-            ),
+            render: (i: Inspection) =>
+              i.conductedDate ? null : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    conductMutation.reset();
+                    setConducting(i);
+                    setViolations(i.violations.length > 0 ? i.violations : []);
+                  }}
+                >
+                  Conduct
+                </Button>
+              ),
           } satisfies DataTableColumn<Inspection>,
         ]
       : []),

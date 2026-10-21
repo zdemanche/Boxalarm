@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { canManageTraining } from '../../auth/roles';
@@ -7,6 +7,7 @@ import type { StatusRole } from '@boxalarm/design-tokens';
 import { Button, Card, ConfirmDialog, Skeleton, StatusChip, TextInput } from '../../components/ui';
 import {
   createCertification,
+  errorDetail,
   listCertifications,
   revokeCertification,
   uploadCertificationAttachment,
@@ -21,6 +22,8 @@ const CERT_STATUS_ROLE: Record<CertificationStatus, StatusRole> = {
   EXPIRED: 'danger',
   REVOKED: 'neutral',
 };
+
+const ATTACHMENT_ACCEPT = '.pdf,.jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.tif,.tiff,.docx,.xlsx';
 
 const emptyForm: CreateCertificationInput = {
   certType: '',
@@ -48,6 +51,7 @@ export function CertificationsPanel({
   const queryClient = useQueryClient();
   const isTraining = canManageTraining(auth.roles);
   const queryKey = ['training', 'certifications', memberId];
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState<CreateCertificationInput>(emptyForm);
   const [file, setFile] = useState<File | null>(null);
@@ -77,7 +81,7 @@ export function CertificationsPanel({
     onSuccess: async (created: Certification) => {
       setForm(emptyForm);
       setFormError(null);
-      await queryClient.invalidateQueries({ queryKey });
+      await queryClient.invalidateQueries({ queryKey: ['training'] });
       if (created.uploadUrl && file) {
         await attemptUpload({
           certId: created.certId,
@@ -87,21 +91,26 @@ export function CertificationsPanel({
         });
       }
       setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     },
     onError: (error: Error) => {
-      setFormError(error.message);
+      setFormError(errorDetail(error));
     },
   });
 
   const revokeMutation = useMutation({
     mutationFn: (certId: string) => revokeCertification(auth, memberId, certId),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey });
+      await queryClient.invalidateQueries({ queryKey: ['training'] });
     },
   });
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (form.expiryDate < form.issueDate) {
+      setFormError("Expiry date can't be before the issue date.");
+      return;
+    }
     createMutation.mutate({ ...form, attachmentFilename: file?.name });
   };
 
@@ -199,7 +208,12 @@ export function CertificationsPanel({
             />
             <label className={styles.fileField}>
               Attachment (optional)
-              <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
             </label>
           </div>
           <div className={styles.formActions}>

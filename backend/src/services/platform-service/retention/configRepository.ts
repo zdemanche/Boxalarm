@@ -1,6 +1,11 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-import { GetCommand, PutCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildAuditLogEntryTransactItem } from '../audit/auditEntry.js';
 
 export const DEFAULT_RETENTION_YEARS = 7;
 export const RETENTION_SK = 'CONFIG#RETENTION';
@@ -117,6 +122,8 @@ export async function putRetentionConfig(
   );
   const existingVersion =
     existing.Item && typeof existing.Item.version === 'number' ? existing.Item.version : undefined;
+  const existingRetentionYears = (existing.Item?.value as Partial<RetentionConfigValue> | undefined)
+    ?.retentionYears;
   const nextVersion = existingVersion !== undefined ? existingVersion + 1 : 1;
 
   const item: RetentionConfigRecord = {
@@ -130,19 +137,39 @@ export async function putRetentionConfig(
 
   try {
     await client.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: item,
-        // Ties this write to the version just read above: two concurrent PUTs that both
-        // read version N can no longer both succeed at N+1 — the second write loses the
-        // race and fails the condition instead of silently dropping the first admin's
-        // change (which controls what disposal.ts treats as destroyable).
-        ConditionExpression: 'attribute_not_exists(pk) OR version = :expectedVersion',
-        ExpressionAttributeValues: { ':expectedVersion': existingVersion ?? 0 },
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: tableName,
+              Item: { ...item, updatedBy: input.actorId, updatedAt: new Date().toISOString() },
+              // Ties this write to the version just read above: two concurrent PUTs that both
+              // read version N can no longer both succeed at N+1 — the second write loses the
+              // race and fails the condition instead of silently dropping the first admin's
+              // change (which controls what disposal.ts treats as destroyable).
+              ConditionExpression: 'attribute_not_exists(pk) OR version = :expectedVersion',
+              ExpressionAttributeValues: { ':expectedVersion': existingVersion ?? 0 },
+            },
+          },
+          buildAuditLogEntryTransactItem(tableName, {
+            deptId: input.deptId,
+            actorId: input.actorId,
+            mutatedEntityType: 'DEPARTMENT_CONFIG',
+            mutatedEntityId: RETENTION_CONFIG_TYPE,
+            action: existingVersion === undefined ? 'CREATE' : 'UPDATE',
+            ...(existingRetentionYears === undefined
+              ? {}
+              : { before: { retentionYears: existingRetentionYears } }),
+            after: { retentionYears: input.retentionYears },
+          }),
+        ],
       }),
     );
   } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) {
+    if (
+      error instanceof TransactionCanceledException &&
+      error.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed'
+    ) {
       throw new RetentionConfigConflictError(input.deptId);
     }
     throw error;

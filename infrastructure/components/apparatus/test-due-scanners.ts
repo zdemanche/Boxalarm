@@ -90,6 +90,7 @@ export class TestDueScanners extends pulumi.ComponentResource {
         code: lambdaCode("apparatus-service", "test-due-scanner"),
         logGroup: args.logGroup,
         timeout: 60,
+        memorySize: 512,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,
           PLATFORM_EVENT_BUS_NAME: args.platformBusName,
@@ -110,6 +111,7 @@ export class TestDueScanners extends pulumi.ComponentResource {
         code: lambdaCode("apparatus-service", "scba-test-due-scanner"),
         logGroup: args.logGroup,
         timeout: 60,
+        memorySize: 512,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,
           PLATFORM_EVENT_BUS_NAME: args.platformBusName,

@@ -69,6 +69,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
     const canaryDedicatedDevice = config.getBoolean("canaryDedicatedDevice") ?? false;
     this.enabled = canaryEnabled;
     this.maxRunAgeSeconds = Math.max(rateMinutes * 60 * 3, 600);
+    const alarmPeriodSeconds = Math.max(300, rateMinutes * 60);
 
     this.lambda = new ServiceLambda(
       `${name}-fn`,
@@ -185,7 +186,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
         statistic: "Sum",
         comparisonOperator: "GreaterThanOrEqualToThreshold",
         threshold: 1,
-        period: 300,
+        period: alarmPeriodSeconds,
         evaluationPeriods: 1,
         treatMissingData: "breaching",
         actionsEnabled: canaryEnabled,
@@ -203,7 +204,7 @@ export class AlertingCanary extends pulumi.ComponentResource {
         statistic: "Maximum",
         comparisonOperator: "GreaterThanThreshold",
         threshold: LATENCY_BUDGET_MS,
-        period: 300,
+        period: alarmPeriodSeconds,
         evaluationPeriods: 1,
         treatMissingData: "breaching",
         actionsEnabled: canaryEnabled,

@@ -10,16 +10,21 @@ import {
 const DEPT_ID = toVerifiedDeptId({ deptId: 'dept-001' });
 
 describe('buildTestRecordItem', () => {
-  it('writes the TEST#{testType}#{testDate} sort key as a pure audit record with no GSI2 keys (AC1)', () => {
-    const item = buildTestRecordItem(DEPT_ID, 'APP-ENGINE-2', {
-      testType: 'HOSE',
-      testDate: '2026-05-01',
-      result: 'PASS',
-      nextDueDate: '2027-05-01',
-    });
+  it('writes the TEST#{testType}#{testDate}#{loggedAt} sort key as a pure audit record with no GSI2 keys (AC1)', () => {
+    const item = buildTestRecordItem(
+      DEPT_ID,
+      'APP-ENGINE-2',
+      {
+        testType: 'HOSE',
+        testDate: '2026-05-01',
+        result: 'PASS',
+        nextDueDate: '2027-05-01',
+      },
+      '2026-05-01T14:00:00.000Z',
+    );
 
     expect(item.pk).toBe('DEPT#dept-001#APPARATUS#APP-ENGINE-2');
-    expect(item.sk).toBe('TEST#HOSE#2026-05-01');
+    expect(item.sk).toBe('TEST#HOSE#2026-05-01#2026-05-01T14:00:00.000Z');
     expect(item.entityType).toBe('APPARATUS_TEST_RECORD');
     expect(item.gsi2pk).toBeUndefined();
     expect(item.gsi2sk).toBeUndefined();
@@ -98,12 +103,17 @@ describe('parseTestDueItem', () => {
 
 describe('parseTestRecordItem', () => {
   it('round-trips a stored item back into a TestRecord', () => {
-    const item = buildTestRecordItem(DEPT_ID, 'APP-ENGINE-2', {
-      testType: 'PUMP',
-      testDate: '2026-05-01',
-      result: 'FAIL',
-      nextDueDate: '2027-05-01',
-    });
+    const item = buildTestRecordItem(
+      DEPT_ID,
+      'APP-ENGINE-2',
+      {
+        testType: 'PUMP',
+        testDate: '2026-05-01',
+        result: 'FAIL',
+        nextDueDate: '2027-05-01',
+      },
+      '2026-05-01T14:00:00.000Z',
+    );
 
     const record = parseTestRecordItem(item, 'APP-ENGINE-2', 'dept-001');
 

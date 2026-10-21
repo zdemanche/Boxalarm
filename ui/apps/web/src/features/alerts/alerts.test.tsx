@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -40,24 +40,27 @@ function makeManager(groups: string[]): UserManager {
 
 function renderPage(groups: string[], path = '/alerts/roster') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <AuthProvider userManager={makeManager(groups)}>
-        <MemoryRouter initialEntries={[path]}>
-          <Routes>
-            <Route
-              path="/alerts/roster"
-              element={
-                <RequireRole>
-                  <AlertsRosterPage />
-                </RequireRole>
-              }
-            />
-          </Routes>
-        </MemoryRouter>
-      </AuthProvider>
-    </QueryClientProvider>,
-  );
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        <AuthProvider userManager={makeManager(groups)}>
+          <MemoryRouter initialEntries={[path]}>
+            <Routes>
+              <Route
+                path="/alerts/roster"
+                element={
+                  <RequireRole>
+                    <AlertsRosterPage />
+                  </RequireRole>
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </AuthProvider>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function renderDiagnosticsPage(groups: string[]) {
@@ -105,7 +108,6 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
         members: [
           {
             memberId: 'm-1',
-            name: 'Jordan Osei',
             ackStatus: 'DIRECT_TO_SCENE',
             eta: null,
             assignedApparatusId: null,
@@ -114,6 +116,9 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
           },
         ],
       }),
+    ),
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({ items: [{ memberId: 'm-1', firstName: 'Jordan', lastName: 'Osei' }] }),
     ),
     http.get('/api/v1/alerting/dispatches/D-1/receipts', () =>
       HttpResponse.json({
@@ -143,10 +148,92 @@ test('an officer sees the manual entry form and, given a dispatch id, the roster
   const roster = await screen.findByRole('region', { name: 'Live roster' });
   expect(await within(roster).findByText('Jordan Osei')).toBeTruthy();
   expect(await screen.findByText('Direct to scene')).toBeTruthy();
+  expect(
+    within(roster).getByRole('link', { name: 'Delivery diagnostics for Jordan Osei' }),
+  ).toBeTruthy();
   // Receipts are keyed by member id on the wire; the table shows the roster name instead.
   const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
   expect(await within(receipts).findByText('Jordan Osei')).toBeTruthy();
   expect(await screen.findByText('Sent, not confirmed delivered')).toBeTruthy();
+});
+
+test('a FAILED receipt shows as Failed with its glyph and word, and a later tone does not hide it', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-8', () =>
+      HttpResponse.json({
+        dispatchId: 'D-8',
+        incidentType: 'Structure fire',
+        address: '18 Nichols Ave',
+        crossStreets: 'Main & Nichols',
+        mapLink: null,
+        narrative: 'Smoke showing',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-8/roster', () =>
+      HttpResponse.json({
+        members: [
+          {
+            memberId: 'm-1',
+            ackStatus: 'UNANSWERED',
+            eta: null,
+            assignedApparatusId: null,
+            quals: [],
+            lastAnsweredTone: null,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-8/receipts', () =>
+      HttpResponse.json({
+        receipts: [
+          {
+            memberId: 'm-1',
+            channel: 'sms',
+            toneSequence: 1,
+            status: 'FAILED',
+            sentAt: 100,
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: 'provider 4xx',
+          },
+          {
+            memberId: 'm-1',
+            channel: 'sms',
+            toneSequence: 2,
+            status: 'SENT',
+            sentAt: 400,
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: null,
+          },
+          {
+            memberId: 'm-1',
+            channel: 'push',
+            toneSequence: 1,
+            status: 'FAILED',
+            sentAt: 100,
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: 'DeviceTokenNotForTopic',
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/riding-board/D-8', () =>
+      HttpResponse.json({ dispatchId: 'D-8', apparatus: [] }),
+    ),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-8');
+
+  const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
+  const smsFailure = await within(receipts).findByText('Tone 1: Failed');
+  expect(smsFailure.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+  expect(smsFailure.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+  expect(within(receipts).getByText('Tone 2: Sent')).toBeTruthy();
+  const pushFailure = within(receipts).getByText('Failed');
+  expect(pushFailure.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
 });
 
 // Server-fix security MINOR 2: receipts are on the fail-closed authorizer; an authorizer
@@ -244,6 +331,7 @@ test('submitting the manual entry form navigates the page to the new dispatch id
 });
 
 test('a failed riding-board seat assignment surfaces an error instead of silently reverting', async () => {
+  const postedBodies: Record<string, unknown>[] = [];
   server.use(
     http.get('/api/v1/alerting/dispatches/D-2', () =>
       HttpResponse.json({
@@ -261,7 +349,6 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
         members: [
           {
             memberId: 'm-1',
-            name: 'Jordan Osei',
             ackStatus: 'RESPONDING',
             eta: null,
             assignedApparatusId: null,
@@ -282,13 +369,14 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
             type: 'Engine',
             status: 'IN_SERVICE',
             assignable: true,
-            positions: [{ code: 'OFF', label: 'Officer' }],
+            positions: [{ code: 'OFF', label: 'Officer', version: 2 }],
           },
         ],
       }),
     ),
-    http.post('/api/v1/apparatus/riding-board/D-2/assignments', () =>
-      HttpResponse.json(
+    http.post('/api/v1/apparatus/riding-board/D-2/assignments', async ({ request }) => {
+      postedBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json(
         {
           type: 'about:blank',
           title: 'Conflict',
@@ -297,15 +385,17 @@ test('a failed riding-board seat assignment surfaces an error instead of silentl
           traceId: 'trace-409',
         },
         { status: 409 },
-      ),
-    ),
+      );
+    }),
   );
 
   const user = userEvent.setup();
   renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
 
   const select = await screen.findByLabelText(/officer/i);
+  await screen.findByRole('option', { name: 'm-1' });
   await user.selectOptions(select, 'm-1');
+  await waitFor(() => expect(postedBodies[0]?.expectedVersion).toBe(2));
 
   expect(
     await screen.findByText(
@@ -411,6 +501,129 @@ test('diagnostics labels raw receipts (no status field) from their provider time
   expect(screen.getByText('Sent, not confirmed delivered')).toBeTruthy();
 });
 
+test('diagnostics shows a receipt that was never sent as Not sent, and a recorded failure outranks it', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-6/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-6',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          { entityType: 'DELIVERY_RECEIPT', channel: 'PUSH', toneSequence: 2 },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'SMS',
+            toneSequence: 2,
+            failureReason: 'SnsUnavailableError',
+          },
+        ],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-6');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  const notSent = await screen.findByText('Not sent');
+  expect(notSent.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+  expect(notSent.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+  expect(screen.getByText('Failed — SnsUnavailableError')).toBeTruthy();
+});
+
+test('diagnostics shows Delivered when a receipt carries both a failure reason and a delivery time', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-7/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-7',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'PUSH',
+            toneSequence: 1,
+            sentAt: 1700000000,
+            deliveredAt: 1700000005,
+            failureReason: 'APNs: Unregistered',
+          },
+        ],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-7');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  expect(await screen.findByText('Delivered')).toBeTruthy();
+  expect(screen.queryByText(/Failed/)).toBeNull();
+});
+
+test('a NOT_SENT receipt shows as Not sent with its glyph and word on the roster page', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-9', () =>
+      HttpResponse.json({
+        dispatchId: 'D-9',
+        incidentType: 'Structure fire',
+        address: '18 Nichols Ave',
+        crossStreets: 'Main & Nichols',
+        mapLink: null,
+        narrative: 'Smoke showing',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-9/roster', () => HttpResponse.json({ members: [] })),
+    http.get('/api/v1/alerting/dispatches/D-9/receipts', () =>
+      HttpResponse.json({
+        receipts: [
+          {
+            memberId: 'm-1',
+            channel: 'push',
+            toneSequence: 2,
+            status: 'NOT_SENT',
+            deliveredAt: null,
+            openedAt: null,
+            failureReason: null,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/riding-board/D-9', () =>
+      HttpResponse.json({ dispatchId: 'D-9', apparatus: [] }),
+    ),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-9');
+
+  const receipts = await screen.findByRole('region', { name: 'Delivery receipts' });
+  const notSent = await within(receipts).findByText('Not sent');
+  expect(notSent.closest('[data-status]')?.getAttribute('data-status')).toBe('danger');
+  expect(notSent.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+});
+
 test('diagnostics states the member was not on the eligible roster, distinct from sent-not-delivered', async () => {
   server.use(
     http.get('/api/v1/alerting/dispatches/D-4/diagnostics/m-9', () =>
@@ -467,6 +680,109 @@ test('canary panel shows unhealthy with text when the last run is stale even tho
   expect(await screen.findByText('Unhealthy — last run is stale')).toBeTruthy();
 });
 
+test('canary panel renders per-channel results in the backend shape without [object Object]', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  server.use(
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1200,
+        latestRanAt: now,
+        runs: [
+          {
+            ranAt: now,
+            result: 'PASS',
+            latencyMs: 1200,
+            channelResults: {
+              PUSH: { ok: true, ms: 812 },
+              SMS: { ok: false, ms: 7420, reason: 'provider refused: x' },
+            },
+          },
+        ],
+      }),
+    ),
+  );
+
+  renderDiagnosticsPage(['ADMIN']);
+
+  const list = await screen.findByRole('list', { name: 'Latest run by channel' });
+  expect(within(list).getByText(/PUSH: OK/).textContent).toMatch(/812ms/);
+  expect(within(list).getByText(/SMS: Failed/).textContent).toMatch(/provider refused: x/);
+  expect(list.textContent).not.toMatch(/object Object/);
+});
+
+test('diagnostics shows Delivered, not Failed, when a receipt has both deliveredAt and failureReason', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-6/diagnostics/m-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-6',
+        memberId: 'm-2',
+        diagnosis: 'ON_ROSTER',
+        timeline: [
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            channel: 'SMS',
+            toneSequence: 1,
+            sentAt: 1700000000,
+            deliveredAt: 1700000005,
+            failureReason: 'LATE_CARRIER_ERROR',
+          },
+        ],
+        deviceState: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/canary/status', () =>
+      HttpResponse.json({
+        healthy: true,
+        latestResult: 'PASS',
+        latestLatencyMs: 1800,
+        latestRanAt: Math.floor(Date.now() / 1000),
+        runs: [],
+      }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDiagnosticsPage(['ADMIN']);
+  await user.type(await screen.findByLabelText('Dispatch ID'), 'D-6');
+  await user.type(screen.getByLabelText('Member ID'), 'm-2');
+
+  expect(await screen.findByText('Delivered')).toBeTruthy();
+  expect(screen.queryByText(/Failed/)).toBeNull();
+});
+
+test('a 409 on manual entry says no new page was sent and a new call needs a different reference', async () => {
+  server.use(
+    http.get('/api/v1/alerting/home-locality', () =>
+      HttpResponse.json({ towns: ['Nichols'], zips: ['06611'], state: 'CT' }),
+    ),
+    http.post('/api/v1/alerting/dispatches', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Conflict', status: 409, traceId: 'trace-409' },
+        { status: 409 },
+      ),
+    ),
+  );
+  const user = userEvent.setup();
+  renderPage(['CHIEF']);
+
+  await user.type(await screen.findByLabelText('Incident type'), 'MVA');
+  await user.type(screen.getByLabelText('Address'), '1 Main St');
+  await user.type(screen.getByLabelText('Cross streets'), 'N/A');
+  await screen.findByRole('option', { name: 'Nichols' });
+  await user.selectOptions(screen.getByLabelText(/Town \/ village/), 'Nichols');
+  await user.type(screen.getByLabelText('Narrative'), 'MVA with injuries');
+  await user.type(screen.getByLabelText('Operator-entered reference'), 'ext-9');
+  await user.click(screen.getByRole('button', { name: 'Submit dispatch' }));
+
+  expect(
+    await screen.findByText(
+      'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+    ),
+  ).toBeTruthy();
+});
+
 test('R3-A: the manual entry requires a locality; "Other town" sends the typed town', async () => {
   let posted: Record<string, unknown> | undefined;
   server.use(
@@ -514,4 +830,251 @@ test('R3-A: the manual entry requires a locality; "Other town" sends the typed t
   await waitFor(() => expect(posted).toBeDefined());
   expect(posted?.locality).toEqual({ town: 'Bridgeport', choice: 'OTHER' });
   expect(posted?.address).toBe('123 Main St');
+});
+
+test('a seated member who is no longer responding still shows in their seat', async () => {
+  const postedBodies: Record<string, unknown>[] = [];
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-2',
+        incidentType: 'Structure fire',
+        address: '18 Nichols Ave',
+        crossStreets: '',
+        mapLink: null,
+        narrative: '',
+        prePlan: null,
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-2/roster', () =>
+      HttpResponse.json({
+        members: [
+          {
+            memberId: 'm-2',
+            ackStatus: 'NOT_RESPONDING',
+            eta: null,
+            assignedApparatusId: null,
+            quals: [],
+            lastAnsweredTone: 1,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-2/receipts', () => HttpResponse.json({ receipts: [] })),
+    http.get('/api/v1/apparatus/riding-board/D-2', () =>
+      HttpResponse.json({
+        dispatchId: 'D-2',
+        apparatus: [
+          {
+            apparatusId: 'a-301',
+            unitId: 'Engine 301',
+            type: 'Engine',
+            status: 'IN_SERVICE',
+            assignable: true,
+            positions: [
+              {
+                code: 'DRV',
+                label: 'Driver',
+                version: 3,
+                assignment: { memberId: 'm-2', qualStatus: 'MET' },
+              },
+            ],
+          },
+        ],
+      }),
+    ),
+    http.post('/api/v1/apparatus/riding-board/D-2/assignments', async ({ request }) => {
+      postedBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({});
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
+
+  const select = (await screen.findByLabelText(/driver/i)) as HTMLSelectElement;
+  await screen.findByRole('option', { name: 'm-2 (not responding)' });
+  expect(select.value).toBe('m-2');
+  await user.selectOptions(select, '');
+  await waitFor(() => expect(postedBodies[0]?.memberId).toBeNull());
+});
+
+test('an open canary panel turns unhealthy when no newer run arrives', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const ranAt = Math.floor(Date.now() / 1000);
+    server.use(
+      http.get('/api/v1/alerting/canary/status', () =>
+        HttpResponse.json({
+          healthy: true,
+          latestResult: 'PASS',
+          latestLatencyMs: 1200,
+          latestRanAt: ranAt,
+          runs: [],
+        }),
+      ),
+    );
+    renderDiagnosticsPage(['ADMIN']);
+    expect(await screen.findByText('Healthy')).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(300_000);
+
+    expect(await screen.findByText('Unhealthy — last run is stale')).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+const seatedBoard = (memberId: string) => ({
+  dispatchId: 'D-2',
+  apparatus: [
+    {
+      apparatusId: 'a-301',
+      unitId: 'Engine 301',
+      type: 'Engine',
+      status: 'IN_SERVICE',
+      assignable: true,
+      positions: [
+        {
+          code: 'DRV',
+          label: 'Driver',
+          version: 3,
+          assignment: { memberId, qualStatus: 'MET' },
+        },
+      ],
+    },
+  ],
+});
+
+const rosterEntry = (memberId: string, ackStatus: string) => ({
+  memberId,
+  ackStatus,
+  eta: null,
+  assignedApparatusId: null,
+  quals: [],
+  lastAnsweredTone: 1,
+});
+
+const callD2 = {
+  dispatchId: 'D-2',
+  incidentType: 'Structure fire',
+  address: '18 Nichols Ave',
+  crossStreets: '',
+  mapLink: null,
+  narrative: '',
+  prePlan: null,
+};
+
+test('a seated member who has not answered shows as "no answer" in their seat', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-2', () => HttpResponse.json(callD2)),
+    http.get('/api/v1/alerting/dispatches/D-2/roster', () =>
+      HttpResponse.json({ members: [rosterEntry('m-2', 'UNANSWERED')] }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-2/receipts', () => HttpResponse.json({ receipts: [] })),
+    http.get('/api/v1/apparatus/riding-board/D-2', () => HttpResponse.json(seatedBoard('m-2'))),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
+
+  await screen.findByRole('option', { name: 'm-2 (no answer)' });
+  expect((screen.getByLabelText(/driver/i) as HTMLSelectElement).value).toBe('m-2');
+});
+
+test('a seated member still shows in their seat when the roster cannot be loaded', async () => {
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-2', () => HttpResponse.json(callD2)),
+    http.get('/api/v1/alerting/dispatches/D-2/roster', () =>
+      HttpResponse.json({}, { status: 500 }),
+    ),
+    http.get('/api/v1/alerting/dispatches/D-2/receipts', () => HttpResponse.json({ receipts: [] })),
+    http.get('/api/v1/apparatus/riding-board/D-2', () => HttpResponse.json(seatedBoard('m-2'))),
+  );
+
+  renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
+
+  await screen.findByRole('option', { name: 'm-2' });
+  expect((screen.getByLabelText(/driver/i) as HTMLSelectElement).value).toBe('m-2');
+});
+
+test('a failed refresh keeps the roster and receipts on screen and says they are not current', async () => {
+  let failing = false;
+  const gate = (body: Record<string, unknown>) => () =>
+    failing ? HttpResponse.json({}, { status: 503 }) : HttpResponse.json(body);
+  server.use(
+    http.get('/api/v1/alerting/dispatches/D-2', () => HttpResponse.json(callD2)),
+    http.get(
+      '/api/v1/alerting/dispatches/D-2/roster',
+      gate({ members: [rosterEntry('m-2', 'RESPONDING')] }),
+    ),
+    http.get(
+      '/api/v1/alerting/dispatches/D-2/receipts',
+      gate({
+        receipts: [
+          {
+            memberId: 'm-2',
+            channel: 'PUSH',
+            toneSequence: 1,
+            status: 'DELIVERED',
+            sentAt: 1,
+            deliveredAt: 2,
+            openedAt: null,
+            failureReason: null,
+          },
+        ],
+      }),
+    ),
+    http.get('/api/v1/apparatus/riding-board/D-2', gate(seatedBoard('m-2'))),
+  );
+
+  const view = renderPage(['OFFICER'], '/alerts/roster?dispatchId=D-2');
+
+  const roster = await screen.findByRole('region', { name: 'Live roster' });
+  await within(roster).findByText('m-2');
+  await within(screen.getByRole('region', { name: 'Delivery receipts' })).findByText('Delivered');
+  expect(screen.queryByText(/Couldn.t refresh/)).toBeNull();
+
+  failing = true;
+  await act(async () => {
+    await view.client.invalidateQueries();
+  });
+
+  await waitFor(() => {
+    for (const title of ['Live roster', 'Delivery receipts', 'Riding board']) {
+      const card = screen.getByRole('heading', { name: title }).closest('section, div, article');
+      expect(card?.parentElement?.textContent).toMatch(/Couldn.t refresh/);
+    }
+  });
+  expect(within(roster).getByText('m-2')).toBeTruthy();
+  expect(screen.getByText('Delivered')).toBeTruthy();
+  expect((screen.getByLabelText(/driver/i) as HTMLSelectElement).value).toBe('m-2');
+});
+
+test('the canary panel shows healthy again when a fresh run arrives after it went stale', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let ranAt = Math.floor(Date.now() / 1000);
+    server.use(
+      http.get('/api/v1/alerting/canary/status', () =>
+        HttpResponse.json({
+          healthy: true,
+          latestResult: 'PASS',
+          latestLatencyMs: 1200,
+          latestRanAt: ranAt,
+          runs: [],
+        }),
+      ),
+    );
+    renderDiagnosticsPage(['ADMIN']);
+    expect(await screen.findByText('Healthy')).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(await screen.findByText('Unhealthy — last run is stale')).toBeTruthy();
+
+    ranAt = Math.floor(Date.now() / 1000);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(await screen.findByText('Healthy')).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
 });

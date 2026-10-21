@@ -70,19 +70,27 @@ function rawEmail(
   ].join('\r\n');
 }
 
+let deliveries = 0;
+
 type Verdict = 'PASS' | 'FAIL' | 'GRAY' | 'PROCESSING_FAILED';
 
 function sesEvent(
   verdicts: Partial<Record<'spf' | 'dkim' | 'spam' | 'virus' | 'dmarc', Verdict>> = {},
   recipients = [RECIPIENT],
 ): SESEvent {
+  deliveries += 1;
   return {
     Records: [
       {
         eventSource: 'aws:ses',
         eventVersion: '1.0',
         ses: {
-          mail: { messageId: 'ses-1', timestamp: '', source: '', destination: recipients },
+          mail: {
+            messageId: deliveries === 1 ? 'ses-1' : `ses-${deliveries}`,
+            timestamp: '',
+            source: '',
+            destination: recipients,
+          },
           receipt: {
             recipients,
             spfVerdict: { status: verdicts.spf ?? 'PASS' },
@@ -103,6 +111,7 @@ describe('CAD email handler', () => {
   let s3Send: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
+    deliveries = 0;
     vi.resetModules();
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW * 1000);
@@ -590,6 +599,275 @@ describe('CAD email handler', () => {
     ).toEqual(['5 OAK AVE', '77 PINE RD']);
   });
 
+  it('B1-062: Subject-only dispatches with no signed Message-ID and a fixed body each page', async () => {
+    const unsigned = { body: '', signedHeaders: 'from:to:subject:date' };
+    serve(rawEmail({ ...unsigned, subject: 'ADDR: 5 OAK AVE' }));
+    await run();
+    serve(rawEmail({ ...unsigned, subject: 'ADDR: 77 PINE RD' }));
+    await run();
+    expect(
+      alerts()
+        .map((a) => a.address)
+        .sort(),
+    ).toEqual(['5 OAK AVE', '77 PINE RD']);
+  });
+
+  it('B1-062: that message replayed with a bogus signature that omits the Subject is still a replay', async () => {
+    const options = {
+      body: '',
+      subject: 'ADDR: 5 OAK AVE',
+      dkimDomains: ['cad.county.gov', 'mail.cad.county.gov'],
+      signedHeaders: 'from:to:subject:date',
+    };
+    serve(rawEmail(options));
+    await run();
+    serve(
+      rawEmail(options).replace(
+        /(d=mail\.cad\.county\.gov;[^\r]*?h=)from:to:subject:date/,
+        '$1from:to:date',
+      ),
+    );
+    await run();
+    expect(alerts()).toHaveLength(1);
+    expect(metric('CadIngressReplayRejected')).toBe(true);
+  });
+
+  it('B1-062: an original whose signature omits the Subject is still a replay when a bogus signature covering a changed Subject is added', async () => {
+    const options = {
+      subject: 'ADDR: 5 OAK AVE',
+      signedHeaders: 'from:to:date',
+    };
+    serve(rawEmail(options));
+    await run();
+    serve(
+      rawEmail({
+        ...options,
+        dkimDomains: ['cad.county.gov', 'mail.cad.county.gov'],
+        subject: 'ADDR: 77 PINE RD',
+      }).replace(/(d=mail\.cad\.county\.gov;[^\r]*?h=)from:to:date/, '$1from:to:subject:date'),
+    );
+    await run();
+    expect(alerts()).toHaveLength(1);
+    expect(metric('CadIngressReplayRejected')).toBe(true);
+  });
+
+  describe('a replayer toggling header coverage cannot re-page (B1-062, Message-ID)', () => {
+    const noIncident = 'ADDR: 123 MAIN ST, NICHOLS\r\nNATURE: STRUCTURE FIRE\r\n';
+    const two = ['cad.county.gov', 'mail.cad.county.gov'];
+    const omit = (raw: string, header: string, from: string) =>
+      raw.replace(
+        /(d=mail\.cad\.county\.gov;[^\r]*?h=)[^;]*;/,
+        `$1${from
+          .split(':')
+          .filter((h) => h !== header)
+          .join(':')};`,
+      );
+
+    async function pageThenReplay(first: string, replay: string) {
+      serve(first);
+      await run();
+      vi.setSystemTime((NOW + 15 * 60) * 1000);
+      serve(replay);
+      await run();
+    }
+
+    it('Subject: a replay that deletes the non-covering signature of a "some" original is a replay', async () => {
+      const options = {
+        body: '',
+        subject: 'ADDR: 5 OAK AVE',
+        signedHeaders: 'from:to:subject:date',
+        noSigningTime: true,
+      };
+      await pageThenReplay(
+        omit(rawEmail({ ...options, dkimDomains: two }), 'subject', options.signedHeaders),
+        rawEmail(options),
+      );
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+
+    it('Subject: a distinct Subject-only call after an "all" original still pages', async () => {
+      const options = { body: '', signedHeaders: 'from:to:subject:date', noSigningTime: true };
+      await pageThenReplay(
+        rawEmail({ ...options, subject: 'ADDR: 5 OAK AVE' }),
+        rawEmail({ ...options, subject: 'ADDR: 77 PINE RD' }),
+      );
+      expect(alerts()).toHaveLength(2);
+    });
+
+    it('Message-ID: appending a signature that omits it to an "all" original is a replay', async () => {
+      const options = { body: noIncident, noSigningTime: true };
+      const headers = 'from:to:subject:date:message-id';
+      await pageThenReplay(
+        rawEmail(options),
+        omit(rawEmail({ ...options, dkimDomains: two }), 'message-id', headers),
+      );
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+
+    it('Message-ID: deleting the non-covering signature of a "some" original is a replay', async () => {
+      const options = { body: noIncident, noSigningTime: true };
+      const headers = 'from:to:subject:date:message-id';
+      await pageThenReplay(
+        omit(rawEmail({ ...options, dkimDomains: two }), 'message-id', headers),
+        rawEmail(options),
+      );
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressReplayRejected')).toBe(true);
+    });
+
+    it('Message-ID: a distinct message (new Message-ID, same text) after an "all" original still pages', async () => {
+      const options = { body: noIncident, noSigningTime: true };
+      await pageThenReplay(
+        rawEmail(options),
+        rawEmail({ ...options, messageId: 'm-2@cad.county.gov' }),
+      );
+      expect(alerts()).toHaveLength(2);
+    });
+
+    it('writes every toggle key as a marker, so two toggled copies cannot both commit', async () => {
+      const options = { body: noIncident, noSigningTime: true };
+      serve(
+        omit(
+          rawEmail({ ...options, dkimDomains: two }),
+          'message-id',
+          'from:to:subject:date:message-id',
+        ),
+      );
+      await run();
+      const markers = [...table.items.values()].filter((i) => i.entityType === 'CAD_REPLAY_MARKER');
+      expect(markers).toHaveLength(2);
+    });
+  });
+
+  describe('one email addressed to several sources (B1-061)', () => {
+    const OTHER = 'dispatch+other-fd.county.z3j9x2m4p7q8@' + DOMAIN;
+    const STALE = 'dispatch+nichols-fd.county.aaaaaaaaaaaa@' + DOMAIN;
+
+    beforeEach(() => {
+      table.items.set('DEPT#other-fd#CAD_INGRESS|METADATA', {
+        ...COPY,
+        pk: 'DEPT#other-fd#CAD_INGRESS',
+        sources: [
+          {
+            ...COPY.sources[0],
+            email: { allowedSenders: ['cad.county.gov'], recipientToken: 'z3j9x2m4p7q8' },
+          },
+        ],
+      });
+    });
+
+    it('pages every addressed department', async () => {
+      serve(rawEmail({ to: `${RECIPIENT}, ${OTHER}` }));
+      await run(sesEvent({}, [RECIPIENT, OTHER]));
+      expect(
+        alerts()
+          .map((a) => a.deptId)
+          .sort(),
+      ).toEqual(['nichols-fd', 'other-fd']);
+    });
+
+    it('a stale address listed first does not hide the valid one', async () => {
+      serve(rawEmail({ to: `${STALE}, ${RECIPIENT}` }));
+      await run(sesEvent({}, [STALE, RECIPIENT]));
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressUnknownRecipient')).toBe(true);
+      expect(metric('CadIngressAuthFailed')).toBe(false);
+    });
+
+    it('one department whose source lookup fails does not hold up the others, then throws for the retry', async () => {
+      table.failGetFor = 'other-fd';
+      serve(rawEmail({ to: `${OTHER}, ${RECIPIENT}` }));
+      const event = sesEvent({}, [OTHER, RECIPIENT]);
+      await expect(run(event)).rejects.toThrow('dynamo down');
+      expect(alerts().map((a) => a.deptId)).toEqual(['nichols-fd']);
+      delete table.failGetFor;
+      await run(event);
+      expect(
+        alerts()
+          .map((a) => a.deptId)
+          .sort(),
+      ).toEqual(['nichols-fd', 'other-fd']);
+    });
+
+    it('a lookup failure for the only recipient throws rather than counting an unknown recipient', async () => {
+      table.failGetFor = 'nichols-fd';
+      await expect(run()).rejects.toThrow('dynamo down');
+      expect(metric('CadIngressUnknownRecipient')).toBe(false);
+    });
+
+    it('a failure for one source still pages the others, then throws for the async retry', async () => {
+      table.failTransactFor = 'other-fd';
+      serve(rawEmail({ to: `${OTHER}, ${RECIPIENT}` }));
+      const event = sesEvent({}, [OTHER, RECIPIENT]);
+      await expect(run(event)).rejects.toThrow('dynamo down');
+      expect(alerts().map((a) => a.deptId)).toEqual(['nichols-fd']);
+      delete table.failTransactFor;
+      await run(event);
+      expect(
+        alerts()
+          .map((a) => a.deptId)
+          .sort(),
+      ).toEqual(['nichols-fd', 'other-fd']);
+      expect(metric('CadIngressReplayRejected')).toBe(false);
+    });
+
+    it('two valid sources of one department page it once', async () => {
+      const copy = table.items.get(`${COPY.pk}|${COPY.sk}`) as typeof COPY;
+      table.items.set(`${COPY.pk}|${COPY.sk}`, {
+        ...copy,
+        sources: [
+          ...copy.sources,
+          {
+            ...copy.sources[0],
+            sourceId: 'county2',
+            email: { allowedSenders: ['cad.county.gov'], recipientToken: 'y3j9x2m4p7q8' },
+          },
+        ],
+      });
+      const second = 'dispatch+nichols-fd.county2.y3j9x2m4p7q8@' + DOMAIN;
+      serve(rawEmail({ to: `${RECIPIENT}, ${second}` }));
+      await run(sesEvent({}, [RECIPIENT, second]));
+      expect(alerts()).toHaveLength(1);
+    });
+
+    it('a department whose first source rejects the sender is paged through its second source', async () => {
+      const copy = table.items.get(`${COPY.pk}|${COPY.sk}`) as typeof COPY;
+      table.items.set(`${COPY.pk}|${COPY.sk}`, {
+        ...copy,
+        sources: [
+          {
+            ...copy.sources[0],
+            email: { allowedSenders: ['other.gov'], recipientToken: 'k3j9x2m4p7q8' },
+          },
+          {
+            ...copy.sources[0],
+            sourceId: 'county2',
+            email: { allowedSenders: ['cad.county.gov'], recipientToken: 'y3j9x2m4p7q8' },
+          },
+        ],
+      });
+      const second = 'dispatch+nichols-fd.county2.y3j9x2m4p7q8@' + DOMAIN;
+      serve(rawEmail({ to: `${RECIPIENT}, ${second}` }));
+      await run(sesEvent({}, [RECIPIENT, second]));
+      expect(alerts()).toHaveLength(1);
+      expect(metric('CadIngressAuthFailed')).toBe(false);
+      expect(metric('CadIngressQuarantined')).toBe(false);
+    });
+
+    it('a sender failure names the department and source it failed for', async () => {
+      serve(rawEmail({ from: 'x@evil.test', dkimDomains: ['evil.test'] }));
+      await run();
+      const quarantined = vi
+        .mocked(console.log)
+        .mock.calls.map(([line]) => String(line))
+        .find((line) => line.includes('cadIngress.email.quarantined'));
+      expect(quarantined).toContain('"deptId":"nichols-fd"');
+      expect(quarantined).toContain('"sourceId":"county"');
+    });
+  });
+
   it('a body naming another department still pages only the source department', async () => {
     serve(rawEmail({ body: 'DEPT: other-fd\r\nADDR: 9 OAK AVE\r\n' }));
     await run();
@@ -604,13 +882,16 @@ describe('CAD email handler', () => {
   });
 
   it('a failed dispatch write throws and leaves no marker; the async retry pages exactly once', async () => {
+    const event = sesEvent();
     table.failTransact = true;
-    await expect(run()).rejects.toThrow();
+    await expect(run(event)).rejects.toThrow();
     expect([...table.items.values()].some((i) => i.entityType === 'CAD_REPLAY_MARKER')).toBe(false);
     table.failTransact = false;
-    await run(); // Lambda's retry of the identical event
-    await run(); // and a genuine second delivery of it
+    await run(event); // Lambda's retry of the identical event
+    await run(event);
     expect(alerts()).toHaveLength(1);
+    expect(metric('CadIngressReplayRejected')).toBe(false);
+    await run(); // a genuine second delivery of it
     expect(metric('CadIngressReplayRejected')).toBe(true);
   });
 });

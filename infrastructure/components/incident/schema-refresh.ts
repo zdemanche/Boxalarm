@@ -123,7 +123,7 @@ export class SchemaRefresh extends pulumi.ComponentResource {
             {
               Sid: "SchemaVersionCmkAccess" as const,
               Effect: "Allow" as const,
-              Action: ["kms:Encrypt", "kms:GenerateDataKey"],
+              Action: ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"],
               Resource: [cmkArn],
             },
             {

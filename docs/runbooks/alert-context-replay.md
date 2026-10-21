@@ -7,7 +7,7 @@
 ## When to run it
 
 1. **After the first deploy of the alert-context consumers** (`PrePlanCopies`), in every environment. Data created before then has no copy, or has a copy without the address and geo index keys. Until the replay runs, every dispatch shows "No pre-plan" and no hydrants.
-2. **After any change to the alerting address normalizer** (`backend/src/services/alerting-service/prePlan/addressKey.ts`). Stored copies keep the key computed by the old rules until their occupancy's next event. A copy under a stale key silently never matches.
+2. **After any change to the alerting address normalizer** (`backend/src/services/alerting-service/prePlan/addressKey.ts`). Stored copies keep the key computed by the old rules until their occupancy's next event. A copy under a stale key silently never matches. **Run it after the 2026-10-14 sweep deploy:** the normalizer now keeps a directional before a comma-less town ("Main St N"), keeps the town in the street key of a comma-less "street town state" address, and no longer fails on a `#` in a street, so copies stored under the previous keys no longer match. The copies also no longer carry `addressTown`, `addressZip` or `addressState`; the replay clears them.
 3. After restoring or migrating the platform table.
 
 It is safe at any time. Nothing on the paging path reads these copies.
@@ -49,7 +49,7 @@ Run it once per department. The timeout is 15 minutes. If a very large departmen
 
 ## Check it worked
 
-- Metrics `Boxalarm/alerting-pre-plan`: `PrePlanCopyUpdated` and `HydrantCopyUpdated` should rise by about the emitted counts within a minute. `…MissingFields` / `HydrantCopyMissingLocation` flag records that are stored but cannot be found from a dispatch (no address, or no coordinates). Fix those records in inspections, not here.
+- Metrics `Boxalarm/alerting-pre-plan`: `PrePlanCopyUpdated` and `HydrantCopyUpdated` should rise by about the emitted counts within a minute. `PrePlanCopyAddressUnindexed` (log `preplan_copy.address_unindexed`, alarm `boxalarm-<env>-alerting-preplan-address-unindexed`) counts pre-plans whose address has no house number and street, so they are not in the address index and a dispatch to them shows no pre-plan: correct the occupancy address in inspections, then replay. `…MissingFields` / `HydrantCopyMissingLocation` flag records that are stored but cannot be found from a dispatch (no address, or no coordinates). Fix those records in inspections, not here.
 - The copy DLQs (`boxalarm-<env>-alerting-preplan-copy-dlq`, `…-hydrant-copy-dlq`) should stay empty. They page through `alerting-page` if they do not.
 - Open a dispatch at a pre-planned address. The Pre-plan panel should read "Pre-plan for <address>".
 
@@ -84,7 +84,7 @@ Where it comes from, first match wins:
 
 3. **Neither.** Nothing can be verified against the home area. A pre-plan without a town, and any dispatch that names only a home town or village, is shown "VERIFY ADDRESS". The one exception is when the dispatch and the pre-plan both name the same town or ZIP explicitly; that is genuine agreement and still verifies. This is safe but noisy. `pulumi up` warns about it, and the detail Lambda logs `preplan_copy.home_locality_missing` and counts `HomeLocalityMissing`, which raises the `boxalarm-{env}-alerting-home-locality-missing` alarm on the alerting-page topic. A manual-entry form load with no home set is counted separately as `HomeLocalityFormMissing` and does not alarm.
 
-A present but unusable item or stack default is logged (`preplan_copy.home_locality_invalid`) and counted as `HomeLocalityInvalid` (dimension `Reason`: `item` or `env`), which raises `boxalarm-{env}-alerting-home-locality-invalid`. Fix the item or the config; the next source is used meanwhile.
+A present but unusable item or stack default is logged (`preplan_copy.home_locality_invalid`) and counted as `HomeLocalityInvalid` (dimension `Reason`: `item` or `env`), which raises `boxalarm-{env}-alerting-home-locality-invalid`. Fix the item or the config; the next source is used meanwhile. The `state` may be a full name ("Connecticut") or a two-letter code; a set state that is neither makes the whole item unusable, so it falls back and raises this alarm instead of being half-applied.
 
 **Out-of-area occupancies.** A pre-plan whose address carries no town is treated as in the home area. So an occupancy outside it must be entered with its town, for example an automatic-aid target pre-planned by this department: "12 Oak St, Monroe", not "12 Oak St". Otherwise a home dispatch to "12 Oak St" would verify against it. The web occupancy form says so. There is no server-side check, because inspections (LOB plane) cannot read the alerting-side home set across the IAM boundary, and a second copy of it would drift. To audit, list occupancy addresses with no town and confirm each is in the home area.
 

@@ -133,7 +133,14 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
       );
     }
 
-    await updateMemberStatus(config.tableName, ctx, memberId, member.status, newStatus, ctx.sub);
+    const { updatedAt } = await updateMemberStatus(
+      config.tableName,
+      ctx,
+      memberId,
+      member.status,
+      newStatus,
+      ctx.sub,
+    );
     // The NewStatus dimension drives the chief alarm on every LOA/RETIRED change (infra
     // personnel/members.ts): each one ends the member's sessions and removes them from paging.
     emitStatusChangeMetric(newStatus);
@@ -146,7 +153,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ memberId, status: newStatus }),
+      body: JSON.stringify({ ...member, status: newStatus, updatedAt }),
     };
   } catch (error) {
     if (isConditionalCheckFailure(error)) {

@@ -4,9 +4,13 @@ import { ServiceLogGroup } from "../../components/observability/service-log-grou
 import { HttpApi } from "../../components/api/http-api";
 import { PlatformBus } from "../../components/messaging/platform-bus";
 
+let recorded: { type: string; name: string; inputs: Record<string, unknown> }[] = [];
+
 beforeEach(() => {
+  recorded = [];
   pulumi.runtime.setMocks({
     newResource: (args: pulumi.runtime.MockResourceArgs) => {
+      recorded.push({ type: args.type, name: args.name, inputs: args.inputs });
       const state: Record<string, unknown> = { ...args.inputs };
       if (args.type === "aws:sqs/queue:Queue") {
         state.arn = `arn:aws:sqs:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
@@ -37,6 +41,12 @@ afterEach(async () => {
   await new Promise((r) => setImmediate(r));
   await new Promise((r) => setImmediate(r));
 });
+
+async function settleRecorded(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 async function resolve<T>(output: pulumi.Output<T>): Promise<T> {
   return new Promise((res) => output.apply(res));
@@ -112,6 +122,14 @@ describe("Availability — availability-changed consumer (#207)", () => {
     });
   });
 
+  it("reports partial batch failures so a failed record is retried, not deleted with its batch", async () => {
+    const availability = await build();
+    const types = await resolve(
+      availability.availabilityChangedQueueConsumer.eventSourceMapping.functionResponseTypes,
+    );
+    expect(types).toEqual(["ReportBatchItemFailures"]);
+  });
+
   it("grants the availability-changed consumer role only the alerting table, denied on platform/incident (AC5)", async () => {
     const availability = await build();
     const policyJson = await resolve(availability.availabilityChangedConsumer.rolePolicy.policy);
@@ -172,5 +190,94 @@ describe("Availability — availability-changed consumer (#207)", () => {
     const availability = await build();
     const vpcConfig = await resolve(availability.availabilityChangedConsumer.function.vpcConfig);
     expect(vpcConfig).toBeUndefined();
+  });
+});
+
+describe("Availability — mark-off expiry failure handling (B1-003)", () => {
+  async function build() {
+    const { Availability } = await import("../../components/personnel/availability");
+    const logGroup = new ServiceLogGroup("test-expiry-log-group", {
+      env: "dev",
+      serviceName: "personnel-service",
+    });
+    const alertingLogGroup = new ServiceLogGroup("test-expiry-alerting-log-group", {
+      env: "dev",
+      serviceName: "alerting-service",
+    });
+    const httpApi = new HttpApi("test-expiry-http-api", {
+      env: "dev",
+      userPoolId: pulumi.output("pool-1"),
+      platformTableName: "platform-table",
+      platformTableArn: "arn:aws:dynamodb:us-east-1:123456789012:table/platform",
+      allowedClientIds: [pulumi.output("client-1")],
+      platformLogGroup: logGroup,
+    });
+    return new Availability("test-expiry", {
+      pageTopicArn: "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page",
+      env: "dev",
+      platformTableName: pulumi.output("platform-table"),
+      platformTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/platform"),
+      policyStoreArn: pulumi.output("arn:aws:verifiedpermissions::123456789012:policy-store/ps-1"),
+      policyStoreId: pulumi.output("ps-1"),
+      logGroup,
+      httpApi,
+      platformBus: new PlatformBus("test-expiry-platform-bus", { env: "dev" }),
+      alertingTableArn: pulumi.output("arn:aws:dynamodb:us-east-1:123456789012:table/alerting"),
+      alertingCmkArn: "arn:aws:kms:us-east-1:123456789012:key/alerting-cmk",
+      alertingTableName: pulumi.output("alerting-table"),
+      alertingLogGroup,
+    });
+  }
+
+  const PAGE_TOPIC = "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-alerting-page";
+  const ON_FAILURE_ARN =
+    "arn:aws:sqs:us-east-1:123456789012:boxalarm-dev-personnel-availability-expiry-onfailure";
+  const SCHEDULE_DLQ_ARN =
+    "arn:aws:sqs:us-east-1:123456789012:boxalarm-dev-personnel-availability-scheduler-dlq";
+
+  it("sends a failed async expiry invocation to an on-failure queue, with a paging depth alarm", async () => {
+    const availability = await build();
+    const config = await resolve(availability.expiryAsyncConfig.destinationConfig);
+    expect(config).toEqual({ onFailure: { destination: ON_FAILURE_ARN } });
+    expect(await resolve(availability.expiryAsyncConfig.functionName)).toBe(
+      await resolve(availability.expiryLambda.function.name),
+    );
+
+    const alarm = availability.expiryOnFailureAlarm;
+    expect(await resolve(alarm.metricName)).toBe("ApproximateNumberOfMessagesVisible");
+    expect(await resolve(alarm.threshold)).toBe(0);
+    expect(await resolve(alarm.alarmActions)).toEqual([PAGE_TOPIC]);
+  });
+
+  it("lets the expiry Lambda role write only its own on-failure queue", async () => {
+    await build();
+    await settleRecorded();
+    const policy = recorded.find((r) => r.name === "test-expiry-expiry-onfailure-send");
+    const statement = JSON.parse(
+      String(await resolve(pulumi.output(policy?.inputs.policy as never))),
+    ).Statement[0];
+    expect(statement).toMatchObject({
+      Action: ["sqs:SendMessage"],
+      Resource: ON_FAILURE_ARN,
+    });
+  });
+
+  it("dead-letters the runtime schedules: DLQ granted to the scheduler role, ARN handed to the create Lambda, depth paged", async () => {
+    const availability = await build();
+    const env = await resolve(availability.createLambda.function.environment);
+    expect(env?.variables?.AVAILABILITY_SCHEDULE_DLQ_ARN).toBe(SCHEDULE_DLQ_ARN);
+
+    await settleRecorded();
+    const grant = recorded.find(
+      (r) => r.name === "test-expiry-schedule-dead-letter-dlq-send-policy",
+    );
+    const statement = JSON.parse(
+      String(await resolve(pulumi.output(grant?.inputs.policy as never))),
+    ).Statement[0];
+    expect(statement).toMatchObject({ Action: "sqs:SendMessage", Resource: SCHEDULE_DLQ_ARN });
+    expect(grant?.inputs.role).toBe(await resolve(availability.schedulerRole.id));
+
+    const depth = availability.scheduleDeadLetter.depthAlarm;
+    expect(await resolve(depth.alarmActions)).toEqual([PAGE_TOPIC]);
   });
 });

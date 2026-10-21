@@ -5,6 +5,7 @@ import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 
 vi.mock('../escalation/scheduleEscalation.js', () => ({
   createEscalationSchedule: vi.fn().mockResolvedValue('esc-schedule'),
+  readEscalationThresholdSeconds: vi.fn().mockResolvedValue(45),
 }));
 
 vi.mock('../escalation/toneLadder.js', () => ({
@@ -120,11 +121,69 @@ describe('scheduleRealtimeFanOutEscalation', () => {
     expect(createEscalationSchedule).toHaveBeenCalledTimes(2);
     expect(createEscalationSchedule).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ dispatchId: 'dispatch-1', memberId: 'mbr-1', toneSequence: 1 }),
-      expect.anything(),
-      'alerting-table',
+      expect.objectContaining({
+        dispatchId: 'dispatch-1',
+        memberId: 'mbr-1',
+        toneSequence: 1,
+        delaySeconds: 45,
+      }),
     );
     expect(scheduleDepartmentToneLadder).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the escalation threshold once and schedules members concurrently within the limit', async () => {
+    const { createEscalationSchedule, readEscalationThresholdSeconds } =
+      await import('../escalation/scheduleEscalation.js');
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
+    const fakeDdb = createFakeDdb();
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(createEscalationSchedule).mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return 'esc-schedule';
+    });
+    const members = Array.from({ length: 25 }, (_, i) => ({ memberId: `mbr-${i}`, quals: [] }));
+
+    await scheduleRealtimeFanOutEscalation(
+      { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
+      { send: vi.fn() } as unknown as SchedulerClient,
+      'alerting-table',
+      DEPT_ID,
+      'dispatch-1',
+      members,
+    );
+
+    expect(readEscalationThresholdSeconds).toHaveBeenCalledTimes(1);
+    expect(createEscalationSchedule).toHaveBeenCalledTimes(25);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(10);
+  });
+
+  it('rejects when a member fails to schedule so the stream retries', async () => {
+    const { createEscalationSchedule } = await import('../escalation/scheduleEscalation.js');
+    const { scheduleDepartmentToneLadder } = await import('../escalation/toneLadder.js');
+    const { scheduleRealtimeFanOutEscalation } = await import('./fanOut.js');
+    const fakeDdb = createFakeDdb();
+    vi.mocked(createEscalationSchedule).mockRejectedValueOnce(new Error('scheduler down'));
+
+    await expect(
+      scheduleRealtimeFanOutEscalation(
+        { send: fakeDdb.send } as unknown as DynamoDBDocumentClient,
+        { send: vi.fn() } as unknown as SchedulerClient,
+        'alerting-table',
+        DEPT_ID,
+        'dispatch-1',
+        [
+          { memberId: 'mbr-1', quals: [] },
+          { memberId: 'mbr-2', quals: [] },
+        ],
+      ),
+    ).rejects.toThrow('scheduler down');
+    expect(createEscalationSchedule).toHaveBeenCalledTimes(2);
+    expect(scheduleDepartmentToneLadder).not.toHaveBeenCalled();
   });
 
   it('schedules no tone ladder for an empty audience', async () => {

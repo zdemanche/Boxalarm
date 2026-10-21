@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
@@ -15,6 +15,8 @@ import styles from './Alerts.module.css';
 // every 1-2 min); this is a stated default (2x a 120s assumed interval), not an architecture
 // fact - see the plan's Risks section.
 const CANARY_STALE_AFTER_MS = 240_000;
+const CANARY_REFETCH_INTERVAL_MS = 60_000;
+const CANARY_RECHECK_INTERVAL_MS = 30_000;
 
 function timelineLabel(entry: DiagnosticsTimelineEntry): string {
   if (entry.entityType === 'DELIVERY_RECEIPT') {
@@ -22,11 +24,12 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
     // the provider callbacks set failureReason / deliveredAt / openedAt
     // (receipts/deliveryReceiptRepository.ts). Keying on `status` alone labelled every
     // delivered page "Sent, not confirmed delivered".
+    if (entry.openedAt || entry.status === 'OPENED') return 'Opened';
+    if (entry.deliveredAt || entry.status === 'DELIVERED') return 'Delivered';
     if (entry.failureReason || entry.status === 'FAILED') {
       return `Failed${entry.failureReason ? ` — ${entry.failureReason}` : ''}`;
     }
-    if (entry.openedAt || entry.status === 'OPENED') return 'Opened';
-    if (entry.deliveredAt || entry.status === 'DELIVERED') return 'Delivered';
+    if (entry.sentAt === undefined || entry.status === 'NOT_SENT') return 'Not sent';
     return 'Sent, not confirmed delivered';
   }
   if (entry.entityType === 'ESCALATION_EVENT')
@@ -39,9 +42,10 @@ function timelineLabel(entry: DiagnosticsTimelineEntry): string {
 /** A delivery event carries its status as colour + glyph + word; other events are plain text. */
 function timelineRole(entry: DiagnosticsTimelineEntry): StatusRole | null {
   if (entry.entityType !== 'DELIVERY_RECEIPT') return null;
-  if (entry.failureReason || entry.status === 'FAILED') return 'danger';
   if (entry.openedAt || entry.status === 'OPENED') return 'ok';
   if (entry.deliveredAt || entry.status === 'DELIVERED') return 'ok';
+  if (entry.failureReason || entry.status === 'FAILED') return 'danger';
+  if (entry.sentAt === undefined || entry.status === 'NOT_SENT') return 'danger';
   return 'warning';
 }
 
@@ -150,7 +154,7 @@ function TimelineTable({ dispatchId, memberId }: { dispatchId: string; memberId:
                   const role = timelineRole(entry);
                   return (
                     <tr key={`${entry.entityType}-${index}`}>
-                      <th scope="row">{entry.channel ?? '—'}</th>
+                      <th scope="row">{entry.channel?.toUpperCase() ?? '—'}</th>
                       <td>{entry.toneSequence ?? '—'}</td>
                       <td>
                         {role ? (
@@ -180,9 +184,15 @@ function CanaryPanel() {
   const query = useQuery({
     queryKey: ['alerts', 'canary', 'status'],
     queryFn: () => getCanaryStatus(auth),
+    refetchInterval: CANARY_REFETCH_INTERVAL_MS,
   });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), CANARY_RECHECK_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Canary status is unavailable.</p>
@@ -198,7 +208,7 @@ function CanaryPanel() {
   }
 
   const { healthy, latestResult, latestLatencyMs, latestRanAt } = query.data;
-  const stale = latestRanAt === null || Date.now() - latestRanAt * 1000 > CANARY_STALE_AFTER_MS;
+  const stale = latestRanAt === null || now - latestRanAt * 1000 > CANARY_STALE_AFTER_MS;
   const isHealthy = healthy && !stale;
   const overBudget = latestLatencyMs !== null && latestLatencyMs > 5000;
 
@@ -222,8 +232,12 @@ function CanaryPanel() {
         <ul className={styles.chipRow} aria-label="Latest run by channel">
           {Object.entries(query.data.runs[0].channelResults).map(([channel, result]) => (
             <li key={channel}>
-              <StatusChip status={result === 'PASS' ? 'ok' : 'danger'}>
-                {channel.toUpperCase()}: {String(result)}
+              <StatusChip status={result.ok ? 'ok' : 'danger'}>
+                {channel.toUpperCase()}: {result.ok ? 'OK' : 'Failed'} · {result.ms}ms
+                {result.reason ? ` — ${result.reason}` : ''}
+                {result.ok && result.delivered === false
+                  ? ' — credentials verified, not delivered'
+                  : ''}
               </StatusChip>
             </li>
           ))}
