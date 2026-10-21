@@ -6,6 +6,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { recordResponse } from './repository.js';
@@ -501,6 +502,40 @@ describe('recordResponse (real DynamoDB, AC1/AC5/core-harm)', () => {
       });
       expect(await recordsOf(dispatchId, 'MBR-0022')).toHaveLength(1);
       expect(await queryOutboxEntriesForDispatch(deptId, dispatchId)).toHaveLength(1);
+    });
+
+    it('a replay whose guard lost its roster outcome answers APPLIED when the roster already holds that answer', async () => {
+      const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
+      const dispatchId = 'NICHOLS-4471-LOSTOUTCOME';
+      await putDispatchAlert(dispatchId);
+      await putEligibilitySnapshot('MBR-0024');
+      const input = {
+        deptId,
+        dispatchId,
+        memberId: 'MBR-0024',
+        ackStatus: 'RESPONDING' as const,
+        eta: 7,
+        assignedApparatusId: null,
+        answeredAt: 1798001300,
+        answeredAtMs: 1798001300250,
+        clientAnswerId: 'ans-lost-outcome-1',
+      };
+      await recordResponse(client, TABLE_NAME, input);
+      await client.send(
+        new UpdateCommand({
+          TableName: TABLE_NAME,
+          Key: {
+            pk: `DEPT#${deptId}#DISPATCH#${dispatchId}`,
+            sk: `RESPONSEKEY#MBR-0024#ans-lost-outcome-1`,
+          },
+          UpdateExpression: 'REMOVE rosterOutcome',
+        }),
+      );
+
+      const retry = await recordResponse(client, TABLE_NAME, input);
+
+      expect(retry).toMatchObject({ outcome: 'recorded', roster: 'APPLIED', replayed: true });
+      expect((await rosterOf(dispatchId, 'MBR-0024'))?.ackStatus).toBe('RESPONDING');
     });
 
     it('reusing a clientAnswerId for a different answer is a conflict and changes nothing', async () => {

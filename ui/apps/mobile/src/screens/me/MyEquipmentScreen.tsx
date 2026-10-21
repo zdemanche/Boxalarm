@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Text } from 'react-native';
 import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { useAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { useInventoryRepository } from '../../features/inventory/apiInventoryRepository';
 import type { EquipmentAsset, LifecycleStatus } from '../../features/inventory/types';
 import { InfoRow, Rows } from './MeRows';
@@ -17,14 +18,27 @@ export function MyEquipmentScreen() {
   const theme = useTheme();
   const repository = useInventoryRepository();
   const { memberId } = useAuth();
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [equipment, setEquipment] = useState<EquipmentAsset[]>([]);
 
   useEffect(() => {
     if (!memberId) return;
     let cancelled = false;
-    repository.getMyEquipment(memberId).then((result) => {
-      if (!cancelled) setEquipment(result);
-    });
+    setLoadError(null);
+    repository
+      .getMyEquipment(memberId)
+      .then((result) => {
+        if (!cancelled) setEquipment(result);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setLoadError(
+          error instanceof ApiError &&
+            (error.problem.status === 401 || error.problem.status === 403)
+            ? 'You do not have access to your equipment.'
+            : 'Your equipment could not be loaded. Check your connection and try again.',
+        );
+      });
     return () => {
       cancelled = true;
     };
@@ -33,7 +47,14 @@ export function MyEquipmentScreen() {
   return (
     <Screen>
       <Card>
-        {equipment.length === 0 ? (
+        {loadError ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {loadError}
+          </Text>
+        ) : equipment.length === 0 ? (
           <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
             No equipment assigned to you.
           </Text>

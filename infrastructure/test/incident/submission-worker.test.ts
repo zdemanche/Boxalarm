@@ -173,4 +173,31 @@ describe("NerisSubmissionWorker", () => {
       ]);
     }
   });
+
+  it("sends a failed scheduler-invoked retry to a failure queue that alarms the chief topic", async () => {
+    const worker = await build();
+    const [destination, queueArn, alarm, functionName] = await Promise.all([
+      resolve(worker.retryInvokeConfig.destinationConfig),
+      resolve(worker.retryFailureQueue.arn),
+      resolve(
+        pulumi.all([
+          worker.retryFailureAlarm.metricName,
+          worker.retryFailureAlarm.namespace,
+          worker.retryFailureAlarm.dimensions,
+          worker.retryFailureAlarm.alarmActions,
+        ]),
+      ),
+      resolve(worker.lambda.function.name),
+    ]);
+    expect(functionName).toBe("boxalarm-dev-incident-submission-worker");
+    expect(destination?.onFailure?.destination).toBe(queueArn);
+    expect(alarm[0]).toBe("ApproximateNumberOfMessagesVisible");
+    expect(alarm[1]).toBe("AWS/SQS");
+    expect(alarm[2]).toEqual({
+      QueueName: "boxalarm-dev-incident-neris-submission-retry-failures",
+    });
+    expect(alarm[3]).toEqual([
+      "arn:aws:sns:us-east-1:123456789012:boxalarm-dev-chief-notifications",
+    ]);
+  });
 });

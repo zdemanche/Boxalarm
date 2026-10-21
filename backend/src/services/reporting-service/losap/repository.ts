@@ -25,7 +25,7 @@ export interface LosapYearEndReport {
   readonly totalUnreadableEntryCount: number;
 }
 
-export async function listLosapEligibleMembers(
+export async function listLosapRoster(
   client: DynamoDBDocumentClient,
   tableName: string,
   deptId: VerifiedDeptId,
@@ -55,7 +55,7 @@ export async function listLosapEligibleMembers(
     logError('reporting.losap.roster.failed', error, { deptId });
     throw error;
   }
-  return members.filter((member) => LOSAP_ELIGIBLE_STATUSES.has(member.status));
+  return members;
 }
 
 export async function sumLosapPointsForMemberYear(
@@ -116,8 +116,8 @@ export async function buildYearEndReport(
   year: number,
   traceId?: string,
 ): Promise<LosapYearEndReport> {
-  const roster = await listLosapEligibleMembers(client, tableName, deptId);
-  const members = await Promise.all(
+  const roster = await listLosapRoster(client, tableName, deptId);
+  const totals = await Promise.all(
     roster.map(async (member) => {
       const { totalPoints, entryCount, unreadableEntryCount } = await sumLosapPointsForMemberYear(
         client,
@@ -126,9 +126,15 @@ export async function buildYearEndReport(
         year,
         traceId,
       );
-      return { memberId: member.memberId, totalPoints, entryCount, unreadableEntryCount };
+      return {
+        status: member.status,
+        total: { memberId: member.memberId, totalPoints, entryCount, unreadableEntryCount },
+      };
     }),
   );
+  const members = totals
+    .filter(({ status, total }) => LOSAP_ELIGIBLE_STATUSES.has(status) || total.entryCount > 0)
+    .map(({ total }) => total);
   const hasData = members.some((member) => member.entryCount > 0);
   const totalUnreadableEntryCount = members.reduce(
     (sum, member) => sum + member.unreadableEntryCount,

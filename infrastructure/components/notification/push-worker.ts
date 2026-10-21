@@ -73,7 +73,7 @@ export class PushWorker extends pulumi.ComponentResource {
       {
         name: `boxalarm-${env}-notification-push-queue`,
         // 6x the Lambda timeout, AWS's floor recommendation for ESM consumers.
-        visibilityTimeoutSeconds: 180,
+        visibilityTimeoutSeconds: 540,
         redrivePolicy: this.dlq.arn.apply((arn) =>
           JSON.stringify({ deadLetterTargetArn: arn, maxReceiveCount: 5 }),
         ),
@@ -131,8 +131,8 @@ export class PushWorker extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("notification-service", "push-worker"),
         logGroup: args.logGroup,
-        // A batch is up to 10 members; each device send is budgeted at 8s in-process.
-        timeout: 30,
+        // One member per invocation (batchSize 1): up to 10 devices at the 8s in-process send budget.
+        timeout: 90,
         environment: {
           PLATFORM_SERVICE_TABLE_NAME: args.platformTableName,
           APNS_SECRET_ID: args.pushSecrets.apns.name,
@@ -177,6 +177,7 @@ export class PushWorker extends pulumi.ComponentResource {
         eventSourceArn: this.queue.arn,
         functionName: this.workerLambda.function.name,
         functionResponseTypes: ["ReportBatchItemFailures"],
+        batchSize: 1,
         scalingConfig: { maximumConcurrency: 5 },
       },
       { parent: this },

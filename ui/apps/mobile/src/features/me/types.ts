@@ -23,7 +23,7 @@ export interface Qualification {
 }
 
 export interface ProfileUpdate {
-  phone?: string;
+  phone?: string | null;
   email?: string;
   firstName?: string;
   lastName?: string;

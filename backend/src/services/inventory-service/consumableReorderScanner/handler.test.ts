@@ -221,6 +221,9 @@ describe('publishReorderDueEvent', () => {
     expect(putCommand).toBeInstanceOf(PutCommand);
     expect(putCommand.input.Item?.pk).toBe('DEPT#NICHOLS#CONSUMABLE_REORDER_FLAG#2026-09-14');
     expect(putCommand.input.Item?.sk).toBe('CONSUMABLE#GLOVES-L');
+    expect(putCommand.input.Item?.ttl).toBe(
+      Math.floor(basePublishParams.now.getTime() / 1000) + 7 * 86400,
+    );
 
     const updateCommand = ddbSend.mock.calls[1]?.[0] as UpdateCommand;
     expect(updateCommand).toBeInstanceOf(UpdateCommand);

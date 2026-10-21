@@ -1,6 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { useOptionalAuth, type AuthContextValue } from '../../auth/AuthContext';
-import { apiRequest } from '../../lib/apiClient';
+import { ApiError, apiRequest } from '../../lib/apiClient';
 import { TrainingEventsScreen } from './TrainingEventsScreen';
 
 jest.mock('../../lib/apiClient', () => {
@@ -41,8 +41,8 @@ test('signing up for a training event marks it signed up', async () => {
             eventId: 'evt-1',
             title: 'Ladder drill',
             category: 'Ladders',
-            startAt: 1,
-            endAt: 2,
+            startAt: Date.now() + 3_600_000,
+            endAt: Date.now() + 7_200_000,
             signedUp: false,
           },
         ],
@@ -73,4 +73,90 @@ test('shows an error message instead of hanging when the events fetch fails', as
   expect(alert.props.children).toBe(
     'Training events could not be loaded. Check your connection and try again.',
   );
+});
+
+function mockEvents(signup: () => Promise<unknown>, startAt = Date.now() + 3_600_000) {
+  mockApiRequest.mockImplementation(async (path: string) => {
+    if (path === 'training/events') {
+      return {
+        json: async () => [
+          {
+            eventId: 'evt-1',
+            title: 'Ladder drill',
+            category: 'Ladders',
+            startAt,
+            endAt: startAt + 1,
+            signedUp: false,
+          },
+        ],
+      };
+    }
+    return signup();
+  });
+}
+
+test('a 422 on sign-up says the event has started and does not mark it signed up', async () => {
+  mockEvents(async () => {
+    throw new ApiError({ type: 'about:blank', title: 'Unprocessable', status: 422, traceId: 't' });
+  });
+
+  const { findByText, findByRole, queryByText } = await render(<TrainingEventsScreen />);
+  fireEvent.press(await findByText('Ladder drill'));
+
+  expect((await findByRole('alert')).props.children).toBe(
+    'Sign-up is closed: this event has started.',
+  );
+  expect(queryByText('Signed up')).toBeNull();
+});
+
+test('a failed sign-up with no signal shows a retryable error', async () => {
+  mockEvents(async () => {
+    throw new TypeError('Network request failed');
+  });
+
+  const { findByText, findByRole } = await render(<TrainingEventsScreen />);
+  fireEvent.press(await findByText('Ladder drill'));
+
+  expect((await findByRole('alert')).props.children).toMatch(/Could not sign you up/);
+});
+
+test('a 409 means already signed up', async () => {
+  mockEvents(async () => {
+    throw new ApiError({ type: 'about:blank', title: 'Conflict', status: 409, traceId: 't' });
+  });
+
+  const { findByText } = await render(<TrainingEventsScreen />);
+  fireEvent.press(await findByText('Ladder drill'));
+
+  expect(await findByText('Signed up')).toBeTruthy();
+});
+
+test('an event that has started offers no sign-up', async () => {
+  mockEvents(async () => ({ json: async () => ({}) }), Date.now() - 3_600_000);
+
+  const { findByText, queryByText } = await render(<TrainingEventsScreen />);
+  fireEvent.press(await findByText('Ladder drill'));
+
+  expect(await findByText('Sign-up closed')).toBeTruthy();
+  expect(queryByText('Sign up')).toBeNull();
+  expect(mockApiRequest).toHaveBeenCalledTimes(1);
+});
+
+test('repeated taps while a sign-up is in flight send one POST', async () => {
+  let release: () => void = () => {};
+  mockEvents(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve({ json: async () => ({}) });
+      }),
+  );
+
+  const { findByText } = await render(<TrainingEventsScreen />);
+  const row = await findByText('Ladder drill');
+  await fireEvent.press(row);
+  await fireEvent.press(row);
+  release();
+
+  expect(await findByText('Signed up')).toBeTruthy();
+  expect(mockApiRequest).toHaveBeenCalledTimes(2);
 });

@@ -55,21 +55,42 @@ function pdfEscape(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
 
+const PDF_LINES_PER_PAGE = 60;
+const PDF_LINE_WIDTH = 80;
+
+function wrapLine(line: string): string[] {
+  const chunks: string[] = [];
+  for (let start = 0; start < line.length; start += PDF_LINE_WIDTH) {
+    chunks.push(line.slice(start, start + PDF_LINE_WIDTH));
+  }
+  return chunks.length > 0 ? chunks : [''];
+}
+
 export function renderPdf(report: TabularReport): Buffer {
   const lines = [
     report.title,
     report.headers.join(' | '),
     ...report.rows.map((row) => row.join(' | ')),
-  ];
-  const body = lines.map((line) => `(${pdfEscape(line)}) Tj T*`).join('\n');
-  const contentStream = `BT\n/F1 10 Tf\n12 TL\n50 780 Td\n${body}\nET`;
-  const contentLength = Buffer.byteLength(contentStream, 'latin1');
+  ].flatMap(wrapLine);
+  const pages: string[][] = [];
+  for (let start = 0; start < lines.length; start += PDF_LINES_PER_PAGE) {
+    pages.push(lines.slice(start, start + PDF_LINES_PER_PAGE));
+  }
+  const firstPageObject = 4;
+  const pageObjectNumber = (index: number): number => firstPageObject + index * 2;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Pages /Kids [${pages.map((_, index) => `${pageObjectNumber(index)} 0 R`).join(' ')}] /Count ${pages.length} >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${contentLength} >>\nstream\n${contentStream}\nendstream`,
+    ...pages.flatMap((pageLines, index) => {
+      const body = pageLines.map((line) => `(${pdfEscape(line)}) Tj T*`).join('\n');
+      const contentStream = `BT\n/F1 10 Tf\n12 TL\n50 750 Td\n${body}\nET`;
+      const contentLength = Buffer.byteLength(contentStream, 'latin1');
+      return [
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${pageObjectNumber(index) + 1} 0 R >>`,
+        `<< /Length ${contentLength} >>\nstream\n${contentStream}\nendstream`,
+      ];
+    }),
   ];
   let pdf = '%PDF-1.4\n';
   const offsets: number[] = [0];

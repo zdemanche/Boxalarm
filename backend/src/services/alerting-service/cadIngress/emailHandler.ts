@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import type { SESEvent, SESEventRecord } from 'aws-lambda';
+import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import type { VerifiedDeptId } from '@boxalarm/dept-scope';
+import type { SESEvent, SESEventRecord, SESReceipt } from 'aws-lambda';
 import { captureAWSv3Client } from 'aws-xray-sdk-core';
 import { ALERTING_SDK_CLIENT_CONFIG } from '../awsClientConfig.js';
 import { createDynamoClient, readAlertingConfig } from '../eligibility/dynamoClient.js';
@@ -13,8 +15,8 @@ import {
 } from './emailAuth.js';
 import { ingestCadDispatch } from './ingest.js';
 import { emitCadMetric } from './metrics.js';
-import { parseEmail } from './mime.js';
-import { isReplayMarked } from './replayGuard.js';
+import { parseEmail, type ParsedEmail } from './mime.js';
+import { replayMarkerOrigin } from './replayGuard.js';
 import { loadCadSource, parseRecipientLocalPart, type CadSourceCopy } from './sourceCopy.js';
 
 /**
@@ -80,13 +82,106 @@ async function readRawMessage(
   return { raw: bytes ? Buffer.from(bytes).toString('latin1') : '' };
 }
 
+interface IngestTarget {
+  readonly deptId: VerifiedDeptId;
+  readonly source: CadSourceCopy;
+  readonly recipient: string;
+}
+
+interface SourceScope {
+  readonly deptId: string;
+  readonly sourceId: string;
+}
+
+interface IngestContext {
+  readonly client: DynamoDBDocumentClient;
+  readonly tableName: string;
+  readonly sesMessageId: string;
+  readonly nowSeconds: number;
+}
+
+type TargetOutcome = 'handled' | { readonly rejected: EmailAuthFailure };
+
+async function ingestForTarget(
+  context: IngestContext,
+  email: ParsedEmail,
+  receipt: SESReceipt,
+  { deptId, source, recipient }: IngestTarget,
+): Promise<TargetOutcome> {
+  const { client, tableName, sesMessageId, nowSeconds } = context;
+  // 4-5. From and every DKIM d= on the allowlist; Date / t= fresh.
+  const senderFailure = checkEmailSender(
+    email,
+    source.email?.allowedSenders ?? [],
+    nowSeconds,
+    receipt.dmarcVerdict?.status,
+    recipient,
+  );
+  if (senderFailure) return { rejected: senderFailure };
+  logInfo('cadIngress.email.authenticated', {
+    deptId,
+    sourceId: source.sourceId,
+    sesMessageId,
+    // Recorded, as the decision record asks; GRAY (no published policy) is accepted.
+    dmarc: receipt.dmarcVerdict?.status ?? 'NONE',
+  });
+
+  // 6. Replay: early read-only answer; the marker is written inside the dispatch transaction
+  // (step 7), so a failed write can never leave it behind to swallow the retry (chain M3).
+  const replayKey = emailReplayToken(email, nowSeconds);
+  const replayRef = { deptId, sourceId: source.sourceId, token: replayKey.token };
+  let marker: Awaited<ReturnType<typeof replayMarkerOrigin>> = { marked: false };
+  for (const { token } of [replayKey, ...replayKey.also]) {
+    marker = await replayMarkerOrigin(client, tableName, { ...replayRef, token }, nowSeconds);
+    if (marker.marked) break;
+  }
+  if (marker.marked) {
+    const ownRetry = marker.origin === sesMessageId;
+    if (!ownRetry) emitCadMetric('CadIngressReplayRejected', { Channel: CHANNEL });
+    logInfo(ownRetry ? 'cadIngress.email.retrySkipped' : 'cadIngress.email.replay', {
+      sesMessageId,
+      deptId,
+      sourceId: source.sourceId,
+    });
+    return 'handled';
+  }
+
+  // 7. Authenticated: parse (fail open) and write the dispatch with its replay marker. A write
+  // failure throws for Lambda's async retry; nothing was committed, so the retry is processed.
+  const result = await ingestCadDispatch(client, tableName, {
+    deptId,
+    source,
+    channel: CHANNEL,
+    // The Subject leads: many CADs carry the call type and address there, and an empty body
+    // must not make every such email the same "text" (chain review C1).
+    text: email.subject ? `${email.subject}\n${email.text}` : email.text,
+    receivedAt: nowSeconds,
+    replay: {
+      token: replayRef.token,
+      ttlSeconds: replayKey.ttlSeconds,
+      origin: sesMessageId,
+      also: replayKey.also,
+    },
+  });
+  logInfo('cadIngress.email.processed', {
+    deptId,
+    sourceId: source.sourceId,
+    sesMessageId,
+    outcome: result.outcome,
+  });
+  return 'handled';
+}
+
 async function processRecord(record: SESEventRecord, config: MailConfig): Promise<void> {
   const { mail, receipt } = record.ses;
   const sesMessageId = mail.messageId;
   const objectKey = `${config.prefix}${sesMessageId}`;
   const nowSeconds = Math.floor(Date.now() / 1000);
 
-  const quarantine = (reason: EmailAuthFailure | 'UnknownRecipient' | 'TooLarge') => {
+  const quarantine = (
+    reason: EmailAuthFailure | 'UnknownRecipient' | 'TooLarge',
+    scope?: SourceScope,
+  ) => {
     if (reason === 'UnknownRecipient') {
       // Mail to an address no source owns is internet spam to the domain, not a CAD problem:
       // counted on its own and never on the chief-facing auth/quarantine alarms, which it would
@@ -105,88 +200,102 @@ async function processRecord(record: SESEventRecord, config: MailConfig): Promis
     logInfo('cadIngress.email.quarantined', {
       reason,
       sesMessageId,
+      ...scope,
       quarantine: `s3://${config.bucket}/${objectKey}`,
     });
   };
 
-  // 1-2. Recipient -> source. The department is the source's, never the message's.
-  let target: ReturnType<typeof parseRecipientLocalPart>;
-  let matchedRecipient: string | undefined;
-  for (const recipient of receipt.recipients) {
-    const at = recipient.lastIndexOf('@');
-    if (at > 0 && recipient.slice(at + 1).toLowerCase() === config.domain) {
-      target = parseRecipientLocalPart(recipient.slice(0, at));
-      if (target) {
-        matchedRecipient = recipient;
-        break;
-      }
-    }
-  }
-  if (!target) return quarantine('UnknownRecipient');
-
+  // 1-2. Recipients -> sources. The department is the source's, never the message's. One email
+  // can be addressed to several departments (mutual aid): each is processed once, through its
+  // first source that passes the sender check, so two addresses of one department never page it
+  // twice; an unknown or stale address among them never hides a valid one, and one department's
+  // failed lookup never holds up the others.
   const { tableName } = readAlertingConfig(process.env);
   const client = createDynamoClient(process.env);
-  const source: CadSourceCopy | undefined = await loadCadSource(
-    client,
-    tableName,
-    target.deptId,
-    target.sourceId,
-  );
-  if (!source?.email || !tokensMatch(source.email.recipientToken, target.token)) {
-    return quarantine('UnknownRecipient');
+  const targets = new Map<string, IngestTarget[]>();
+  const failures: unknown[] = [];
+  let skippedRecipients = 0;
+  const skipRecipient = () => {
+    skippedRecipients += 1;
+    quarantine('UnknownRecipient');
+  };
+  for (const recipient of receipt.recipients) {
+    const at = recipient.lastIndexOf('@');
+    if (at <= 0 || recipient.slice(at + 1).toLowerCase() !== config.domain) {
+      skipRecipient();
+      continue;
+    }
+    const parsed = parseRecipientLocalPart(recipient.slice(0, at));
+    if (!parsed) {
+      skipRecipient();
+      continue;
+    }
+    const siblings = targets.get(parsed.deptId) ?? [];
+    if (siblings.some((target) => target.source.sourceId === parsed.sourceId)) continue;
+    try {
+      const source = await loadCadSource(client, tableName, parsed.deptId, parsed.sourceId);
+      if (source?.email && tokensMatch(source.email.recipientToken, parsed.token)) {
+        targets.set(parsed.deptId, [...siblings, { deptId: parsed.deptId, source, recipient }]);
+      } else {
+        skipRecipient();
+      }
+    } catch (error) {
+      logError('cadIngress.email.sourceLookupFailed', error, {
+        sesMessageId,
+        deptId: parsed.deptId,
+        sourceId: parsed.sourceId,
+      });
+      failures.push(error);
+    }
+  }
+  if (targets.size === 0) {
+    if (failures.length > 0) throw failures[0];
+    if (skippedRecipients === 0) quarantine('UnknownRecipient');
+    return;
   }
 
   // 3. SES verdicts.
   const verdictFailure = checkSesVerdicts(receipt);
   if (verdictFailure) return quarantine(verdictFailure);
 
-  // 4-5. From and every DKIM d= on the allowlist; Date / t= fresh.
   const message = await readRawMessage(config, objectKey);
   if ('tooLarge' in message) return quarantine('TooLarge');
   const email = parseEmail(message.raw);
-  const senderFailure = checkEmailSender(
-    email,
-    source.email.allowedSenders,
-    nowSeconds,
-    receipt.dmarcVerdict?.status,
-    matchedRecipient,
-  );
-  if (senderFailure) return quarantine(senderFailure);
-  logInfo('cadIngress.email.authenticated', {
-    deptId: target.deptId,
-    sourceId: source.sourceId,
-    sesMessageId,
-    // Recorded, as the decision record asks; GRAY (no published policy) is accepted.
-    dmarc: receipt.dmarcVerdict?.status ?? 'NONE',
-  });
 
-  // 6. Replay: early read-only answer; the marker is written inside the dispatch transaction
-  // (step 7), so a failed write can never leave it behind to swallow the retry (chain M3).
-  const replayKey = emailReplayToken(email, nowSeconds);
-  const replayRef = {
-    deptId: target.deptId,
-    sourceId: source.sourceId,
-    token: replayKey.token,
-  };
-  if (await isReplayMarked(client, tableName, replayRef, nowSeconds)) {
-    emitCadMetric('CadIngressReplayRejected', { Channel: CHANNEL });
-    logInfo('cadIngress.email.replay', { sesMessageId, sourceId: source.sourceId });
-    return;
+  for (const candidates of targets.values()) {
+    const rejections: { reason: EmailAuthFailure; scope: SourceScope }[] = [];
+    let settled = false;
+    for (const target of candidates) {
+      try {
+        const outcome = await ingestForTarget(
+          { client, tableName, sesMessageId, nowSeconds },
+          email,
+          receipt,
+          target,
+        );
+        if (outcome === 'handled') {
+          settled = true;
+          break;
+        }
+        rejections.push({
+          reason: outcome.rejected,
+          scope: { deptId: target.deptId, sourceId: target.source.sourceId },
+        });
+      } catch (error) {
+        logError('cadIngress.email.sourceFailed', error, {
+          sesMessageId,
+          deptId: target.deptId,
+          sourceId: target.source.sourceId,
+        });
+        failures.push(error);
+        settled = true;
+        break;
+      }
+    }
+    if (!settled) for (const { reason, scope } of rejections) quarantine(reason, scope);
   }
-
-  // 7. Authenticated: parse (fail open) and write the dispatch with its replay marker. A write
-  // failure throws for Lambda's async retry; nothing was committed, so the retry is processed.
-  const result = await ingestCadDispatch(client, tableName, {
-    deptId: target.deptId,
-    source,
-    channel: CHANNEL,
-    // The Subject leads: many CADs carry the call type and address there, and an empty body
-    // must not make every such email the same "text" (chain review C1).
-    text: email.subject ? `${email.subject}\n${email.text}` : email.text,
-    receivedAt: nowSeconds,
-    replay: { token: replayRef.token, ttlSeconds: replayKey.ttlSeconds },
-  });
-  logInfo('cadIngress.email.processed', { sesMessageId, outcome: result.outcome });
+  // Async invoke: Lambda retries; replay markers are per source, so targets already written skip.
+  if (failures.length > 0) throw failures[0];
 }
 
 export const handler = async (event: SESEvent): Promise<void> => {

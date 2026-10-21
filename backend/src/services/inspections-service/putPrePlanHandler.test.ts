@@ -105,6 +105,18 @@ describe('putPrePlanHandler', () => {
     expect(result).toMatchObject({ statusCode: 400 });
   });
 
+  it.each(['null', '[]', '5', 'true', '"x"'])(
+    'returns 400 when the body is the non-object JSON value %s',
+    async (body) => {
+      const { createPutPrePlanHandler } = await import('./putPrePlanHandler.js');
+      const send = vi.fn();
+      const wrapped = createPutPrePlanHandler(fakeDoc(send), vi.fn(), allowClient());
+      const result = await wrapped(buildEvent(body));
+      expect(result).toMatchObject({ statusCode: 400 });
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
   it('returns 400 when siteDiagramFilename contains a path traversal segment', async () => {
     const { createPutPrePlanHandler } = await import('./putPrePlanHandler.js');
     const wrapped = createPutPrePlanHandler(fakeDoc(vi.fn()), vi.fn(), allowClient());

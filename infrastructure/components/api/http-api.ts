@@ -451,6 +451,10 @@ export class HttpApi extends pulumi.ComponentResource {
     failOpen: aws.cloudwatch.MetricAlarm;
     alertingAuthorizerThrottles: aws.cloudwatch.MetricAlarm;
     alertingAuthorizerErrors: aws.cloudwatch.MetricAlarm;
+    revocationStale: aws.cloudwatch.MetricAlarm;
+    authorizerDenyRatio: aws.cloudwatch.MetricAlarm;
+    authorizerThrottles: aws.cloudwatch.MetricAlarm;
+    authorizerErrors: aws.cloudwatch.MetricAlarm;
   } {
     const env = this.env;
     const failOpen = new aws.cloudwatch.MetricAlarm(
@@ -519,7 +523,122 @@ export class HttpApi extends pulumi.ComponentResource {
       },
       { parent: this },
     );
-    return { failOpen, alertingAuthorizerThrottles, alertingAuthorizerErrors };
+    const revocationStale = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-revocation-stale-alarm`,
+      {
+        name: `boxalarm-${env}-authorizer-revocation-check-stale`,
+        alarmDescription:
+          "The session-revocation store was unreadable and the authorizer answered from a stale " +
+          "cached marker; a revocation written since is not being enforced.",
+        namespace: "Boxalarm/authorizer",
+        metricName: "RevocationCheckStale",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [opsTopicArn],
+      },
+      { parent: this },
+    );
+    // Every authorizer failure - a JWKS fetch error, a client-id or issuer drift, a verifier
+    // regression - is a deny, not a Lambda error, so Errors stays 0 while every request 403s.
+    // The ratio (not a count) keeps routine expiries on a quiet system from paging; a floor of
+    // 10 decisions a minute keeps a lone bad token from reading as an outage.
+    const authorizerDenyRatio = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-authorizer-deny-ratio-alarm`,
+      {
+        name: `boxalarm-${env}-authorizer-deny-ratio`,
+        alarmDescription:
+          "The authorizers are denying most requests: members are refused on the alerting plane " +
+          "(respond, roster) as well as everywhere else. Check AuthorizerDenied by Reason " +
+          "(NonRetryableFetchError / FetchError = JWKS, RevocationStoreUnavailable) and " +
+          "COGNITO_ALLOWED_CLIENT_IDS against the app clients.",
+        comparisonOperator: "GreaterThanThreshold",
+        threshold: 0.5,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 2,
+        treatMissingData: "notBreaching",
+        metricQueries: [
+          {
+            id: "denied",
+            returnData: false,
+            metric: {
+              namespace: "Boxalarm/authorizer",
+              metricName: "AuthorizerDenied",
+              stat: "Sum",
+              period: 60,
+            },
+          },
+          {
+            id: "allowed",
+            returnData: false,
+            metric: {
+              namespace: "Boxalarm/authorizer",
+              metricName: "AuthorizerAllowed",
+              stat: "Sum",
+              period: 60,
+            },
+          },
+          {
+            id: "denyRatio",
+            label: "Share of authorizer decisions that denied",
+            expression:
+              "IF(FILL(denied, 0) + FILL(allowed, 0) >= 10, FILL(denied, 0) / (FILL(denied, 0) + FILL(allowed, 0)), 0)",
+            returnData: true,
+          },
+        ],
+        alarmActions: [alertingPageTopicArn],
+      },
+      { parent: this },
+    );
+    const authorizerThrottles = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-authorizer-throttles-alarm`,
+      {
+        name: `boxalarm-${env}-platform-authorizer-throttles`,
+        alarmDescription:
+          "The main authorizer is being throttled: non-alerting requests are refused.",
+        namespace: "AWS/Lambda",
+        metricName: "Throttles",
+        dimensions: { FunctionName: this.authorizerLambda.function.name },
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [opsTopicArn],
+      },
+      { parent: this },
+    );
+    const authorizerErrors = new aws.cloudwatch.MetricAlarm(
+      `${this.name}-authorizer-errors-alarm`,
+      {
+        name: `boxalarm-${env}-platform-authorizer-errors`,
+        alarmDescription: "The main authorizer is failing: non-alerting requests are refused.",
+        namespace: "AWS/Lambda",
+        metricName: "Errors",
+        dimensions: { FunctionName: this.authorizerLambda.function.name },
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [opsTopicArn],
+      },
+      { parent: this },
+    );
+    return {
+      failOpen,
+      alertingAuthorizerThrottles,
+      alertingAuthorizerErrors,
+      revocationStale,
+      authorizerDenyRatio,
+      authorizerThrottles,
+      authorizerErrors,
+    };
   }
 
   /**

@@ -37,6 +37,7 @@ export interface PublishDueEventParams {
   readonly deptId: VerifiedDeptId;
   readonly memberId: string;
   readonly certId: string;
+  readonly certType: string;
   readonly expiryDate: string;
   readonly leadDays: number;
   readonly correlationId: string;
@@ -91,6 +92,7 @@ export async function publishDueEvent(
           entityType: 'CERT_EXPIRY_FLAG',
           flaggedAt: params.now.toISOString(),
           eventId,
+          ttl: Math.floor(params.now.getTime() / 1000) + 7 * 86400,
         },
         ConditionExpression: 'attribute_not_exists(pk) OR attribute_not_exists(publishedAt)',
       }),
@@ -131,6 +133,7 @@ export async function publishDueEvent(
                 deptId: params.deptId,
                 memberId: params.memberId,
                 certId: params.certId,
+                certType: params.certType,
                 expiryDate: params.expiryDate,
                 leadDays: params.leadDays,
               },

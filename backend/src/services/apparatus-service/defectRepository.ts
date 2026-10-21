@@ -411,7 +411,7 @@ function buildDefectAuditEntry(
     actorId: input.resolvedBy,
     changedFields: {
       status: { old: 'OPEN', new: 'RESOLVED' },
-      resolutionNote: { old: undefined, new: input.note },
+      resolutionNote: { old: null, new: input.note },
     },
     ts: resolvedAt,
   };

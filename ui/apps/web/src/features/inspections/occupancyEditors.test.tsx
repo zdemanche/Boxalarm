@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
@@ -233,4 +233,299 @@ test('with no pre-plan yet (404) the editor is offered so the first one can be c
   expect(await screen.findByText('No pre-plan is on file.')).toBeTruthy();
   expect(await screen.findByRole('form', { name: 'Save pre-plan' })).toBeTruthy();
   expect(screen.queryByRole('alert')).toBeNull();
+});
+
+// Removing a file is leaving it out of the next PUT. A remove has to reach the save, and an
+// undone one must not; files that stay are still named, or the save drops them too.
+
+const KEY_PREFIX = 'nichols-fd/PRE_PLAN/pp-1/';
+
+type SavedPrePlan = {
+  siteDiagramFilename?: string;
+  attachmentFilenames: string[];
+  utilityShutoffs: unknown[];
+  hazards: string[];
+};
+
+/** A pre-plan endpoint that stores what is PUT, as the service does, and serves it back. */
+function servePrePlan(initial: typeof PRE_PLAN | Record<string, unknown>) {
+  let current: Record<string, unknown> = initial;
+  const puts: SavedPrePlan[] = [];
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(current)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', async ({ request }) => {
+      const body = (await request.json()) as SavedPrePlan;
+      puts.push(body);
+      const keys = body.attachmentFilenames.map((name) => `${KEY_PREFIX}${name}`);
+      current = {
+        prePlanId: 'pp-1',
+        siteDiagramS3Key: body.siteDiagramFilename
+          ? `${KEY_PREFIX}${body.siteDiagramFilename}`
+          : null,
+        ...(body.siteDiagramFilename
+          ? { siteDiagramUrl: `https://assets.example/${body.siteDiagramFilename}` }
+          : {}),
+        attachmentS3Keys: keys,
+        attachmentUrls: keys.map((key) => ({ key, url: `https://assets.example/${key}` })),
+        utilityShutoffs: body.utilityShutoffs,
+        hazards: body.hazards,
+      };
+      return HttpResponse.json({
+        prePlanId: 'pp-1',
+        attachmentUploadUrls: [],
+        utilityShutoffs: body.utilityShutoffs,
+        hazards: body.hazards,
+      });
+    }),
+  );
+  return puts;
+}
+
+async function openPrePlanEditor() {
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+  await screen.findByRole('form', { name: 'Save pre-plan' });
+  return user;
+}
+
+test('removing an attachment saves the list without it, only once the removal is confirmed', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+
+  await user.click(screen.getByRole('button', { name: 'Remove attachment floor-1.pdf' }));
+  expect(screen.getByText('Removed when you save')).toBeTruthy();
+  expect(screen.getByText('floor-1.pdf', { selector: 's' })).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Remove floor-1.pdf from the 9 Elm St pre-plan?',
+  });
+  expect(puts).toHaveLength(0);
+  await user.click(within(dialog).getByRole('button', { name: 'Remove floor-1.pdf and save' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toEqual({
+    siteDiagramFilename: 'site.pdf',
+    attachmentFilenames: [],
+    utilityShutoffs: [{ utility: 'Gas', location: 'North wall' }],
+    hazards: ['Truss roof'],
+  });
+  // The page shows what the server now holds, with no removal left pending.
+  await waitFor(() => expect(screen.queryByRole('link', { name: 'floor-1.pdf' })).toBeNull());
+  expect(screen.queryByRole('button', { name: /floor-1\.pdf/ })).toBeNull();
+  expect(screen.queryByText('Removed when you save')).toBeNull();
+  expect(screen.getByRole('link', { name: 'View diagram' })).toBeTruthy();
+});
+
+test('removing the site diagram saves with no site diagram named', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+
+  await user.click(screen.getByRole('button', { name: 'Remove site diagram' }));
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Remove site.pdf from the 9 Elm St pre-plan?',
+  });
+  await user.click(within(dialog).getByRole('button', { name: 'Remove site.pdf and save' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).not.toHaveProperty('siteDiagramFilename');
+  expect(puts[0]?.attachmentFilenames).toEqual(['floor-1.pdf']);
+  await waitFor(() => expect(screen.queryByRole('link', { name: 'View diagram' })).toBeNull());
+});
+
+test('Undo puts a file back, and the save keeps it without asking', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+
+  await user.click(screen.getByRole('button', { name: 'Remove attachment floor-1.pdf' }));
+  await user.click(screen.getByRole('button', { name: 'Undo removing attachment floor-1.pdf' }));
+  expect(screen.queryByText('Removed when you save')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Remove attachment floor-1.pdf' })).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(puts[0]).toMatchObject({
+    siteDiagramFilename: 'site.pdf',
+    attachmentFilenames: ['floor-1.pdf'],
+  });
+});
+
+test('at the 50-attachment limit, removing one makes room for a new one', async () => {
+  const names = Array.from({ length: 50 }, (_, i) => `doc-${i + 1}.pdf`);
+  const keys = names.map((name) => `${KEY_PREFIX}${name}`);
+  const puts = servePrePlan({
+    ...PRE_PLAN,
+    attachmentS3Keys: keys,
+    attachmentUrls: keys.map((key) => ({ key, url: `https://assets.example/${key}` })),
+  });
+  const user = await openPrePlanEditor();
+
+  await user.upload(
+    screen.getByLabelText('Attachments'),
+    new File(['x'], 'new.pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  expect(await screen.findByText(/at most 50 attachments; this save would have 51/)).toBeTruthy();
+  expect(puts).toHaveLength(0);
+
+  await user.click(screen.getByRole('button', { name: 'Remove attachment doc-1.pdf' }));
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Remove doc-1.pdf from the 9 Elm St pre-plan?',
+  });
+  await user.click(within(dialog).getByRole('button', { name: 'Remove doc-1.pdf and save' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]?.attachmentFilenames).toEqual([...names.slice(1), 'new.pdf']);
+  expect(screen.queryByText(/at most 50 attachments/)).toBeNull();
+});
+
+test('a new site diagram named like an attachment that stays is refused; removing it frees the name', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+
+  await user.upload(
+    screen.getByLabelText('Site diagram'),
+    new File(['x'], 'floor-1.pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  expect(await screen.findByText(/same name as an attachment on file/)).toBeTruthy();
+  expect(puts).toHaveLength(0);
+
+  await user.click(screen.getByRole('button', { name: 'Remove attachment floor-1.pdf' }));
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Remove floor-1.pdf from the 9 Elm St pre-plan?',
+  });
+  await user.click(within(dialog).getByRole('button', { name: 'Remove floor-1.pdf and save' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toMatchObject({ siteDiagramFilename: 'floor-1.pdf', attachmentFilenames: [] });
+});
+
+test('the page links to the occupancy change history by the id audit entries are written with', async () => {
+  servePrePlan(PRE_PLAN);
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+
+  expect(screen.getByRole('link', { name: 'Change history' }).getAttribute('href')).toBe(
+    '/audit-log?entityType=OCCUPANCY&entityId=occ-1',
+  );
+});
+
+test('B2-050: file names with spaces or parentheses are sent and uploaded under their safe names', async () => {
+  const uploaded: string[] = [];
+  const puts: SavedPrePlan[] = [];
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(PRE_PLAN)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', async ({ request }) => {
+      const body = (await request.json()) as SavedPrePlan;
+      puts.push(body);
+      return HttpResponse.json({
+        prePlanId: 'pp-1',
+        attachmentUploadUrls: body.attachmentFilenames
+          .filter((name) => name.startsWith('Floor_'))
+          .map((filename) => ({
+            filename,
+            uploadUrl: `${window.location.origin}/uploads/${filename}`,
+            contentType: 'application/pdf',
+          })),
+        utilityShutoffs: body.utilityShutoffs,
+        hazards: body.hazards,
+      });
+    }),
+  );
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (!url.includes('/uploads/')) return realFetch(input, init);
+    uploaded.push(url.split('/uploads/')[1]!);
+    return new Response(null, { status: 200 });
+  });
+
+  const user = await openPrePlanEditor();
+  await user.upload(
+    screen.getByLabelText('Attachments'),
+    new File(['x'], 'Floor Plan (1).pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]!.attachmentFilenames).toEqual(['floor-1.pdf', 'Floor_Plan__1_.pdf']);
+  await waitFor(() => expect(uploaded).toEqual(['Floor_Plan__1_.pdf']));
+  vi.restoreAllMocks();
+});
+
+test('B2-050: two new files that sanitize to the same name are refused before the save', async () => {
+  const puts = servePrePlan(PRE_PLAN);
+  const user = await openPrePlanEditor();
+  await user.upload(screen.getByLabelText('Attachments'), [
+    new File(['x'], 'a b.pdf', { type: 'application/pdf' }),
+    new File(['y'], 'a_b.pdf', { type: 'application/pdf' }),
+  ]);
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  expect(await screen.findByText(/same name/)).toBeTruthy();
+  expect(puts).toHaveLength(0);
+});
+
+test('B2-189: a failed hazards save says it was not saved, keeps the edit, and offers no reload', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.put('/api/v1/inspections/occupancies/occ-1', () =>
+      HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'hazards too long',
+          traceId: 't',
+        },
+        { status: 400 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  const editor = screen.getByLabelText('Hazards (one per line)') as HTMLTextAreaElement;
+  await user.type(editor, '\nOxygen cylinders');
+  await user.click(screen.getByRole('button', { name: 'Save hazards' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('The hazards was not saved: hazards too long');
+  expect(screen.queryByText('Something went wrong loading this page')).toBeNull();
+  expect(editor.value).toContain('Oxygen cylinders');
+});
+
+test('B2-189: a failed pre-plan save says it was not saved and keeps the editor', async () => {
+  server.use(
+    http.get('/api/v1/inspections/occupancies/occ-1', () => HttpResponse.json(OCCUPANCY)),
+    http.get('/api/v1/inspections/occupancies/occ-1/pre-plan', () => HttpResponse.json(PRE_PLAN)),
+    http.put('/api/v1/inspections/occupancies/occ-1/pre-plan', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Service Unavailable', status: 503, traceId: 't' },
+        { status: 503 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderDetail();
+  await screen.findByRole('heading', { name: '9 Elm St' });
+  await user.click(screen.getByRole('tab', { name: 'Pre-plan' }));
+  await screen.findByRole('form', { name: 'Save pre-plan' });
+  await user.click(screen.getByRole('button', { name: 'Save pre-plan' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('The pre-plan was not saved: HTTP 503');
+  expect(screen.queryByText('Something went wrong loading this page')).toBeNull();
+  expect(screen.getByRole('form', { name: 'Save pre-plan' })).toBeTruthy();
 });

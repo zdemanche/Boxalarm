@@ -121,6 +121,8 @@ export class Ppe extends pulumi.ComponentResource {
         handler: LAMBDA_HANDLER,
         code: lambdaCode("inventory-service", "ppe-expiry-scanner"),
         logGroup: args.logGroup,
+        timeout: 60,
+        memorySize: 512,
         environment: {
           PLATFORM_TABLE_NAME: args.platformTableName,
           PLATFORM_CONFIG_DYNAMO_TABLE_NAME: args.platformTableName,

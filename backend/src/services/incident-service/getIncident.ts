@@ -7,6 +7,7 @@ import {
   readAuthorizerContext,
   resolveTraceId,
 } from './authContext.js';
+import { queryIncidentResponseUnits, queryRosterCopy } from './dispatchProjection.js';
 import { getDocumentClient, getIncidentRepository, getTableName } from './repository.js';
 import { queryIncidentSecondaries } from './secondaryRepository.js';
 
@@ -62,7 +63,11 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     }
     const client = getDocumentClient();
     const tableName = getTableName(process.env);
-    const secondaries = await queryIncidentSecondaries(client, tableName, deptId, incidentId);
+    const [secondaries, respondingUnits, respondingMembers] = await Promise.all([
+      queryIncidentSecondaries(client, tableName, deptId, incidentId),
+      queryIncidentResponseUnits(client, tableName, deptId, incidentId),
+      queryRosterCopy(client, tableName, deptId, incidentId),
+    ]);
     // Narrower audience than the general incident read (fact sheet Data Ownership note):
     // chief/admin see every module, everyone else only a module naming them as affected.
     const secondaryModules = secondaries.filter(
@@ -72,7 +77,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<AuthorizerCon
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...incident, secondaryModules }),
+      body: JSON.stringify({ ...incident, secondaryModules, respondingUnits, respondingMembers }),
     };
   } catch (error) {
     console.error(

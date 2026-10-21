@@ -24,6 +24,7 @@ export interface PushTokensArgs {
   personnelLogGroup: ServiceLogGroup;
   alertingLogGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
+  policyStoreArn: pulumi.Input<string>;
   busName: pulumi.Input<string>;
   alertingPermissionsBoundaryArn?: pulumi.Input<string>;
   /** alerting-page topic (page-topic.ts): an undeliverable member update pages. */
@@ -66,7 +67,7 @@ export class PushTokens extends pulumi.ComponentResource {
         ],
         Resource: args.platformTableArn as string,
       },
-      verifiedPermissionsStatement(),
+      verifiedPermissionsStatement(args.policyStoreArn),
     ];
     const personnelEnv = {
       PERSONNEL_TABLE_NAME: args.platformTableName,
@@ -126,7 +127,12 @@ export class PushTokens extends pulumi.ComponentResource {
 
     this.memberUpdatedDlq = new aws.sqs.Queue(
       `${name}-member-updated-dlq`,
-      { name: `boxalarm-${env}-alerting-member-updated-dlq` },
+      {
+        name: `boxalarm-${env}-alerting-member-updated-dlq`,
+        // The runbook needs the memberId in each dead-lettered message to re-emit it; keep it
+        // as long as the channel DLQs (messaging-alerting.ts).
+        messageRetentionSeconds: 1_209_600,
+      },
       { parent: this },
     );
     this.memberUpdatedQueue = new aws.sqs.Queue(

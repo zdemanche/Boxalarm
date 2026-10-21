@@ -207,6 +207,7 @@ export interface IncidentSecondary {
   affectedMemberIds: string[];
   complete?: boolean;
   updatedAt: number;
+  version?: number;
 }
 
 /** GET adds modules the caller is allowed to see. Units ride along when the API includes them. */
@@ -236,6 +237,7 @@ export interface PutExposureInput {
   secondaryType: string;
   payload: Record<string, string>;
   affectedMemberIds: string[];
+  expectedVersion: number;
 }
 
 export interface PutExposureResponse {
@@ -245,6 +247,7 @@ export interface PutExposureResponse {
   affectedMemberIds: string[];
   complete: boolean;
   updatedAt: number;
+  version?: number;
 }
 
 export const MAX_NARRATIVE_LENGTH = 25_000;

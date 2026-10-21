@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 
@@ -139,8 +139,10 @@ describe('retention configHandler', () => {
       value: { retentionYears: 10 },
       version: 1,
     });
-    const put = send.mock.calls.find((call) => call[0] instanceof PutCommand)?.[0] as PutCommand;
-    expect(put.input.Item).toMatchObject({
+    const transact = send.mock.calls.find(
+      (call) => call[0] instanceof TransactWriteCommand,
+    )?.[0] as TransactWriteCommand;
+    expect(transact.input.TransactItems?.[0]?.Put?.Item).toMatchObject({
       pk: buildDeptScopedPk(VERIFIED_DEPT_ID),
       sk: 'CONFIG#RETENTION',
       entityType: 'DEPARTMENT_CONFIG',
@@ -209,7 +211,7 @@ describe('retention configHandler', () => {
 
   it('PUT returns 409 when a concurrent write already advanced the version', async () => {
     mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
-    const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
     const send = vi
       .fn()
       .mockResolvedValueOnce({
@@ -223,9 +225,10 @@ describe('retention configHandler', () => {
         },
       })
       .mockRejectedValueOnce(
-        new ConditionalCheckFailedException({
-          message: 'The conditional request failed',
+        new TransactionCanceledException({
+          message: 'Transaction cancelled',
           $metadata: {},
+          CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
         }),
       );
     const { createHandler } = await import('./configHandler.js');

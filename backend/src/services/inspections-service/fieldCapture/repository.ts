@@ -128,10 +128,11 @@ export async function submitFieldCapture(
           Key: { pk, sk },
           ConditionExpression: 'attribute_exists(sk)',
           UpdateExpression:
-            'SET conductedDate = :conductedDate, conductedBy = :conductedBy, violations = :violations, photoS3Keys = :photoS3Keys',
+            'SET conductedDate = :conductedDate, conductedBy = :conductedBy, violations = list_append(if_not_exists(violations, :empty), :violations), photoS3Keys = list_append(if_not_exists(photoS3Keys, :empty), :photoS3Keys)',
           ExpressionAttributeValues: {
             ':conductedDate': conductedDate,
             ':conductedBy': conductedBy,
+            ':empty': [],
             ':violations': violations,
             ':photoS3Keys': photoS3Keys,
           },
@@ -190,8 +191,8 @@ export async function submitFieldCapture(
     ...existingItem,
     conductedDate,
     conductedBy,
-    violations,
-    photoS3Keys,
+    violations: [...(existingItem.violations ?? []), ...violations],
+    photoS3Keys: [...(existingItem.photoS3Keys ?? []), ...photoS3Keys],
   };
   return { outcome: 'created', item };
 }

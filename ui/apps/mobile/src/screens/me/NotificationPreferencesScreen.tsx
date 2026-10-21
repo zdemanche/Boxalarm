@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import Config from 'react-native-config';
 import { Switch, Text, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
-import { Card, Screen, useTheme } from '../../components/ui';
+import { Button, Card, Screen, useTheme } from '../../components/ui';
 import { preferencesFor } from '../../features/notifications/categories';
 import { getNotificationPreferences, putNotificationPreference } from '../../features/training/api';
 import type { NotificationPreference } from '../../features/training/types';
@@ -18,8 +18,10 @@ export function NotificationPreferencesScreen() {
   const auth = useOptionalAuth();
   const apiBaseUrl = Config.API_BASE_URL;
   const [preferences, setPreferences] = useState<NotificationPreference[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -27,7 +29,9 @@ export function NotificationPreferencesScreen() {
     setLoadError(null);
     getNotificationPreferences(auth, apiBaseUrl)
       .then((result) => {
-        if (!cancelled) setPreferences(result);
+        if (cancelled) return;
+        setPreferences(result);
+        setLoaded(true);
       })
       .catch(() => {
         if (!cancelled) {
@@ -39,13 +43,13 @@ export function NotificationPreferencesScreen() {
     return () => {
       cancelled = true;
     };
-  }, [auth, apiBaseUrl]);
+  }, [auth, apiBaseUrl, loadAttempt]);
 
   const channelsFor = (category: string) =>
     preferences.find((p) => p.category === category)?.channels ?? UNMUTED;
 
   const togglePush = async (category: string, enabled: boolean) => {
-    if (!auth || !apiBaseUrl) return;
+    if (!auth || !apiBaseUrl || !loaded) return;
     const previous = channelsFor(category);
     const next = { ...previous, push: !enabled };
     const withChannels = (channels: NotificationPreference['channels']) =>
@@ -82,6 +86,9 @@ export function NotificationPreferencesScreen() {
               {loadError}
             </Text>
           ) : null}
+          {loadError ? (
+            <Button label="Try again" onPress={() => setLoadAttempt((attempt) => attempt + 1)} />
+          ) : null}
         </Card>
       ) : null}
       <Card title="Push reminders">
@@ -116,6 +123,7 @@ export function NotificationPreferencesScreen() {
               <Switch
                 accessibilityLabel={`${label} push notifications`}
                 value={!channelsFor(category).push}
+                disabled={!loaded}
                 onValueChange={(value) => void togglePush(category, value)}
                 trackColor={{ false: theme.border, true: theme.indicator }}
                 ios_backgroundColor={theme.border}

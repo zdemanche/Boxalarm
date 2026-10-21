@@ -11,11 +11,8 @@ import { createDynamoClient, readAttendanceTableConfig } from '../dynamoClient.j
 import { extractTraceId } from '../attendance/handler.js';
 import { validationProblem } from '../attendance/problemDetails.js';
 import { isAuthorized } from '../lib/authz.js';
+import { getLosapYear } from './departmentYear.js';
 import { getMemberLosapTotal } from './repository.js';
-
-function currentYear(): number {
-  return new Date().getUTCFullYear();
-}
 
 function logLosapQueryFailure(reason: string, error: unknown, traceId: string): void {
   console.error(
@@ -49,11 +46,10 @@ async function getMemberLosap(
   }
 
   const deptId = toVerifiedDeptId(principal);
-  const year = currentYear();
-
   try {
     const { tableName } = readAttendanceTableConfig(process.env);
     const client = createDynamoClient(process.env);
+    const year = await getLosapYear(client, tableName, deptId, Math.floor(Date.now() / 1000));
     const totalPoints = await getMemberLosapTotal(client, tableName, deptId, memberId, year);
     return {
       statusCode: 200,

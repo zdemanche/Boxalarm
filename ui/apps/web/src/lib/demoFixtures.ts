@@ -27,7 +27,6 @@ import { KNOWN_ROLES } from '../auth/roles';
 import type {
   AuditEntry,
   ConfigResponse,
-  DisposalResult,
   ExportStatus,
   RetentionConfig,
 } from '../features/platform/types';
@@ -148,7 +147,7 @@ function audit(
   action: string,
   mutatedEntityType: string,
   mutatedEntityId: string,
-  changedFields: Record<string, unknown> = {},
+  changedFields: AuditEntry['changedFields'] = {},
 ): AuditEntry {
   return {
     actorId,
@@ -161,20 +160,32 @@ function audit(
 }
 
 const diff = (oldValue: unknown, newValue: unknown) => ({ old: oldValue, new: newValue });
+/** The equipment writers record only the new value (backend equipmentRepository.ts). */
+const setTo = (newValue: unknown) => ({ new: newValue });
 
-// The last 60 days of change history, newest first. Actors and subjects are roster members;
-// every status and role change ends where the roster is today.
+const LOSAP_POINTS_V1 = { CALL: 1, DRILL: 1, MEETING: 0, WORK_DETAIL: 1, STANDBY: 0 };
+const LOSAP_POINTS_V2 = { ...LOSAP_POINTS_V1, MEETING: 1 };
+const LOSAP_POINTS_V3 = { ...LOSAP_POINTS_V2, STANDBY: 1 };
+
+// Shown as examples on the audit page's ID help, so they are the shape the backend mints.
+const DEMO_EXPORT_JOB_IDS = [
+  '8d3f2c1a-5b7e-4c9d-a2f1-6e0b9c4d7a13',
+  'c41e7b20-9a3d-4f6e-8b15-2d7f0a9e6c58',
+] as const;
+const DEMO_DISPOSAL_TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+// The last 60 days of change history. Only types, actions and field shapes the backend really
+// writes (and platform/audit can read back): no APPARATUS, INCIDENT, SESSION or config-section
+// entries, because no writer files those where the audit page looks. Actors and subjects are
+// roster members; every status and role change ends where the roster is today.
 const auditEntries: AuditEntry[] = [
-  audit(1, 7, 'm-9', 'UPDATE', 'APPARATUS', TRUCK_304, {
-    status: diff('IN_SERVICE', 'OUT_OF_SERVICE'),
+  audit(1, 7, 'm-9', 'UPDATE', 'EQUIPMENT_ASSET', 'eq-8', {
+    assignedToType: setTo('APPARATUS'),
+    assignedToId: setTo(TRUCK_304),
   }),
   audit(3, 16, 'm-9', 'CREATE', 'EQUIPMENT_ASSET', 'eq-3', {
-    serialNumber: diff(null, 'RADIO-1187'),
-    lifecycleStatus: diff(null, 'ACQUIRED'),
-  }),
-  audit(4, 14, 'm-11', 'UPDATE', 'INSPECTION', 'insp-9', {
-    conductedBy: diff(null, 'm-11'),
-    violations: diff(0, 1),
+    serialNumber: setTo('RADIO-1187'),
+    location: setTo('Quartermaster shelf'),
   }),
   audit(5, 11, 'm-3', 'UPDATE', 'OCCUPANCY', 'occ-6', {
     hazards: diff(
@@ -182,68 +193,135 @@ const auditEntries: AuditEntry[] = [
       ['Paint booth, flammable liquids', 'Acetylene cylinders', 'Vehicle lifts'],
     ),
   }),
-  audit(6, 9, 'm-11', 'UPDATE', 'HYDRANT', 'HYD-022', {
-    status: diff('IN_SERVICE', 'OUT_OF_SERVICE'),
-  }),
-  audit(8, 19, 'm-9', 'CREATE', 'PPE_ASSIGNMENT', 'helmet-m-28', {
+  audit(8, 19, 'm-9', 'CREATE', 'PPE_ASSIGNMENT', 'helmet', {
     itemType: diff(null, 'helmet'),
-    memberId: diff(null, 'm-28'),
+    size: diff(null, 'M'),
+    issueDate: diff(null, isoDate(-8)),
   }),
-  audit(9, 10, 'm-31', 'EXPORT', 'DEPARTMENT_EXPORT', 'demo-export-2026-09'),
-  audit(10, 13, 'm-31', 'UPDATE', 'MEMBER', 'm-16', {
-    phone: diff('203-555-0266', '203-555-0276'),
-  }),
+  audit(9, 10, 'm-31', 'CREATE', 'EXPORT_JOB', DEMO_EXPORT_JOB_IDS[0]),
   audit(12, 20, 'm-1', 'UPDATE', 'MEMBER', 'm-24', {
     status: diff('PROBATIONARY', 'ACTIVE'),
   }),
-  audit(14, 8, 'm-1', 'REVOKE', 'SESSION', 'm-17', {
-    deviceId: diff('install-9c21e4', null),
-    push: diff('registered', 'invalidated'),
+  audit(14, 15, 'm-1', 'UPDATE', 'MEMBER_QUALIFICATION', 'm-24-INTERIOR', {
+    currentlyEligible: diff(true, false),
   }),
-  audit(16, 15, 'm-11', 'UPDATE', 'HYDRANT', 'HYD-009', {
-    status: diff('IN_SERVICE', 'OUT_OF_SERVICE'),
+  audit(20, 14, 'm-1', 'CREATE', 'MEMBER_QUALIFICATION', 'm-24-INTERIOR', {
+    qualCode: diff(null, 'INTERIOR'),
+    currentlyEligible: diff(null, true),
   }),
-  audit(19, 11, 'm-2', 'UPDATE', 'DEPARTMENT_CONFIG', 'NERIS', {
-    submitMode: diff('MANUAL', 'AUTO_ON_CLOSE'),
-  }),
-  audit(21, 18, 'm-9', 'UPDATE', 'DEPARTMENT_CONFIG', 'CHECKLIST_DEFAULTS', {
-    items: diff(14, 16),
+  audit(18, 9, 'm-1', 'ARCHIVE', 'HYDRANT', 'HYD-025', {
+    archivedAt: diff(null, daysAgo(18, 9, Math.round(hash01(18 * 24 + 9) * 59))),
   }),
   audit(24, 9, 'm-9', 'UPDATE', 'EQUIPMENT_ASSET', 'eq-9', {
-    lifecycleStatus: diff('IN_SERVICE', 'RETIRED'),
+    location: setTo('SCBA room, retired rack'),
   }),
-  audit(28, 10, 'm-2', 'EXPORT', 'DEPARTMENT_EXPORT', 'demo-export-2026-08'),
+  audit(28, 10, 'm-2', 'CREATE', 'EXPORT_JOB', DEMO_EXPORT_JOB_IDS[1]),
   audit(30, 20, 'm-1', 'UPDATE', 'MEMBER', 'm-22', {
     status: diff('PROBATIONARY', 'ACTIVE'),
   }),
-  audit(33, 17, 'm-1', 'UPDATE', 'MEMBER_ROLES', 'm-9', {
+  audit(33, 17, 'm-1', 'UPDATE', 'MEMBER', 'm-9', {
     roles: diff(['MEMBER', 'OFFICER'], ['MEMBER', 'OFFICER', 'APPARATUS']),
   }),
-  audit(36, 19, 'm-9', 'UPDATE', 'DEPARTMENT_CONFIG', 'RIDING_POSITIONS', {
-    'ENGINE[3]': diff(null, { code: 'FF2', label: 'Firefighter (exterior)' }),
-  }),
   audit(38, 12, 'm-31', 'UPDATE', 'MEMBER', 'm-30', { status: diff('ACTIVE', 'RETIRED') }),
-  audit(41, 20, 'm-1', 'UPDATE', 'MEMBER_ROLES', 'm-7', {
+  audit(41, 20, 'm-1', 'UPDATE', 'MEMBER', 'm-7', {
     roles: diff(['MEMBER', 'OFFICER'], ['MEMBER', 'OFFICER', 'TRAINING']),
   }),
   audit(44, 10, 'm-2', 'UPDATE', 'DEPARTMENT_CONFIG', 'LOSAP_POINT_RULES', {
-    'pointsByActivityType.STANDBY': diff(0, 1),
+    pointsByActivityType: diff(LOSAP_POINTS_V2, LOSAP_POINTS_V3),
   }),
   audit(45, 21, 'm-1', 'UPDATE', 'MEMBER', 'm-5', { status: diff('ACTIVE', 'LOA') }),
-  audit(47, 11, 'm-2', 'UPDATE', 'RETENTION_CONFIG', 'nichols-fd', {
-    retentionYears: diff(5, 7),
+  audit(47, 11, 'm-2', 'DELETE', 'RETENTION_DISPOSAL', DEMO_DISPOSAL_TRACE_ID, {
+    retentionYearsUsed: setTo(7),
+    hardDeleted: setTo(12),
+    cryptoShredded: setTo(3),
+    refused: setTo([]),
   }),
-  audit(50, 9, 'm-31', 'UPDATE', 'DEPARTMENT_CONFIG', 'STATIONS', {
-    'stations[0].name': diff('Station 1', DEMO_STATION.name),
+  audit(50, 9, 'm-2', 'UPDATE', 'DEPARTMENT_CONFIG', 'LOSAP_POINT_RULES', {
+    pointsByActivityType: diff(LOSAP_POINTS_V1, LOSAP_POINTS_V2),
   }),
   audit(52, 19, 'm-1', 'UPDATE', 'MEMBER', 'm-29', { status: diff('ACTIVE', 'LOA') }),
-  audit(55, 14, 'm-2', 'UPDATE', 'MEMBER_ROLES', 'm-31', {
+  audit(55, 14, 'm-2', 'UPDATE', 'MEMBER', 'm-31', {
     roles: diff(['MEMBER'], ['MEMBER', 'ADMIN']),
   }),
-  audit(60, 10, 'm-2', 'UPDATE', 'DEPARTMENT_CONFIG', 'ALERT_RULES', {
-    escalationThresholdN: diff(60, 90),
+  audit(60, 10, 'm-2', 'CREATE', 'DEPARTMENT_CONFIG', 'LOSAP_POINT_RULES', {
+    pointsByActivityType: diff(null, LOSAP_POINTS_V1),
   }),
 ];
+
+/** Where an asset sat before its one recorded move (eq-9 went to the retired rack). */
+const ASSET_FIRST_LOCATION: Readonly<Record<string, string>> = {
+  'eq-9': 'Engine 305, rear seat right',
+};
+
+/**
+ * Every seeded member, asset and occupancy was entered when the department moved onto
+ * Boxalarm, so each record page's Change history opens on at least a "Created" row. A member is
+ * created PROBATIONARY (backend createMember) and set to the status they held at the time:
+ * the "from" of their first change above, or today's status. Built on first lookup, because
+ * the equipment and occupancy lists are declared further down this file.
+ */
+function onboardingEntries(): AuditEntry[] {
+  const firstStatus = new Map<string, unknown>();
+  for (const entry of [...auditEntries].reverse()) {
+    const status = entry.changedFields.status;
+    if (entry.mutatedEntityType === 'MEMBER' && status && !firstStatus.has(entry.mutatedEntityId)) {
+      firstStatus.set(entry.mutatedEntityId, status.old);
+    }
+  }
+  const memberEntries = DEMO_MEMBERS.flatMap((member) => {
+    const actor = member.memberId === 'm-31' ? 'm-2' : 'm-31';
+    const created = audit(90, 9, actor, 'CREATE', 'MEMBER', member.memberId, {
+      status: diff(null, 'PROBATIONARY'),
+      rank: diff(null, member.rank),
+      agencyId: diff(null, member.agencyId),
+    });
+    const startStatus = firstStatus.get(member.memberId) ?? member.status;
+    return startStatus === 'PROBATIONARY'
+      ? [created]
+      : [
+          created,
+          audit(90, 10, actor, 'UPDATE', 'MEMBER', member.memberId, {
+            status: diff('PROBATIONARY', startStatus),
+          }),
+        ];
+  });
+  const createdAssets = new Set(
+    auditEntries
+      .filter((e) => e.mutatedEntityType === 'EQUIPMENT_ASSET' && e.action === 'CREATE')
+      .map((e) => e.mutatedEntityId),
+  );
+  const assetEntries = equipment
+    .filter((item) => !createdAssets.has(item.assetId))
+    .map((item) =>
+      audit(85, 14, 'm-9', 'CREATE', 'EQUIPMENT_ASSET', item.assetId, {
+        serialNumber: setTo(item.serialNumber),
+        location: setTo(ASSET_FIRST_LOCATION[item.assetId] ?? item.location),
+      }),
+    );
+  const occupancyEntries = occupancies.map((occ) =>
+    audit(80, 11, 'm-3', 'CREATE', 'OCCUPANCY', occ.occupancyId, {
+      address: diff(null, occ.address),
+      occupancyType: diff(null, occ.occupancyType),
+      contacts: diff(null, occ.contacts),
+      hazards: diff(
+        null,
+        // occ-6's hazard list grew later (above); its creation shows the list before that.
+        occ.occupancyId === 'occ-6'
+          ? occ.hazards.filter((h) => h !== 'Vehicle lifts')
+          : occ.hazards,
+      ),
+    }),
+  );
+  return [...memberEntries, ...assetEntries, ...occupancyEntries];
+}
+
+let auditLog: AuditEntry[] | null = null;
+
+/** Newest first, as platform/audit returns it. */
+function demoAuditLog(): AuditEntry[] {
+  auditLog ??= [...auditEntries, ...onboardingEntries()].sort((a, b) => b.ts - a.ts);
+  return auditLog;
+}
 
 function asset(
   assetId: string,
@@ -906,16 +984,32 @@ export async function demoRequest(
   }
 
   if (path.startsWith('platform/audit') && method === 'GET') {
-    // The audit page looks a record up by entity type and id; match loosely so a lookup typed
-    // in any case finds its history. Without a lookup, everything comes back.
-    const entityType = query.get('entityType')?.trim().toLowerCase();
-    const entityId = query.get('entityId')?.trim().toLowerCase();
-    const entries = auditEntries.filter(
-      (entry) =>
-        (!entityType || entry.mutatedEntityType.toLowerCase() === entityType) &&
-        (!entityId || entry.mutatedEntityId.toLowerCase() === entityId),
+    // As platform-service/audit/handler.ts: one record's history, both keys required and
+    // matched exactly (a different case is a different record), 25 a page, newest first.
+    const entityType = query.get('entityType') ?? '';
+    const entityId = query.get('entityId') ?? '';
+    if (!entityType || !entityId || /[,#]/.test(entityType + entityId)) {
+      return json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail:
+            'entityType and entityId query parameters are required and must not contain "," or "#".',
+          traceId: 'demo',
+        },
+        400,
+      );
+    }
+    const matches = demoAuditLog().filter(
+      (entry) => entry.mutatedEntityType === entityType && entry.mutatedEntityId === entityId,
     );
-    return json({ entries });
+    const start = Number(query.get('cursor') ?? 0) || 0;
+    const end = start + 25;
+    return json({
+      entries: matches.slice(start, end),
+      ...(end < matches.length ? { nextCursor: String(end) } : {}),
+    });
   }
 
   if (path === 'platform/export' && method === 'POST') {
@@ -943,16 +1037,6 @@ export async function demoRequest(
       source: 'stored',
     };
     return json(retentionConfig);
-  }
-
-  if (path === 'platform/retention/disposal' && method === 'POST') {
-    const result: DisposalResult = {
-      retentionYearsUsed: retentionConfig.retentionYears,
-      hardDeleted: 0,
-      cryptoShredded: 0,
-      refused: [],
-    };
-    return json(result);
   }
 
   if (parts[0] === 'platform' && parts[1] === 'sessions' && parts[3] === 'devices') {
@@ -1160,6 +1244,7 @@ export async function demoRequest(
     const occupancyId = decodeURIComponent(parts[2] ?? '');
     const input = body as unknown as PutPrePlanInput;
     const prePlanId = prePlans[occupancyId]?.prePlanId ?? `preplan-${occupancyId}`;
+    // Replaces the record like the real PUT: an omitted diagram or attachment is removed.
     prePlans[occupancyId] = {
       prePlanId,
       siteDiagramS3Key: input.siteDiagramFilename ?? null,
@@ -1174,15 +1259,12 @@ export async function demoRequest(
       utilityShutoffs: input.utilityShutoffs,
       hazards: input.hazards,
     };
+    // No upload URLs: the demo keeps no file bytes, and the browser refuses to PUT to a
+    // demo:// URL, which failed every demo save that added a file. With none, the page
+    // uploads nothing and the save completes.
     return json({
       prePlanId,
-      ...(input.siteDiagramFilename
-        ? { siteDiagramUploadUrl: `demo://upload/${input.siteDiagramFilename}` }
-        : {}),
-      attachmentUploadUrls: input.attachmentFilenames.map((filename) => ({
-        filename,
-        uploadUrl: `demo://upload/${filename}`,
-      })),
+      attachmentUploadUrls: [],
       utilityShutoffs: input.utilityShutoffs,
       hazards: input.hazards,
     });

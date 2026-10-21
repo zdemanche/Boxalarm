@@ -70,11 +70,17 @@ export interface OpenDefect {
   itemCode?: string | null;
 }
 
+export interface OpenDefects {
+  defects: OpenDefect[];
+  /** The unit's status from the same read; absent when the server did not say. */
+  unitStatus?: ApparatusStatus;
+}
+
 export interface ChecksRepository {
   getApparatus(): Promise<Apparatus[]>;
   /** Open defects on a unit, so a check doesn't re-file one that is already reported. Optional:
    * the mock has none. Needs a connection (no offline cache). */
-  getOpenDefects?(unitId: string): Promise<OpenDefect[]>;
+  getOpenDefects?(unitId: string): Promise<OpenDefects>;
   getChecklistTemplate(apparatusId: string): Promise<ChecklistTemplate>;
   // Optimistic local-first (N4.2): resolves immediately from the local store: no step in the
   // checklist waits on a network round trip. A real implementation queues to the outbox here;

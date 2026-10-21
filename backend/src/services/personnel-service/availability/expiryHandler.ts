@@ -86,7 +86,9 @@ export const handler = async (payload: unknown): Promise<{ outcome: ExpiryOutcom
 
   let markoff;
   try {
-    const result = await ddb.send(new GetCommand({ TableName: tableName, Key: { pk, sk } }));
+    const result = await ddb.send(
+      new GetCommand({ TableName: tableName, Key: { pk, sk }, ConsistentRead: true }),
+    );
     markoff = parseMarkoffItem(result.Item);
   } catch (error) {
     logError('availability.expiry.read_failed', error, correlationId);
@@ -94,7 +96,10 @@ export const handler = async (payload: unknown): Promise<{ outcome: ExpiryOutcom
   }
 
   if (!markoff) {
-    return { outcome: 'SKIPPED_NOT_FOUND' };
+    const error = new Error(`mark-off ${correlationId} not found`);
+    logError('availability.expiry.markoff_not_found', error, correlationId);
+    emitOutcomeMetric(METRIC_NAMESPACE, 'ExpiryFailed', 'MarkoffNotFound');
+    throw error;
   }
   if (markoff.revertedAt !== undefined) {
     return { outcome: 'SKIPPED_ALREADY_REVERTED' };

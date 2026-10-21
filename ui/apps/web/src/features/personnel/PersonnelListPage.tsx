@@ -15,6 +15,7 @@ import {
 } from '../../components/ui';
 import { CalendarX, Clock, LogOut, Plus, Users } from '../../components/ui/icons';
 import { createMember, listMembers } from './api';
+import { problemMessage } from './problemMessage';
 import { MEMBER_STATUS_ROLE } from './memberStatus';
 import type { CreateMemberInput, Member, MemberStatus } from './types';
 import { formatCalendarDate } from '../../lib/dates';
@@ -62,7 +63,7 @@ export function PersonnelListPage() {
       await queryClient.invalidateQueries({ queryKey: ['personnel', 'members'] });
     },
     onError: (error: Error) => {
-      setFormError(error.message);
+      setFormError(problemMessage(error));
     },
   });
 

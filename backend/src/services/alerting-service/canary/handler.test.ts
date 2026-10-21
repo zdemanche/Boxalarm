@@ -140,6 +140,20 @@ describe('canary handler', () => {
     expect(alert?.testDelivery).toBe('validate');
   });
 
+  it('gives the idempotency lock an expiry so ticks do not leave permanent items', async () => {
+    const { send, items } = createFakeDdb();
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+
+    const { handler } = await import('./handler.js');
+    await handler();
+
+    const lock = [...items.values()].find(
+      (item) => item.entityType === 'DISPATCH_IDEMPOTENCY_LOCK',
+    );
+    expect(lock?.ttl).toEqual(expect.any(Number));
+  });
+
   it('really delivers when the canary member is a dedicated device', async () => {
     process.env.CANARY_DEDICATED_DEVICE = 'true';
     const { send, items } = createFakeDdb();
@@ -256,16 +270,20 @@ describe('canary handler', () => {
         const { handler } = await import('./handler.js');
         await handler();
         const canaryRun = [...items.values()].find((item) => item.entityType === 'CANARY_RUN');
-        const emittedLatency = logSpy.mock.calls
-          .map((call) => {
-            try {
-              return JSON.parse(call[0] as string) as Record<string, unknown>;
-            } catch {
-              return {};
-            }
-          })
-          .find((entry) => entry.CanaryLatencyMs !== undefined)?.CanaryLatencyMs;
-        return { canaryRun, emittedLatency };
+        const entries = logSpy.mock.calls.map((call) => {
+          try {
+            return JSON.parse(call[0] as string) as Record<string, unknown>;
+          } catch {
+            return {};
+          }
+        });
+        const emittedLatency = entries.find(
+          (entry) => entry.CanaryLatencyMs !== undefined,
+        )?.CanaryLatencyMs;
+        const emittedFailed = entries.find(
+          (entry) => entry.CanaryFailed !== undefined,
+        )?.CanaryFailed;
+        return { canaryRun, emittedLatency, emittedFailed };
       } finally {
         logSpy.mockRestore();
         vi.useRealTimers();
@@ -297,12 +315,13 @@ describe('canary handler', () => {
 
     it('records PASS with latency = completedAtMs - armed time even though the tick is 2 minutes later', async () => {
       const armedAtMs = Date.UTC(2026, 8, 26, 12, 0, 0, 250);
-      const { canaryRun, emittedLatency } = await runNextTick(
+      const { canaryRun, emittedLatency, emittedFailed } = await runNextTick(
         seedFor(armedAtMs, { overallResult: 'PASS', completedAtMs: armedAtMs + 1_800 }),
         armedAtMs + TICK_INTERVAL_MS,
       );
       expect(canaryRun).toMatchObject({ result: 'PASS', testId: 'canary-1', latencyMs: 1_800 });
       expect(emittedLatency).toBe(1_800);
+      expect(emittedFailed).toBe(0);
     });
 
     it('records FAIL when the run itself completed outside the 5s budget', async () => {
@@ -316,11 +335,12 @@ describe('canary handler', () => {
 
     it('records FAIL (latency = elapsed so far) when the run never completed', async () => {
       const armedAtMs = Date.UTC(2026, 8, 26, 12, 0, 0, 0);
-      const { canaryRun } = await runNextTick(
+      const { canaryRun, emittedFailed } = await runNextTick(
         seedFor(armedAtMs, { overallResult: 'RUNNING' }),
         armedAtMs + TICK_INTERVAL_MS,
       );
       expect(canaryRun).toMatchObject({ result: 'FAIL', latencyMs: TICK_INTERVAL_MS });
+      expect(emittedFailed).toBe(1);
     });
 
     it('falls back to second-precision pendingRunAt for a pointer written before pendingRunAtMs', async () => {

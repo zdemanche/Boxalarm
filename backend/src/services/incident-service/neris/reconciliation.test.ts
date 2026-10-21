@@ -10,6 +10,7 @@ import {
   diffAgainstNeris,
   previousMonth,
   reconcileDepartment,
+  RECONCILE_WINDOW_DAYS,
   remindNoActivity,
 } from './reconciliation.js';
 
@@ -46,6 +47,23 @@ describe('diffAgainstNeris', () => {
       dispatchNumber: '4473',
     },
   ];
+
+  it('ignores NERIS records whose call_create is older than the local window, flags unparseable ones', () => {
+    const windowStart = 1_798_000_000;
+    expect(
+      diffAgainstNeris(
+        [],
+        [
+          { nerisId: `FD09190828|4471|${windowStart - 86_400}`, incidentNumber: '4471' },
+          { nerisId: `FD09190828|4472|${windowStart + 1}`, incidentNumber: '4472' },
+          { nerisId: 'FD09190828|4473', incidentNumber: '4473' },
+          { nerisId: 'FD09190828|4474|', incidentNumber: '4474' },
+        ],
+        false,
+        windowStart,
+      ).map((entry) => entry.nerisIncidentId),
+    ).toEqual([`FD09190828|4472|${windowStart + 1}`, 'FD09190828|4473', 'FD09190828|4474|']);
+  });
 
   it('finds records deleted in NERIS, status drift, and NERIS records Boxalarm never sent', () => {
     const drift = diffAgainstNeris(
@@ -174,8 +192,11 @@ describe('no-activity reminder', () => {
     expect(previousMonth(new Date('2026-01-15T00:00:00Z')).month).toBe('2025-12');
   });
 
-  function client(incidents: number, filed: boolean, reject?: Error) {
+  function client(incidents: number, filed: boolean, reject?: Error, dispatches = 0) {
     const send = vi.fn((command: Command) => {
+      if (command.constructor.name === 'QueryCommand' && command.input.Select === 'COUNT') {
+        return Promise.resolve({ Count: dispatches });
+      }
       if (command.constructor.name === 'QueryCommand') {
         return Promise.resolve({ Items: Array.from({ length: incidents }, () => ({})) });
       }
@@ -203,6 +224,14 @@ describe('no-activity reminder', () => {
       eventType: 'neris.no_activity.due',
       payload: { month: '2026-09' },
     });
+  });
+
+  it('stays quiet when the month had dispatched calls even with no incident reports', async () => {
+    const { client: ddb, send } = client(0, false, undefined, 3);
+    expect(await remindNoActivity(ddb, 'table', DEPT, now, 'c')).toBe('not_needed');
+    expect(send.mock.calls.some(([c]) => c.constructor.name === 'TransactWriteCommand')).toBe(
+      false,
+    );
   });
 
   it('stays quiet when the month had calls, the report is filed, or it already reminded', async () => {
@@ -380,6 +409,116 @@ describe('reconcileDepartment: missing records (round 2, N6)', () => {
     expect(resets[1]!.input.UpdateExpression).toBe(
       'REMOVE nerisMissingChecks, nerisMissingSince, nerisMissingAt',
     );
+  });
+});
+
+describe('reconcileDepartment: records older than the window', () => {
+  it('does not report a NERIS record created before the local window as unknown', async () => {
+    const send = vi.fn((command: Command) =>
+      Promise.resolve(command.constructor.name === 'QueryCommand' ? { Items: [] } : {}),
+    );
+    const result = await reconcileDepartment(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      {
+        listIncidents: () =>
+          Promise.resolve({
+            ok: true,
+            httpStatus: 200,
+            incidents: [{ nerisId: 'FD09190828|4400|1600000000', incidentNumber: '4400' }],
+            truncated: false,
+          }),
+      } as unknown as NerisApi,
+      DEPT,
+      'FD09190828',
+      new Date('2026-09-29T03:00:00Z'),
+      'corr',
+    );
+    expect(result?.drift).toEqual([]);
+    expect(result?.newDriftCount).toBe(0);
+    expect(send.mock.calls.some(([c]) => c.constructor.name === 'TransactWriteCommand')).toBe(
+      false,
+    );
+  });
+});
+
+describe('reconcileDepartment: window boundary', () => {
+  const now = new Date('2026-09-29T03:00:00Z');
+  const windowStart = Math.floor(now.getTime() / 1000) - RECONCILE_WINDOW_DAYS * 86_400;
+
+  async function run(callCreate: number) {
+    const send = vi.fn((command: Command) =>
+      Promise.resolve(command.constructor.name === 'QueryCommand' ? { Items: [] } : {}),
+    );
+    const result = await reconcileDepartment(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      {
+        listIncidents: () =>
+          Promise.resolve({
+            ok: true,
+            httpStatus: 200,
+            incidents: [{ nerisId: `FD09190828|4400|${callCreate}`, incidentNumber: '4400' }],
+            truncated: false,
+          }),
+      } as unknown as NerisApi,
+      DEPT,
+      'FD09190828',
+      now,
+      'corr',
+    );
+    return { result, send };
+  }
+
+  it('does not flag a record that aged out of the local window within the last day', async () => {
+    const { result, send } = await run(windowStart - 3600);
+    expect(result?.drift).toEqual([]);
+    expect(result?.newDriftCount).toBe(0);
+    expect(send.mock.calls.some(([c]) => c.constructor.name === 'TransactWriteCommand')).toBe(
+      false,
+    );
+  });
+
+  it('still flags a record created at the first second of the window that the local table lacks', async () => {
+    const { result } = await run(windowStart);
+    expect(result?.drift).toHaveLength(1);
+    expect(result?.newDriftCount).toBe(1);
+  });
+});
+
+describe('reconcileDepartment: records NERIS lists as DELETED', () => {
+  it('keeps the missing marker of a given-up record that NERIS still lists as DELETED', async () => {
+    const sent: Command[] = [];
+    const send = vi.fn((command: Command) => {
+      sent.push(command);
+      return Promise.resolve(
+        command.constructor.name === 'QueryCommand'
+          ? {
+              Items: [
+                { incidentId: 'L3', nerisIncidentId: ID('4473'), nerisMissingAt: 1_790_000_000 },
+              ],
+            }
+          : {},
+      );
+    });
+    await reconcileDepartment(
+      { send } as unknown as DynamoDBDocumentClient,
+      'table',
+      {
+        listIncidents: () =>
+          Promise.resolve({
+            ok: true,
+            httpStatus: 200,
+            incidents: [{ nerisId: ID('4473'), status: 'DELETED' }],
+            truncated: false,
+          }),
+      } as unknown as NerisApi,
+      DEPT,
+      'FD09190828',
+      new Date('2026-09-29T03:00:00Z'),
+      'corr',
+    );
+    expect(sent.filter((c) => c.constructor.name === 'UpdateCommand')).toEqual([]);
   });
 });
 

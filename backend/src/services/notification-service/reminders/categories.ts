@@ -81,10 +81,14 @@ export function toReminderItem(item: DigestNotificationItem): ReminderItem {
   return certExpiryItem(legacy.certId, legacy.expiryDate);
 }
 
-export function certExpiryItem(certId: string, expiryDate: string): ReminderItem {
+export function certExpiryItem(
+  certId: string,
+  expiryDate: string,
+  certType?: string,
+): ReminderItem {
   return {
     subjectId: certId,
-    title: certId,
+    title: certType ?? certId,
     detail: `expires ${expiryDate}`,
     dueDate: expiryDate,
     certId,

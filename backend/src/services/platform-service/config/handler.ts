@@ -4,15 +4,13 @@ import type {
   Handler,
 } from 'aws-lambda';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { createLogger } from '@boxalarm/logging';
 import type { AuthorizerContext } from '../authorizer/handler.js';
 import { assertChiefOrAdmin, ForbiddenError } from '../export/authz.js';
 import { getDynamoDocClient } from '../export/awsClients.js';
-import { createConfigCache, DEPARTMENT_CONFIG_CACHE_TTL_MS, type ConfigCache } from './cache.js';
 import {
   ConflictError,
-  configSk,
   getDepartmentConfig,
   isDepartmentConfigType,
   putDepartmentConfig,
@@ -24,7 +22,6 @@ const logger = createLogger({ service: 'platform-service' });
 
 interface Deps {
   readonly docClient?: DynamoDBDocumentClient;
-  readonly cache?: ConfigCache;
   readonly tableName?: string;
 }
 
@@ -94,8 +91,6 @@ function readTableName(explicit?: string): string {
 }
 
 export function createHandler(deps: Deps = {}): Handler {
-  const cache = deps.cache ?? createConfigCache({ ttlMs: DEPARTMENT_CONFIG_CACHE_TTL_MS });
-
   return async (event) => {
     const typedEvent = event as APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>;
     const traceId = extractTraceId(typedEvent);
@@ -111,7 +106,7 @@ export function createHandler(deps: Deps = {}): Handler {
       return problemResponse(
         400,
         'Bad Request',
-        'configType must be one of STATIONS, RANKS, LOSAP_POINT_RULES, ALERT_RULES, CHECKLIST_DEFAULTS, RETENTION, RIDING_POSITIONS, NERIS',
+        'configType must be one of STATIONS, RANKS, LOSAP_POINT_RULES, ALERT_RULES, CHECKLIST_DEFAULTS, RETENTION, RIDING_POSITIONS, NERIS, SHIFT_RULES',
         traceId,
       );
     }
@@ -125,17 +120,11 @@ export function createHandler(deps: Deps = {}): Handler {
 
     const tableName = readTableName(deps.tableName);
     const docClient = getDynamoDocClient(deps.docClient);
-    const pk = buildDeptScopedPk(deptId);
-    const sk = configSk(configTypeRaw);
-
     if (method === 'GET') {
-      const item = await cache.getOrLoad(pk, sk, async () => {
-        const loaded = await getDepartmentConfig(docClient, {
-          tableName,
-          deptId,
-          configType: configTypeRaw,
-        });
-        return loaded ?? null;
+      const item = await getDepartmentConfig(docClient, {
+        tableName,
+        deptId,
+        configType: configTypeRaw,
       });
       if (!item) {
         return problemResponse(404, 'Not Found', `config ${configTypeRaw} not found`, traceId);
@@ -206,7 +195,6 @@ export function createHandler(deps: Deps = {}): Handler {
           correlationId: traceId,
           ...(expectedVersion !== undefined ? { expectedVersion } : {}),
         });
-        cache.invalidate(pk, sk);
         logger.info({
           event: 'platform.config.updated',
           correlationId: traceId,

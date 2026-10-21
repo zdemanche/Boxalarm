@@ -23,7 +23,7 @@ import {
 } from '../authContext.js';
 import { createDynamoClient, readApparatusConfig } from '../client.js';
 import { findApparatusItem, logError } from '../repository.js';
-import { resolveRidingPosition } from './entity.js';
+import { RidingBoardWriteError, resolveRidingPosition } from './entity.js';
 import {
   assignSeat,
   getRidingBoard,
@@ -171,10 +171,13 @@ async function postAssignment(
   if (typeof positionCode !== 'string' || positionCode.length === 0) {
     return badRequestProblem(traceId, 'positionCode is required and must be a non-empty string.');
   }
-  if (memberId !== null && typeof memberId !== 'string') {
+  if (
+    memberId !== null &&
+    (typeof memberId !== 'string' || memberId.length === 0 || memberId.includes('#'))
+  ) {
     return badRequestProblem(
       traceId,
-      'memberId must be a string (the assigned member) or null (vacate).',
+      "memberId must be a non-empty string without '#' (the assigned member) or null (vacate).",
     );
   }
   if (
@@ -207,6 +210,7 @@ async function postAssignment(
     ]);
   } catch (error) {
     logError('apparatus.ridingBoard.assign.lookupFailed', error, { traceId, deptId, dispatchId });
+    emitOutcomeMetric(METRICS_NAMESPACE, 'RidingAssignmentFailed', 'LookupError');
     return serviceUnavailableProblem(traceId);
   }
 
@@ -215,6 +219,12 @@ async function postAssignment(
   }
 
   const resolution = resolveRidingPosition(apparatus.type, positionsByType, positionCode);
+  if (resolution.kind === 'UNCONFIGURED_TYPE') {
+    return badRequestProblem(
+      traceId,
+      `No riding positions are configured for apparatus type "${apparatus.type}".`,
+    );
+  }
   if (resolution.kind === 'UNKNOWN_POSITION') {
     return badRequestProblem(
       traceId,
@@ -253,7 +263,11 @@ async function postAssignment(
     }
   } catch (error) {
     logError('apparatus.ridingBoard.assign.writeFailed', error, { traceId, deptId, dispatchId });
-    emitOutcomeMetric(METRICS_NAMESPACE, 'RidingAssignmentFailed', 'WriteError');
+    emitOutcomeMetric(
+      METRICS_NAMESPACE,
+      'RidingAssignmentFailed',
+      error instanceof RidingBoardWriteError ? error.reason : 'UnknownError',
+    );
     return serviceUnavailableProblem(traceId);
   }
 }

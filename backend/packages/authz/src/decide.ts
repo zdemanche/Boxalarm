@@ -1,5 +1,6 @@
 import {
   BatchIsAuthorizedWithTokenCommand,
+  type BatchIsAuthorizedWithTokenCommandOutput,
   Decision,
   IsAuthorizedWithTokenCommand,
   type VerifiedPermissionsClient,
@@ -59,6 +60,8 @@ export async function isAuthorized(
   }
 }
 
+const BATCH_REQUEST_LIMIT = 30;
+
 export async function batchIsAuthorized(
   client: VerifiedPermissionsClient,
   config: AuthzConfig,
@@ -79,27 +82,38 @@ export async function batchIsAuthorized(
     return [];
   }
 
-  let results;
+  const chunks: string[][] = [];
+  for (let start = 0; start < resourceIds.length; start += BATCH_REQUEST_LIMIT) {
+    chunks.push(resourceIds.slice(start, start + BATCH_REQUEST_LIMIT));
+  }
+
+  let outputs: BatchIsAuthorizedWithTokenCommandOutput[];
   try {
-    const output = await client.send(
-      new BatchIsAuthorizedWithTokenCommand({
-        policyStoreId: config.policyStoreId,
-        accessToken,
-        requests: resourceIds.map((resourceId) => ({
-          action: { actionType, actionId },
-          resource: { entityType: resourceType, entityId: resourceId },
-        })),
-      }),
+    outputs = await Promise.all(
+      chunks.map((chunk) =>
+        client.send(
+          new BatchIsAuthorizedWithTokenCommand({
+            policyStoreId: config.policyStoreId,
+            accessToken,
+            requests: chunk.map((resourceId) => ({
+              action: { actionType, actionId },
+              resource: { entityType: resourceType, entityId: resourceId },
+            })),
+          }),
+        ),
+      ),
     );
-    results = output.results ?? [];
   } catch (error) {
     throw new AuthzUnavailableError(error);
   }
 
-  // BatchIsAuthorizedWithToken returns results in request order, so zip against the
-  // original resourceIds rather than trust the optional echoed request.resource.entityId.
-  return resourceIds.map((resourceId, index) => ({
-    resourceId,
-    allowed: results[index]?.decision === Decision.ALLOW,
-  }));
+  // BatchIsAuthorizedWithToken returns results in request order, so zip each chunk against its
+  // own ids (a short chunk fails closed instead of shifting later decisions) rather than trust
+  // the optional echoed request.resource.entityId.
+  return chunks.flatMap((chunk, chunkIndex) =>
+    chunk.map((resourceId, index) => ({
+      resourceId,
+      allowed: outputs[chunkIndex]?.results?.[index]?.decision === Decision.ALLOW,
+    })),
+  );
 }

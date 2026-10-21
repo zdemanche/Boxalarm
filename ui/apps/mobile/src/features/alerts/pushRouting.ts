@@ -276,7 +276,7 @@ export function subscribePushNotificationRouting(): () => void {
   };
 }
 
-// Notification ids already routed to by routeToRingingPage, so returning to the app does not
+// Notification id + tone already routed to by routeToRingingPage, so returning to the app does not
 // pull the member back to the same page again and again.
 const routedRingingPages = new Set<string>();
 
@@ -304,10 +304,12 @@ export async function routeToRingingPage(): Promise<void> {
     .sort((a, b) => Number(b.date ?? 0) - Number(a.date ?? 0));
   const newest = ringing[0];
   const id = newest?.id ?? newest?.notification?.id;
-  if (!newest || !id || routedRingingPages.has(id)) return;
+  if (!newest || !id) return;
+  const routedKey = `${id}#${newest.notification?.data?.toneSequence ?? ''}`;
+  if (routedRingingPages.has(routedKey)) return;
   const payload = alertPayloadFromNotificationData(newest.notification?.data);
   if (!payload) return;
-  routedRingingPages.add(id);
+  routedRingingPages.add(routedKey);
   const current = navigationRef.isReady() ? navigationRef.getCurrentRoute() : undefined;
   const onIt =
     current?.name === (payload.mutualAidPrompt ? 'MutualAidPrompt' : 'AlertDetail') &&

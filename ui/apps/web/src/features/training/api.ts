@@ -1,4 +1,5 @@
-import { apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { ApiError, apiRequest, type AuthTokenSource } from '../../lib/apiClient';
+import { problemMessage } from '../personnel/problemMessage';
 import type {
   AttendeeHoursInput,
   Certification,
@@ -10,6 +11,46 @@ import type {
   TranscriptExportFormat,
   TrainingEvent,
 } from './types';
+
+export function errorDetail(error: Error): string {
+  if (error instanceof ApiError && Array.isArray(error.problem.errors)) {
+    const reasons = error.problem.errors.flatMap((item: unknown) => {
+      const { field, detail } = (item ?? {}) as { field?: unknown; detail?: unknown };
+      return typeof field === 'string' && typeof detail === 'string' ? [`${field}: ${detail}`] : [];
+    });
+    if (reasons.length > 0) return reasons.join('; ');
+  }
+  return problemMessage(error);
+}
+
+const ATTACHMENT_FILENAME_MAX = 128;
+const ATTACHMENT_EXTENSIONS = new Set([
+  'pdf',
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'heic',
+  'heif',
+  'tif',
+  'tiff',
+  'docx',
+  'xlsx',
+]);
+
+export function safeAttachmentFilename(name: string): string {
+  const cleaned = name
+    .replace(/[^A-Za-z0-9._-]/g, '_')
+    .slice(-ATTACHMENT_FILENAME_MAX)
+    .replace(/^[^A-Za-z0-9]+/, '');
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  const cleanedDot = cleaned.lastIndexOf('.');
+  const cleanedExtension = cleanedDot > 0 ? cleaned.slice(cleanedDot + 1).toLowerCase() : '';
+  if (cleanedDot > 0 && ATTACHMENT_EXTENSIONS.has(cleanedExtension)) return cleaned;
+  return ATTACHMENT_EXTENSIONS.has(extension) ? `attachment.${extension}` : cleaned;
+}
 
 export async function listCertifications(
   tokens: AuthTokenSource,
@@ -35,7 +76,9 @@ export async function createCertification(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(
-        attachmentFilename ? { ...rest, attachment: { filename: attachmentFilename } } : rest,
+        attachmentFilename
+          ? { ...rest, attachment: { filename: safeAttachmentFilename(attachmentFilename) } }
+          : rest,
       ),
     },
   );

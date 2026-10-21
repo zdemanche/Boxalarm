@@ -22,6 +22,7 @@ export interface CadSourcesArgs {
   webhookUrl: pulumi.Input<string>;
   /** The webhook's usage plan: each source's API key is attached to it on rotation. */
   webhookUsagePlanId: pulumi.Input<string>;
+  pageTopicArn: pulumi.Input<string>;
   /** The inbound mail domain, when the email path exists. */
   emailDomain?: string;
 }
@@ -69,6 +70,8 @@ function cadApiKeyDeleteStatement(regionName: string): IamPolicyStatement {
     Condition: { StringEquals: { "aws:ResourceTag/boxalarm:purpose": ["cad-webhook"] } },
   };
 }
+
+const CLEANUP_METRIC_NAMESPACE = "Boxalarm/platform";
 
 export class CadSources extends pulumi.ComponentResource {
   public readonly settingsLambda: ServiceLambda;
@@ -181,12 +184,48 @@ export class CadSources extends pulumi.ComponentResource {
                   "secretsmanager:CreateSecret",
                   "secretsmanager:PutSecretValue",
                   "secretsmanager:GetSecretValue",
+                  "secretsmanager:TagResource",
                 ],
                 Resource: secretArn,
               },
             ],
           ),
-        timeout: 10,
+        timeout: 15,
+      },
+      { parent: this },
+    );
+
+    new aws.cloudwatch.LogMetricFilter(
+      `${name}-cleanup-failed-filter`,
+      {
+        name: `boxalarm-${env}-cad-sources-cleanup-failed`,
+        logGroupName: args.logGroup.logGroupName,
+        pattern: `?"platform.cadSources.secretDeleteFailed" ?"platform.cadSources.apiKeyDeleteFailed" ?"platform.cadSources.secretRestoreFailed"`,
+        metricTransformation: {
+          name: "CadSourcesCleanupFailed",
+          namespace: CLEANUP_METRIC_NAMESPACE,
+          value: "1",
+          defaultValue: "0",
+        },
+      },
+      { parent: this },
+    );
+
+    new aws.cloudwatch.MetricAlarm(
+      `${name}-cleanup-failed-alarm`,
+      {
+        name: `boxalarm-${env}-cad-sources-cleanup-failed`,
+        alarmDescription:
+          "A CAD webhook secret or API key could not be deleted or restored: an orphan may still work.",
+        namespace: CLEANUP_METRIC_NAMESPACE,
+        metricName: "CadSourcesCleanupFailed",
+        statistic: "Sum",
+        period: 60,
+        evaluationPeriods: 1,
+        threshold: 0,
+        comparisonOperator: "GreaterThanThreshold",
+        treatMissingData: "notBreaching",
+        alarmActions: [args.pageTopicArn],
       },
       { parent: this },
     );

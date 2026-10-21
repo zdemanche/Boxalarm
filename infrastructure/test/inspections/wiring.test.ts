@@ -210,11 +210,12 @@ describe(
         }
       });
 
-      it("pre-plan put: Query + ConditionCheckItem + PutItem for the occupancy-guarded transaction", async () => {
+      it("pre-plan put: Query + GetItem + ConditionCheckItem + PutItem for the occupancy-guarded transaction", async () => {
         await build();
         const s = statementsForRole(fn("pre-plan-put"));
         for (const action of [
           "dynamodb:Query",
+          "dynamodb:GetItem",
           "dynamodb:ConditionCheckItem",
           "dynamodb:PutItem",
         ]) {

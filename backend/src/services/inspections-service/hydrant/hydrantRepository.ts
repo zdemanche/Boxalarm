@@ -8,6 +8,7 @@ import {
 import { buildDeptScopedPk } from '@boxalarm/dept-scope';
 import type { VerifiedDeptId } from '@boxalarm/dept-scope';
 import { buildOutboxRecord } from '@boxalarm/outbox';
+import { buildAuditLogEntryTransactItem } from '../../platform-service/audit/auditEntry.js';
 import { getDocumentClient, readHydrantTableConfig } from './dynamoClient.js';
 import { logError } from './logger.js';
 import {
@@ -15,6 +16,7 @@ import {
   buildHydrantDueGsi2Pk,
   buildHydrantGsi2Keys,
   buildHydrantGsi3Keys,
+  computeHydrantNextFlowTestDue,
 } from './hydrantKeys.js';
 import type { HydrantStatus } from './hydrantKeys.js';
 
@@ -87,6 +89,15 @@ export function buildHydrantEventPayload(
   };
 }
 
+function pickPatchedFields(
+  existing: Partial<HydrantRecord>,
+  patch: UpdateHydrantInput,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.keys(patch).map((field) => [field, existing[field as keyof UpdateHydrantInput]]),
+  );
+}
+
 export class HydrantAlreadyExistsError extends Error {
   constructor(hydrantId: string) {
     super(`hydrant "${hydrantId}" already exists`);
@@ -111,6 +122,7 @@ export class HydrantNotFoundError extends Error {
 export async function createHydrant(
   deptId: VerifiedDeptId,
   input: CreateHydrantInput,
+  actorId: string,
 ): Promise<HydrantRecord> {
   const { tableName } = readHydrantTableConfig(process.env);
   const now = Date.now();
@@ -166,6 +178,21 @@ export async function createHydrant(
           },
           { Put: { TableName: tableName, Item: listIndexItem } },
           { Put: { TableName: tableName, Item: outboxRecord } },
+          buildAuditLogEntryTransactItem(tableName, {
+            deptId,
+            actorId,
+            mutatedEntityType: 'HYDRANT',
+            mutatedEntityId: input.hydrantId,
+            action: 'CREATE',
+            after: {
+              latitude: item.latitude,
+              longitude: item.longitude,
+              size: item.size,
+              flowRatingGpm: item.flowRatingGpm,
+              nextFlowTestDue: item.nextFlowTestDue,
+              status: item.status,
+            },
+          }),
         ],
       }),
     );
@@ -244,10 +271,15 @@ export async function updateHydrant(
   hydrantId: string,
   patch: UpdateHydrantInput,
   correlationId: string,
+  actorId: string,
 ): Promise<HydrantRecord> {
   const { tableName } = readHydrantTableConfig(process.env);
   const pk = buildDeptScopedPk(deptId, 'HYDRANT', hydrantId);
   const now = Date.now();
+  const effectivePatch: UpdateHydrantInput =
+    patch.lastFlowTestDate !== undefined && patch.nextFlowTestDue === undefined
+      ? { ...patch, nextFlowTestDue: computeHydrantNextFlowTestDue(patch.lastFlowTestDate) }
+      : patch;
 
   const setClauses: string[] = ['updatedAt = :updatedAt'];
   const names: Record<string, string> = {};
@@ -262,10 +294,10 @@ export async function updateHydrant(
     setClauses.push('lastFlowTestDate = :lastFlowTestDate');
     values[':lastFlowTestDate'] = patch.lastFlowTestDate;
   }
-  if (patch.nextFlowTestDue !== undefined) {
-    const gsi2 = buildHydrantGsi2Keys(deptId, patch.nextFlowTestDue, hydrantId);
+  if (effectivePatch.nextFlowTestDue !== undefined) {
+    const gsi2 = buildHydrantGsi2Keys(deptId, effectivePatch.nextFlowTestDue, hydrantId);
     setClauses.push('nextFlowTestDue = :nextFlowTestDue', 'gsi2pk = :gsi2pk', 'gsi2sk = :gsi2sk');
-    values[':nextFlowTestDue'] = patch.nextFlowTestDue;
+    values[':nextFlowTestDue'] = effectivePatch.nextFlowTestDue;
     values[':gsi2pk'] = gsi2.gsi2pk;
     values[':gsi2sk'] = gsi2.gsi2sk;
   }
@@ -291,7 +323,7 @@ export async function updateHydrant(
       'inspections-service',
       'inspections.hydrant.updated',
       correlationId,
-      buildHydrantEventPayload(deptId, hydrantId, { ...existing, ...patch }),
+      buildHydrantEventPayload(deptId, hydrantId, { ...existing, ...effectivePatch }),
     );
 
     try {
@@ -322,6 +354,16 @@ export async function updateHydrant(
                 Item: outboxRecord,
               },
             },
+            buildAuditLogEntryTransactItem(tableName, {
+              deptId,
+              actorId,
+              mutatedEntityType: 'HYDRANT',
+              mutatedEntityId: hydrantId,
+              action: 'UPDATE',
+              before: pickPatchedFields(existing, effectivePatch),
+              after: { ...effectivePatch },
+              traceId: correlationId,
+            }),
           ],
         }),
       );

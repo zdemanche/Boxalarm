@@ -21,6 +21,7 @@ async function publishWithBoundedConcurrency(
   dueRecords: readonly {
     readonly memberId: string;
     readonly certId: string;
+    readonly certType: string;
     readonly expiryDate: string;
   }[],
   publish: (record: (typeof dueRecords)[number]) => Promise<void>,
@@ -81,6 +82,7 @@ export async function runCertificationExpiryScan(
         deptId,
         memberId: record.memberId,
         certId: record.certId,
+        certType: record.certType,
         expiryDate: record.expiryDate,
         leadDays,
         correlationId,

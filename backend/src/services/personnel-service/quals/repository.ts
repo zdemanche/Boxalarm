@@ -3,6 +3,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildAuditLogEntryTransactItem } from '../../platform-service/audit/auditEntry.js';
 import { deriveCurrentlyEligible, type CertStatus } from './eligibility.js';
 
 export interface MemberQualification {
@@ -28,6 +29,33 @@ export class CertNotFoundError extends Error {
     super(`Certification ${certId} not found`);
     this.name = 'CertNotFoundError';
   }
+}
+
+export class CertChangedError extends Error {
+  constructor(readonly certId: string) {
+    super(`Certification ${certId} changed status while the qualification was being saved`);
+    this.name = 'CertChangedError';
+  }
+}
+
+const MAX_PUT_ATTEMPTS = 3;
+const QUAL_PUT_INDEX = 0;
+const CERT_CHECK_INDEX = 3;
+
+function failedAt(error: unknown, index: number): boolean {
+  return (
+    error instanceof TransactionCanceledException &&
+    error.CancellationReasons?.[index]?.Code === 'ConditionalCheckFailed'
+  );
+}
+
+function isRetryablePutFailure(error: unknown): boolean {
+  return (
+    failedAt(error, QUAL_PUT_INDEX) ||
+    failedAt(error, CERT_CHECK_INDEX) ||
+    (error instanceof TransactionCanceledException &&
+      (error.CancellationReasons ?? []).some((reason) => reason.Code === 'TransactionConflict'))
+  );
 }
 
 function logRepositoryError(event: string, error: unknown, context: Record<string, unknown>): void {
@@ -123,7 +151,11 @@ async function readCertStatus(
   const pk = buildDeptScopedPk(deptId, 'MEMBER', memberId);
   try {
     const result = await client.send(
-      new GetCommand({ TableName: tableName, Key: { pk, sk: `CERT#${certId}` } }),
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk, sk: `CERT#${certId}` },
+        ConsistentRead: true,
+      }),
     );
     if (!result.Item) {
       throw new CertNotFoundError(certId);
@@ -138,6 +170,38 @@ async function readCertStatus(
   }
 }
 
+async function readExistingQual(
+  client: DynamoDBDocumentClient,
+  tableName: string,
+  deptId: VerifiedDeptId,
+  memberId: string,
+  qualCode: string,
+): Promise<MemberQualification | undefined> {
+  try {
+    const result = await client.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', memberId), sk: `QUAL#${qualCode}` },
+        ConsistentRead: true,
+      }),
+    );
+    return result.Item
+      ? {
+          qualCode,
+          grantedByCertId: (result.Item.grantedByCertId as string | null | undefined) ?? null,
+          currentlyEligible: result.Item.currentlyEligible as boolean,
+        }
+      : undefined;
+  } catch (error) {
+    logRepositoryError('personnel.quals.existingLookup.failed', error, {
+      deptId,
+      memberId,
+      qualCode,
+    });
+    throw error;
+  }
+}
+
 export async function putQual(
   client: DynamoDBDocumentClient,
   tableName: string,
@@ -146,51 +210,104 @@ export async function putQual(
   qualCode: string,
   grantedByCertId: string | null,
   correlationId: string,
+  actorId: string,
 ): Promise<MemberQualification> {
   const pk = buildDeptScopedPk(deptId, 'MEMBER', memberId);
-  const certStatus =
-    grantedByCertId === null
-      ? undefined
-      : await readCertStatus(client, tableName, deptId, memberId, grantedByCertId);
-  const currentlyEligible = deriveCurrentlyEligible(grantedByCertId, certStatus);
-  const qualItem = {
-    pk,
-    sk: `QUAL#${qualCode}`,
-    entityType: 'MEMBER_QUALIFICATION',
-    qualCode,
-    grantedByCertId,
-    currentlyEligible,
-    gsi1pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
-    gsi1sk: `MEMBER_QUALIFICATION#${qualCode}`,
-  };
-  const outboxEventId = randomUUID();
-  const outboxItem = {
-    pk,
-    sk: `OUTBOX#${outboxEventId}`,
-    ...buildOutboxEntry(outboxEventId, correlationId, {
-      deptId,
-      memberId,
+  for (let attempt = 1; ; attempt += 1) {
+    const existing = await readExistingQual(client, tableName, deptId, memberId, qualCode);
+    const certStatus =
+      grantedByCertId === null
+        ? undefined
+        : await readCertStatus(client, tableName, deptId, memberId, grantedByCertId);
+    const currentlyEligible = deriveCurrentlyEligible(grantedByCertId, certStatus);
+    const qualItem = {
+      pk,
+      sk: `QUAL#${qualCode}`,
+      entityType: 'MEMBER_QUALIFICATION',
       qualCode,
-      currentlyEligible,
       grantedByCertId,
-    }),
-  };
-
-  try {
-    await client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          { Put: { TableName: tableName, Item: qualItem } },
-          { Put: { TableName: tableName, Item: outboxItem } },
-        ],
+      currentlyEligible,
+      gsi1pk: buildDeptScopedPk(deptId, 'MEMBER', memberId),
+      gsi1sk: `MEMBER_QUALIFICATION#${qualCode}`,
+    };
+    const outboxEventId = randomUUID();
+    const outboxItem = {
+      pk,
+      sk: `OUTBOX#${outboxEventId}`,
+      ...buildOutboxEntry(outboxEventId, correlationId, {
+        deptId,
+        memberId,
+        qualCode,
+        currentlyEligible,
+        grantedByCertId,
       }),
-    );
-  } catch (error) {
-    logRepositoryError('personnel.quals.write.failed', error, { deptId, memberId, qualCode });
-    throw error;
-  }
+    };
 
-  return { qualCode, grantedByCertId, currentlyEligible };
+    try {
+      await client.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: tableName,
+                Item: qualItem,
+                ...(existing
+                  ? {
+                      ConditionExpression:
+                        '(attribute_not_exists(grantedByCertId) OR grantedByCertId = :prevCert) AND currentlyEligible = :prevEligible',
+                      ExpressionAttributeValues: {
+                        ':prevCert': existing.grantedByCertId,
+                        ':prevEligible': existing.currentlyEligible,
+                      },
+                    }
+                  : { ConditionExpression: 'attribute_not_exists(pk)' }),
+              },
+            },
+            { Put: { TableName: tableName, Item: outboxItem } },
+            buildAuditLogEntryTransactItem(tableName, {
+              deptId,
+              actorId,
+              mutatedEntityType: 'MEMBER_QUALIFICATION',
+              mutatedEntityId: `${memberId}-${qualCode}`,
+              action: existing ? 'UPDATE' : 'CREATE',
+              before: {
+                qualCode: existing?.qualCode ?? null,
+                grantedByCertId: existing?.grantedByCertId ?? null,
+                currentlyEligible: existing?.currentlyEligible ?? null,
+              },
+              after: { qualCode, grantedByCertId, currentlyEligible },
+              traceId: correlationId,
+            }),
+            ...(grantedByCertId === null
+              ? []
+              : [
+                  {
+                    ConditionCheck: {
+                      TableName: tableName,
+                      Key: { pk, sk: `CERT#${grantedByCertId}` },
+                      ConditionExpression: '#status = :observedStatus',
+                      ExpressionAttributeNames: { '#status': 'status' },
+                      ExpressionAttributeValues: { ':observedStatus': certStatus },
+                    },
+                  },
+                ]),
+          ],
+        }),
+      );
+      return { qualCode, grantedByCertId, currentlyEligible };
+    } catch (error) {
+      logRepositoryError('personnel.quals.write.failed', error, { deptId, memberId, qualCode });
+      if (isRetryablePutFailure(error)) {
+        if (attempt < MAX_PUT_ATTEMPTS) {
+          continue;
+        }
+        if (grantedByCertId !== null && failedAt(error, CERT_CHECK_INDEX)) {
+          throw new CertChangedError(grantedByCertId);
+        }
+      }
+      throw error;
+    }
+  }
 }
 
 export async function flipEligibilityOnCertExpired(
@@ -211,6 +328,7 @@ export async function flipEligibilityOnCertExpired(
         new QueryCommand({
           TableName: tableName,
           KeyConditionExpression: 'pk = :pkVal AND begins_with(sk, :skPrefix)',
+          ConsistentRead: true,
           FilterExpression: 'grantedByCertId = :certId AND currentlyEligible = :eligible',
           ExpressionAttributeValues: {
             ':pkVal': pk,

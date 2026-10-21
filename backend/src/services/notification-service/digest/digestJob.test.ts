@@ -336,9 +336,13 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
         return Promise.resolve({ Item: item });
       }
       if (command.constructor.name === 'TransactWriteCommand') {
-        const items = command.input.TransactItems as {
-          Put: { Item: { pk: string; sk: string }; ConditionExpression?: string };
-        }[];
+        const items = (
+          command.input.TransactItems as {
+            Put?: { Item: { pk: string; sk: string }; ConditionExpression?: string };
+          }[]
+        ).filter(
+          (entry): entry is { Put: NonNullable<typeof entry.Put> } => entry.Put !== undefined,
+        );
         for (const { Put } of items) {
           const key = `${Put.Item.pk}#${Put.Item.sk}`;
           if (Put.ConditionExpression === 'attribute_not_exists(sk)' && table.has(key)) {
@@ -455,7 +459,7 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
       'digest failed for 1 recipient(s); 1 sent',
     );
     expect(sendPushDigest).toHaveBeenCalledTimes(2);
-    expect(sendEmailDigest).toHaveBeenCalledTimes(1);
+    expect(sendEmailDigest).toHaveBeenCalledTimes(2);
     expect(
       errorSpy.mock.calls.some((call) =>
         (call[0] as string).includes('notification.digest.send_failed'),
@@ -528,5 +532,137 @@ describe('digestJob handler (entrypoint-test obligation)', () => {
     expect(
       sendPushDigest.mock.calls.map((call) => (call[1] as { memberId: string }).memberId),
     ).toEqual(['MBR-FAIL', 'MBR-OK', 'MBR-FAIL']);
+  });
+
+  describe('a channel failure never withholds the inbox row or repeats the other channel', () => {
+    function memoryTable(mutes: { push: boolean; email: boolean } = { push: false, email: false }) {
+      const table = new Map<string, Record<string, unknown>>();
+      const conditionFailed = (name: string) =>
+        Promise.reject(Object.assign(new Error('exists'), { name }));
+      const send = vi.fn().mockImplementation((command: CommandLike) => {
+        const name = command.constructor.name;
+        if (name === 'QueryCommand') {
+          return Promise.resolve({ Items: [pendingItem('MEMBER', 'MBR-1', 'CERT-1')] });
+        }
+        if (name === 'GetCommand') {
+          const sk = keySk(command);
+          if (sk === 'METADATA') {
+            return Promise.resolve({ Item: { email: 'mbr1@example.com' } });
+          }
+          return Promise.resolve({
+            Item: sk?.startsWith('NOTIFPREF#')
+              ? { memberId: 'MBR-1', category: 'cert-expiry', channels: mutes, updatedAt: 1 }
+              : undefined,
+          });
+        }
+        if (name === 'TransactWriteCommand') {
+          const [{ Put: put }, check] = command.input.TransactItems as [
+            { Put: { Item: { pk: string; sk: string } } },
+            { ConditionCheck?: { Key: { pk: string; sk: string } } }?,
+          ];
+          const key = `${put.Item.pk}#${put.Item.sk}`;
+          const legacyKey = check?.ConditionCheck
+            ? `${check.ConditionCheck.Key.pk}#${check.ConditionCheck.Key.sk}`
+            : undefined;
+          if (table.has(key) || (legacyKey !== undefined && table.has(legacyKey))) {
+            return Promise.reject(
+              Object.assign(new Error('exists'), {
+                name: 'TransactionCanceledException',
+                CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+              }),
+            );
+          }
+          table.set(key, put.Item);
+        }
+        if (name === 'PutCommand') {
+          const item = command.input.Item as { pk: string; sk: string };
+          const key = `${item.pk}#${item.sk}`;
+          if (command.input.ConditionExpression && table.has(key)) {
+            return conditionFailed('ConditionalCheckFailedException');
+          }
+          table.set(key, item);
+        }
+        if (name === 'DeleteCommand') {
+          const key = command.input.Key as { pk: string; sk: string };
+          table.delete(`${key.pk}#${key.sk}`);
+        }
+        return Promise.resolve({});
+      });
+      const inboxRows = () =>
+        [...table.values()].filter((row) => row.entityType === 'NOTIFICATION');
+      return { send, inboxRows, table };
+    }
+
+    it('a legacy channel-less DIGESTSENT row from before the deploy counts as claimed: nothing is re-sent', async () => {
+      const { send, table } = memoryTable();
+      table.set(
+        'DEPT#NICHOLS#MEMBER#MBR-1#DIGESTSENT#cert-expiry#' + new Date().toISOString().slice(0, 10),
+        {},
+      );
+      mockDdb(send);
+      const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+      const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+      mockChannelSender(sendPushDigest, sendEmailDigest);
+      const { handler } = await import('./digestJob.js');
+
+      await handler({ deptId: 'NICHOLS' });
+
+      expect(sendPushDigest).not.toHaveBeenCalled();
+      expect(sendEmailDigest).not.toHaveBeenCalled();
+    });
+
+    it('SES always rejecting: the inbox row exists after the first run and the push is sent once across the retries', async () => {
+      const { send, inboxRows } = memoryTable();
+      mockDdb(send);
+      const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+      const sendEmailDigest = vi.fn().mockRejectedValue(new Error('MessageRejected'));
+      mockChannelSender(sendPushDigest, sendEmailDigest);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { handler } = await import('./digestJob.js');
+
+      await expect(handler({ deptId: 'NICHOLS' })).rejects.toThrow('digest failed for 1');
+      expect(inboxRows()).toHaveLength(1);
+      await expect(handler({ deptId: 'NICHOLS' })).rejects.toThrow('digest failed for 1');
+      await expect(handler({ deptId: 'NICHOLS' })).rejects.toThrow('digest failed for 1');
+
+      expect(sendPushDigest).toHaveBeenCalledTimes(1);
+      expect(sendEmailDigest).toHaveBeenCalledTimes(3);
+      expect(inboxRows()).toHaveLength(1);
+    });
+
+    it('push muted and email failing: the inbox row is still written', async () => {
+      const { send, inboxRows } = memoryTable({ push: true, email: false });
+      mockDdb(send);
+      const sendPushDigest = vi.fn().mockResolvedValue(undefined);
+      const sendEmailDigest = vi.fn().mockRejectedValue(new Error('MessageRejected'));
+      mockChannelSender(sendPushDigest, sendEmailDigest);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { handler } = await import('./digestJob.js');
+
+      await expect(handler({ deptId: 'NICHOLS' })).rejects.toThrow('digest failed for 1');
+
+      expect(sendPushDigest).not.toHaveBeenCalled();
+      expect(inboxRows()).toHaveLength(1);
+    });
+
+    it('a push failure does not stop the email, and only the failed push is retried', async () => {
+      const { send, inboxRows } = memoryTable();
+      mockDdb(send);
+      const sendPushDigest = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('SNS throttled'))
+        .mockResolvedValue(undefined);
+      const sendEmailDigest = vi.fn().mockResolvedValue(undefined);
+      mockChannelSender(sendPushDigest, sendEmailDigest);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { handler } = await import('./digestJob.js');
+
+      await expect(handler({ deptId: 'NICHOLS' })).rejects.toThrow('digest failed for 1');
+      await expect(handler({ deptId: 'NICHOLS' })).resolves.toEqual({ processed: 1 });
+
+      expect(sendPushDigest).toHaveBeenCalledTimes(2);
+      expect(sendEmailDigest).toHaveBeenCalledTimes(1);
+      expect(inboxRows()).toHaveLength(1);
+    });
   });
 });

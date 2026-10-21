@@ -260,6 +260,12 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
       expect(isGranted(s, "dynamodb:PutItem", TABLE)).toBe(true);
       expect(isGranted(s, "dynamodb:UpdateItem", TABLE)).toBe(true);
     });
+
+    it("shift completion can GetItem the platform table (LOSAP rules and department time zone)", async () => {
+      await build();
+      const s = statementsForRole("boxalarm-dev-personnel-shift-completion");
+      expect(isGranted(s, "dynamodb:GetItem", TABLE)).toBe(true);
+    });
   });
 
   describe("shifts router", () => {
@@ -286,17 +292,23 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
   });
 
   describe("losap least privilege (MIN-2)", () => {
-    it("member total holds base-table Query only; year-end adds GSI3 (listMembers)", async () => {
+    it("member total holds base-table Query + GetItem (department time zone) and no index access", async () => {
       await build();
       const total = statementsForRole("boxalarm-dev-personnel-losap-member-total");
       expect(isGranted(total, "dynamodb:Query", TABLE)).toBe(true);
+      expect(isGranted(total, "dynamodb:GetItem", TABLE)).toBe(true);
       expect(isGranted(total, "dynamodb:Query", `${TABLE}/index/GSI1`)).toBe(false);
       expect(isGranted(total, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(false);
-      expect(isGranted(total, "dynamodb:GetItem", TABLE)).toBe(false);
+      expect(isGranted(total, "dynamodb:PutItem", TABLE)).toBe(false);
+      expect(isGranted(total, "dynamodb:UpdateItem", TABLE)).toBe(false);
+    });
 
-      const yearEnd = statementsForRole("boxalarm-dev-personnel-losap-year-end-report");
-      expect(isGranted(yearEnd, "dynamodb:Query", TABLE)).toBe(true);
-      expect(isGranted(yearEnd, "dynamodb:Query", `${TABLE}/index/GSI3`)).toBe(true);
+    it("no longer deploys the duplicate personnel year-end report (reporting-service owns it)", async () => {
+      await build();
+      const routes = resourcesOfType("aws:apigatewayv2/route:Route").map((r) => r.inputs.routeKey);
+      expect(routes).not.toContain("GET /api/v1/personnel/losap/year-end");
+      const functions = resourcesOfType("aws:lambda/function:Function").map((r) => r.inputs.name);
+      expect(functions).not.toContain("boxalarm-dev-personnel-losap-year-end-report");
     });
 
     // #257: update-rules is PutItem-only (no UpdateItem) but still carries the deny.
@@ -402,10 +414,6 @@ describe("personnel Lambdas: env and IAM match their handlers", { timeout: 30_00
     "boxalarm-dev-alerting-availability-changed-consumer": ["ALERTING_TABLE_NAME"],
     "boxalarm-dev-personnel-losap-member-total": ["PLATFORM_SERVICE_TABLE_NAME", VP],
     "boxalarm-dev-personnel-losap-update-rules": ["PLATFORM_SERVICE_TABLE_NAME"],
-    "boxalarm-dev-personnel-losap-year-end-report": [
-      "PERSONNEL_TABLE_NAME",
-      "PLATFORM_SERVICE_TABLE_NAME",
-    ],
     "boxalarm-dev-personnel-losap-accrual-consumer": ["PLATFORM_SERVICE_TABLE_NAME"],
     "boxalarm-dev-personnel-shifts": ["PLATFORM_TABLE_NAME", VP],
     "boxalarm-dev-personnel-shift-completion": ["PLATFORM_TABLE_NAME"],

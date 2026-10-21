@@ -17,7 +17,7 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     return {
       statusCode: 200,
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ members }),
+      body: JSON.stringify({ items: members }),
     };
   } catch (error) {
     logError('member.list.failed', traceId, error);

@@ -84,4 +84,46 @@ describe("MessagingAlerting", () => {
       expect(dlqName).toBe(`boxalarm-dev-alerting-${channel}-dlq.fifo`);
     }
   });
+
+  it("dead-letters failed SNS-to-queue deliveries to a FIFO subscription DLQ the topic may write to", async () => {
+    const redrives: Record<string, string> = {};
+    const policies: string[] = [];
+    pulumi.runtime.setMocks({
+      newResource: (args: pulumi.runtime.MockResourceArgs) => {
+        const state: Record<string, unknown> = { ...args.inputs };
+        if (args.type === "aws:sqs/queue:Queue" || args.type === "aws:sns/topic:Topic") {
+          state.arn = `arn:aws:sqs:us-east-1:123456789012:${args.inputs.name ?? args.name}`;
+          state.url = `https://sqs.us-east-1.amazonaws.com/123456789012/${args.inputs.name ?? args.name}`;
+        }
+        if (args.type === "aws:sns/topicSubscription:TopicSubscription") {
+          redrives[args.name] = args.inputs.redrivePolicy as string;
+        }
+        if (args.type === "aws:sqs/queuePolicy:QueuePolicy") {
+          policies.push(`${args.inputs.queueUrl} ${args.inputs.policy}`);
+        }
+        return { id: `${args.name}-id`, state };
+      },
+      call: (args: pulumi.runtime.MockCallArgs) => args.inputs,
+    });
+    const { MessagingAlerting } = await import("../../components/alerting/messaging-alerting");
+    const messaging = new MessagingAlerting("messaging-sub-dlq", { env: "dev" });
+    await Promise.all(
+      (["push", "sms", "voice"] as const).map((c) =>
+        resolve(messaging.channelQueues[c].subscriptionDlq.arn),
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    for (const channel of ["push", "sms", "voice"] as const) {
+      const dlqName = `boxalarm-dev-alerting-${channel}-subscription-dlq.fifo`;
+      expect(await resolve(messaging.channelQueues[channel].subscriptionDlq.name)).toBe(dlqName);
+      const redrive = JSON.parse(redrives[`messaging-sub-dlq-${channel}-subscription`]!) as {
+        deadLetterTargetArn: string;
+      };
+      expect(redrive.deadLetterTargetArn).toContain(dlqName);
+      const policy = policies.find((p) => p.includes(dlqName) && p.includes("sns.amazonaws.com"));
+      expect(policy, channel).toContain("aws:SourceArn");
+      expect(policy, channel).toContain("boxalarm-dev-alerting-topic.fifo");
+    }
+  });
 });

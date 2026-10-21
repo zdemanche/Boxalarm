@@ -398,6 +398,24 @@ export async function listAttendanceForPeriod(
   return attendanceByEvent.flat();
 }
 
+export async function findUnknownMemberIds(
+  client: DynamoDBDocumentClient,
+  config: TrainingConfig,
+  deptId: VerifiedDeptId,
+  memberIds: readonly string[],
+): Promise<readonly string[]> {
+  const found = await mapWithConcurrency(memberIds, ATTENDANCE_FAN_OUT_CONCURRENCY, async (id) => {
+    const output = await client.send(
+      new GetCommand({
+        TableName: config.tableName,
+        Key: { pk: buildDeptScopedPk(deptId, 'MEMBER', id), sk: 'METADATA' },
+      }),
+    );
+    return output.Item !== undefined;
+  });
+  return memberIds.filter((_, index) => !found[index]);
+}
+
 export async function recordAttendanceHours(
   client: DynamoDBDocumentClient,
   config: TrainingConfig,

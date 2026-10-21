@@ -41,6 +41,7 @@ import {
   formatDate,
   formatDuration,
   formatPercent,
+  dayBounds,
   isoDateDaysAgo,
   isoDateToEpochSeconds,
   todayIsoDate,
@@ -369,8 +370,8 @@ function DashboardPanel() {
 function ResponseTimesPanel() {
   const auth = useAuth();
   const range = useDateRange(isoDateDaysAgo(30), todayIsoDate());
-  const from = isoDateToEpochSeconds(range.from);
-  const to = isoDateToEpochSeconds(range.to) + 86_399;
+  const from = dayBounds(range.from).from;
+  const to = dayBounds(range.to).to;
   const query = useQuery({
     queryKey: ['reporting', 'response-times', from, to],
     queryFn: () => getResponseTimes(auth, from, to),
@@ -448,9 +449,9 @@ function ResponseTimesPanel() {
 
 function IsoPanel() {
   const auth = useAuth();
-  const range = useDateRange(`${new Date().getUTCFullYear()}-01-01`, todayIsoDate());
-  const from = isoDateToEpochSeconds(range.from);
-  const to = isoDateToEpochSeconds(range.to) + 86_399;
+  const range = useDateRange(`${todayIsoDate().slice(0, 4)}-01-01`, todayIsoDate());
+  const from = dayBounds(range.from).from;
+  const to = dayBounds(range.to).to;
   const query = useQuery({
     queryKey: ['reporting', 'iso', from, to],
     queryFn: () => getIsoReport(auth, from, to),
@@ -630,9 +631,9 @@ function MembershipTrendsPanel() {
 
 function GrantsPanel() {
   const auth = useAuth();
-  const range = useDateRange(`${new Date().getUTCFullYear()}-01-01`, todayIsoDate());
-  const periodStart = isoDateToEpochSeconds(range.from) * 1000;
-  const periodEnd = (isoDateToEpochSeconds(range.to) + 86_399) * 1000 + 999;
+  const range = useDateRange(`${todayIsoDate().slice(0, 4)}-01-01`, todayIsoDate());
+  const periodStart = dayBounds(range.from).from * 1000;
+  const periodEnd = dayBounds(range.to).to * 1000 + 999;
   const query = useQuery({
     queryKey: ['reporting', 'grants', periodStart, periodEnd],
     queryFn: () => getGrantsReport(auth, periodStart, periodEnd),
@@ -670,7 +671,7 @@ function GrantsPanel() {
                 {report.totalIncidentVolume.available ? (
                   <Stat
                     label="Incident volume"
-                    value={report.totalIncidentVolume.total}
+                    value={report.totalIncidentVolume.totalIncidents}
                     hint="Incidents with an alarm time in the period"
                   />
                 ) : (
@@ -682,31 +683,6 @@ function GrantsPanel() {
                 )}
               </div>
               <div className={styles.sectionGrid}>
-                {report.totalIncidentVolume.available ? (
-                  <Card title="Incident volume by type">
-                    <DataTable
-                      caption="Incident volume by type"
-                      rowKey={(r) => r.incidentType}
-                      rows={report.totalIncidentVolume.byType}
-                      emptyMessage="No incidents in this period."
-                      columns={[
-                        {
-                          key: 'type',
-                          header: 'Type',
-                          isRowHeader: true,
-                          render: (r) => r.incidentType,
-                        },
-                        {
-                          key: 'count',
-                          header: 'Incidents',
-                          align: 'right',
-                          sortValue: (r) => r.count,
-                          render: (r) => r.count,
-                        },
-                      ]}
-                    />
-                  </Card>
-                ) : null}
                 <Card title="Apparatus out-of-service history">
                   <DataTable
                     caption="Apparatus out-of-service history"
@@ -720,12 +696,13 @@ function GrantsPanel() {
                         key: 'start',
                         header: 'Out of service',
                         sortValue: (r) => r.startAt,
-                        render: (r) => formatDate(r.startAt),
+                        render: (r) => formatDate(r.startAt * 1000),
                       },
                       {
                         key: 'end',
                         header: 'Back in service',
-                        render: (r) => (r.endAt === null ? 'Still out' : formatDate(r.endAt)),
+                        render: (r) =>
+                          r.endAt === null ? 'Still out' : formatDate(r.endAt * 1000),
                       },
                     ]}
                   />

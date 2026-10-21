@@ -29,6 +29,46 @@ describe('computeDeliveryBaseline', () => {
     );
   });
 
+  it('counts a fan-out receipt and its worker send guard as one attempt, delivered only on a numeric deliveredAt', () => {
+    const result = computeDeliveryBaseline([
+      {
+        dispatchId: 'd-2',
+        dispatch: { dispatchedAt: 1000 },
+        timeline: [
+          { entityType: 'DELIVERY_RECEIPT', memberId: 'mbr-1', toneSequence: 1, channel: 'push' },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            memberId: 'mbr-1',
+            toneSequence: 1,
+            channel: 'PUSH',
+            deliveredAt: null,
+            failureReason: 'PUSH_TOKEN_INVALID',
+          },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            memberId: 'mbr-1',
+            toneSequence: 1,
+            channel: 'sms',
+            deliveredAt: 1003,
+          },
+          {
+            entityType: 'DELIVERY_RECEIPT',
+            memberId: 'mbr-1',
+            toneSequence: 1,
+            channel: 'SMS',
+            deliveredAt: null,
+          },
+        ],
+      },
+    ]);
+    expect(result.sentCount).toBe(2);
+    expect(result.deliveredCount).toBe(1);
+    expect(result.deliveryRate).toBe(0.5);
+    expect(result.perMember).toEqual([
+      { memberId: 'mbr-1', sent: 2, delivered: 1, missedPageCount: 1 },
+    ]);
+  });
+
   it('returns nulls/zeros for an empty period rather than dividing by zero', () => {
     const result = computeDeliveryBaseline([]);
     expect(result.deliveryRate).toBe(0);

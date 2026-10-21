@@ -104,6 +104,8 @@ describe('export handler', () => {
       'EXPORT_JOB',
       'AUDIT_LOG_ENTRY',
     ]);
+    expect(transactItems[1]?.Put.Item.gsi3sk).toEqual(expect.any(String));
+    expect(transactItems[1]?.Put.Item.gsi3pk).toContain('EXPORT_JOB');
     expect(invokeSend).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('ExportInvoked'));
   });
@@ -245,6 +247,49 @@ describe('export handler', () => {
       () => undefined,
     )) as { statusCode: number; body: string };
     expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toEqual({ status: 'PENDING' });
+  });
+
+  it('returns 200 FAILED when a PENDING job outlives the worker timeout with no manifest or sentinel', async () => {
+    const { createHandler } = await import('./handler.js');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const notFound = Object.assign(new Error('NotFound'), {
+      name: 'NotFound',
+      $metadata: { httpStatusCode: 404 },
+    });
+    const requestedAt = new Date(Date.now() - 17 * 60 * 1000).toISOString();
+    const handler = createHandler({
+      docClient: fakeDocClient(() => Promise.resolve({ Item: { status: 'PENDING', requestedAt } })),
+      s3Client: fakeS3Client(() => Promise.reject(notFound)),
+    });
+
+    const result = (await handler(
+      buildEvent('GET /api/v1/platform/export/{jobId}', adminContext(), { jobId: 'job-1' }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number; body: string };
+    expect(JSON.parse(result.body)).toEqual({ status: 'FAILED' });
+  });
+
+  it.each([
+    ['a recent requestedAt', new Date(Date.now() - 60 * 1000).toISOString()],
+    ['an unparseable requestedAt', 'garbage'],
+  ])('keeps a PENDING job PENDING with %s', async (_label, requestedAt) => {
+    const { createHandler } = await import('./handler.js');
+    const notFound = Object.assign(new Error('NotFound'), {
+      name: 'NotFound',
+      $metadata: { httpStatusCode: 404 },
+    });
+    const handler = createHandler({
+      docClient: fakeDocClient(() => Promise.resolve({ Item: { status: 'PENDING', requestedAt } })),
+      s3Client: fakeS3Client(() => Promise.reject(notFound)),
+    });
+
+    const result = (await handler(
+      buildEvent('GET /api/v1/platform/export/{jobId}', adminContext(), { jobId: 'job-1' }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number; body: string };
     expect(JSON.parse(result.body)).toEqual({ status: 'PENDING' });
   });
 

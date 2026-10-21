@@ -187,7 +187,9 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./prePlanCopyHandler.js');
 
-    await handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231' }));
+    await expect(
+      handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231' })),
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(send).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
@@ -203,7 +205,9 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { handler } = await import('./prePlanCopyHandler.js');
 
-    await handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231' }));
+    await expect(
+      handler(sqsEvent({ deptId: 'NICHOLS', occupancyId: 'OCC-0231' })),
+    ).resolves.toEqual({ batchItemFailures: [] });
 
     expect(send).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
@@ -261,22 +265,24 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     expect(update?.UpdateExpression).not.toContain('nearestHydrants');
   });
 
-  it('stores the parsed town and ZIP beside the key so a dispatch in another town is rejected', async () => {
+  it('does not store the parsed town, ZIP or state: the matcher re-parses the address, and a replay clears old values', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
     const { handler } = await import('./prePlanCopyHandler.js');
 
     await handler(sqsEvent({ ...FULL_PAYLOAD, address: '123 Main St, Trumbull, CT 06611' }));
 
-    const values =
-      (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find((item) => item.Update)
-        ?.Update?.ExpressionAttributeValues ?? {};
-    expect(values).toMatchObject({
+    const update = (send.mock.calls[0]?.[0] as TransactInput).input.TransactItems.find(
+      (item) => item.Update,
+    )?.Update;
+    const remove = update?.UpdateExpression.split(' REMOVE ')[1]?.split(', ') ?? [];
+    expect(remove).toEqual(expect.arrayContaining(['addressTown', 'addressZip', 'addressState']));
+    expect(update?.ExpressionAttributeValues).toMatchObject({
       ':addressKey': '123 MAIN ST',
-      ':addressTown': 'TRUMBULL',
-      ':addressZip': '06611',
       ':gsi1pk': 'DEPT#NICHOLS#PREPLAN_ADDR#123 MAIN ST',
     });
+    expect(update?.ExpressionAttributeValues).not.toHaveProperty([':addressTown']);
+    expect(update?.ExpressionAttributeValues).not.toHaveProperty([':addressZip']);
   });
 
   it('N4: REMOVEs every derived field the current event does not produce (stale unit/town/keys)', async () => {
@@ -323,6 +329,43 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     expect(update?.UpdateExpression).toMatch(/REMOVE .*addressKey.*gsi1pk, gsi1sk/);
   });
 
+  it('flags a present address that cannot be indexed, still reporting the copy as updated', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await expect(
+      handler(sqsEvent({ ...FULL_PAYLOAD, address: 'Trumbull High School, 72 Strobel Rd' })),
+    ).resolves.toEqual({ batchItemFailures: [] });
+
+    const errors = errorSpy.mock.calls.map(([line]) => String(line));
+    expect(errors.some((line) => line.includes('preplan_copy.address_unindexed'))).toBe(true);
+    expect(errors.join('')).not.toContain('Strobel');
+    const logs = logSpy.mock.calls.map(([line]) => String(line));
+    expect(logs.some((line) => line.includes('PrePlanCopyAddressUnindexed'))).toBe(true);
+    expect(logs.some((line) => line.includes('PrePlanCopyUpdated'))).toBe(true);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it('does not flag an indexable address as unindexed', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockDdb(send);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { handler } = await import('./prePlanCopyHandler.js');
+
+    await handler(sqsEvent(FULL_PAYLOAD));
+
+    const output = [...errorSpy.mock.calls, ...logSpy.mock.calls].map(([line]) => String(line));
+    expect(output.some((line) => line.includes('AddressUnindexed'))).toBe(false);
+    expect(output.some((line) => line.includes('address_unindexed'))).toBe(false);
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
   it('writes no geo index keys when the occupancy has no coordinates (address match only)', async () => {
     const send = vi.fn().mockResolvedValue({});
     mockDdb(send);
@@ -355,7 +398,9 @@ describe('prePlanCopyHandler (entrypoint-test obligation, AC1)', () => {
     ).input.TransactItems.find((item) => item.Update)?.Update;
     expect(update?.Key).toEqual({ pk: 'DEPT#NICHOLS#PREPLAN', sk: 'OCCUPANCY#OCC-0231' });
     expect(update?.UpdateExpression).toContain('archivedAt = :snapshotUpdatedAt');
-    expect(update?.UpdateExpression).toContain('REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk');
+    expect(update?.UpdateExpression).toContain(
+      'REMOVE gsi1pk, gsi1sk, gsi2pk, gsi2sk, addressTown, addressZip, addressState',
+    );
     // N1: no watermark on a tombstone — a racing save with a later eventTime cannot void it.
     expect(update?.ConditionExpression).toBeUndefined();
     // An archive event is complete as it is — no "missing fields" alarm.

@@ -22,12 +22,14 @@ import {
   type CedarPrincipalContext,
   type GuardEvent,
 } from '@boxalarm/authz';
-import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { createLogger } from '@boxalarm/logging';
 import { getDynamoDocClient } from '../export/awsClients.js';
 import { ConflictError, putDepartmentConfig } from '../config/repository.js';
 import { CAD_INGRESS, loadCadIngress, readTableName } from './repository.js';
-import { readStoredSources, withWebhookKey } from './model.js';
+import { readStoredSources, withWebhookKey, type WebhookKeyRef } from './model.js';
 
 /**
  * POST /api/v1/platform/cad-sources/{sourceId}/webhook-key (CHIEF/ADMIN, Cedar
@@ -195,6 +197,91 @@ async function writeSecret(name: string, value: WebhookSecretValue, exists: bool
   );
 }
 
+const LEASE_SECONDS = 30;
+const LEASE_CONFLICT =
+  'Another key change for this source is in progress. Wait a moment, reload and try again.';
+
+function leaseKey(deptId: VerifiedDeptId, sourceId: string) {
+  return { pk: buildDeptScopedPk(deptId), sk: `CADKEY_LOCK#${sourceId}` };
+}
+
+/**
+ * Secrets Manager has no conditional write, so key changes for one source are serialised here:
+ * a lease row in the department's partition, taken before the secret is read and released
+ * when the change ends (or expires after LEASE_SECONDS if this Lambda dies).
+ */
+async function acquireLease(
+  deptId: VerifiedDeptId,
+  sourceId: string,
+  owner: string,
+): Promise<boolean> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  try {
+    await getDynamoDocClient().send(
+      new PutCommand({
+        TableName: readTableName(),
+        Item: {
+          ...leaseKey(deptId, sourceId),
+          entityType: 'CAD_KEY_LOCK',
+          owner,
+          leaseUntil: nowSeconds + LEASE_SECONDS,
+        },
+        ConditionExpression: 'attribute_not_exists(pk) OR leaseUntil < :now',
+        ExpressionAttributeValues: { ':now': nowSeconds },
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) return false;
+    throw error;
+  }
+}
+
+async function releaseLease(deptId: VerifiedDeptId, sourceId: string, owner: string) {
+  try {
+    await getDynamoDocClient().send(
+      new PutCommand({
+        TableName: readTableName(),
+        Item: {
+          ...leaseKey(deptId, sourceId),
+          entityType: 'CAD_KEY_LOCK',
+          owner,
+          leaseUntil: 0,
+        },
+        ConditionExpression: '#owner = :owner',
+        ExpressionAttributeNames: { '#owner': 'owner' },
+        ExpressionAttributeValues: { ':owner': owner },
+      }),
+    );
+  } catch (error) {
+    logger.error({
+      event: 'platform.cadSources.leaseReleaseFailed',
+      correlationId: owner,
+      message: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+}
+
+/** Puts the secret back as it was if this rotation's key is still the one it holds. */
+async function restoreSecret(
+  name: string,
+  owner: { deptId: string; sourceId: string },
+  key: string,
+  existing: WebhookSecretValue | undefined,
+  correlationId: string,
+) {
+  try {
+    const held = await readSecret(name, owner);
+    if (held?.current === key && existing) await writeSecret(name, existing, true);
+  } catch (error) {
+    logger.error({
+      event: 'platform.cadSources.secretRestoreFailed',
+      correlationId,
+      message: error instanceof Error ? error.message : 'unknown error',
+    });
+  }
+}
+
 async function rotate(
   event: GuardEvent,
   principal: CedarPrincipalContext,
@@ -207,7 +294,23 @@ async function rotate(
   if (!current || !SOURCE_ID.test(sourceId) || !stored.some((s) => s.sourceId === sourceId)) {
     return notFoundProblem(traceId, 'Save the CAD source before creating its webhook key.');
   }
+  if (!(await acquireLease(deptId, sourceId, traceId))) {
+    return conflictProblem(traceId, LEASE_CONFLICT);
+  }
+  try {
+    return await rotateLeased(traceId, principal, deptId, sourceId, current);
+  } finally {
+    await releaseLease(deptId, sourceId, traceId);
+  }
+}
 
+async function rotateLeased(
+  traceId: string,
+  principal: CedarPrincipalContext,
+  deptId: VerifiedDeptId,
+  sourceId: string,
+  loaded: NonNullable<Awaited<ReturnType<typeof loadCadIngress>>>,
+): Promise<APIGatewayProxyResultV2> {
   const name = secretName(deptId, sourceId);
   const key = randomBytes(32).toString('hex');
   const owner = { deptId, sourceId };
@@ -224,64 +327,84 @@ async function rotate(
     }
     throw error;
   }
+  // A secret the saved config does not reference is an orphan (its source was removed and
+  // re-created): its key is not inherited as `previous` (security review M5).
+  const inheritedKey =
+    readStoredSources(loaded.value).find((source) => source.sourceId === sourceId)?.webhookKey
+      ?.secretName === name
+      ? existing?.current
+      : undefined;
   const nowSeconds = Math.floor(Date.now() / 1000);
   const previousExpiresAt = nowSeconds + PREVIOUS_KEY_GRACE_SECONDS;
-  await writeSecret(
-    name,
-    {
-      ...owner,
-      current: key,
-      ...(existing?.current ? { previous: existing.current, previousExpiresAt } : {}),
-    },
-    existing !== undefined,
-  );
-  // Secrets Manager has no conditional write: two rotations at once would each return a key,
-  // and only the last survives. Read back and refuse to hand out a key that did not win
-  // (security review minor m6) - the chief retries and gets the surviving state.
-  const written = await readSecret(name, owner);
-  if (written?.current !== key) {
-    return conflictProblem(
-      traceId,
-      'Another key rotation for this source happened at the same time. Reload and rotate again.',
-    );
-  }
-
   const rotatedAt = new Date(nowSeconds * 1000).toISOString();
   const keyId = `${deptId}.${sourceId}`;
-  const previousRef = stored.find((source) => source.sourceId === sourceId)?.webhookKey;
-  // The CAD sends the new API key with the new HMAC key; the one it replaces stays until the
-  // next rotation or a revoke, and the one before that is deleted now.
+  // The CAD sends the new API key with the new HMAC key. Created before the secret changes, so a
+  // failure here leaves the live key untouched.
   const apiKey = await createSourceApiKey(deptId, sourceId, nowSeconds);
-  await deleteSourceApiKey(previousRef?.previousApiKeyId, traceId);
-  let config = current;
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await putDepartmentConfig(getDynamoDocClient(), {
-        tableName: readTableName(),
-        deptId,
-        configType: CAD_INGRESS,
-        value: {
-          sources: withWebhookKey(readStoredSources(config.value), sourceId, {
-            keyId,
-            secretName: name,
-            rotatedAt,
-            apiKeyId: apiKey.id,
-            ...(previousRef?.apiKeyId ? { previousApiKeyId: previousRef.apiKeyId } : {}),
-          }),
-        },
-        actorId: principal.sub,
-        correlationId: traceId,
-        expectedVersion: config.version,
-      });
-      break;
-    } catch (error) {
-      // A concurrent settings save: re-read and apply the key reference to the newer version.
-      if (!(error instanceof ConflictError) || attempt >= 2) throw error;
-      const reloaded = await loadCadIngress(deptId);
-      if (!reloaded) throw error;
-      config = reloaded;
+  let previousRef: WebhookKeyRef | undefined;
+  try {
+    await writeSecret(
+      name,
+      {
+        ...owner,
+        current: key,
+        ...(inheritedKey ? { previous: inheritedKey, previousExpiresAt } : {}),
+      },
+      existing !== undefined,
+    );
+    const written = await readSecret(name, owner);
+    if (written?.current !== key) {
+      await deleteSourceApiKey(apiKey.id, traceId);
+      return conflictProblem(
+        traceId,
+        'Another key rotation for this source happened at the same time. Reload and rotate again.',
+      );
     }
+    let config = loaded;
+    for (let attempt = 0; ; attempt++) {
+      previousRef = readStoredSources(config.value).find(
+        (source) => source.sourceId === sourceId,
+      )?.webhookKey;
+      try {
+        await putDepartmentConfig(getDynamoDocClient(), {
+          tableName: readTableName(),
+          deptId,
+          configType: CAD_INGRESS,
+          value: {
+            sources: withWebhookKey(readStoredSources(config.value), sourceId, {
+              keyId,
+              secretName: name,
+              rotatedAt,
+              apiKeyId: apiKey.id,
+              ...(previousRef?.apiKeyId ? { previousApiKeyId: previousRef.apiKeyId } : {}),
+            }),
+          },
+          actorId: principal.sub,
+          correlationId: traceId,
+          expectedVersion: config.version,
+        });
+        break;
+      } catch (error) {
+        // A concurrent settings save: re-read and apply the key reference to the newer version.
+        if (!(error instanceof ConflictError) || attempt >= 2) throw error;
+        const reloaded = await loadCadIngress(deptId);
+        if (!reloaded) throw error;
+        config = reloaded;
+      }
+    }
+  } catch (error) {
+    logger.error({
+      event: 'platform.cadSources.webhookKeyRotationFailed',
+      correlationId: traceId,
+      sourceId,
+      message: error instanceof Error ? error.message : 'unknown error',
+    });
+    await restoreSecret(name, owner, key, existing, traceId);
+    await deleteSourceApiKey(apiKey.id, traceId);
+    throw error;
   }
+  // The one before the previous is deleted once the new reference is saved.
+  await deleteSourceApiKey(previousRef?.previousApiKeyId, traceId);
 
   logger.info({
     event: 'platform.cadSources.webhookKeyRotated',
@@ -297,9 +420,9 @@ async function rotate(
       secret: key,
       apiKey: apiKey.value,
       rotatedAt,
-      previousKeyStillValid: existing?.current !== undefined,
+      previousKeyStillValid: inheritedKey !== undefined,
       previousKeyExpiresAt:
-        existing?.current !== undefined ? new Date(previousExpiresAt * 1000).toISOString() : null,
+        inheritedKey !== undefined ? new Date(previousExpiresAt * 1000).toISOString() : null,
       webhookUrl: process.env.CAD_WEBHOOK_URL ? `${process.env.CAD_WEBHOOK_URL}/${keyId}` : null,
     }),
   };
@@ -317,6 +440,22 @@ async function revokePrevious(
   const deptId = toVerifiedDeptId(principal);
   const sourceId = event.pathParameters?.sourceId ?? '';
   if (!SOURCE_ID.test(sourceId)) return notFoundProblem(traceId, 'No such CAD source.');
+  if (!(await acquireLease(deptId, sourceId, traceId))) {
+    return conflictProblem(traceId, LEASE_CONFLICT);
+  }
+  try {
+    return await revokeLeased(traceId, principal, deptId, sourceId);
+  } finally {
+    await releaseLease(deptId, sourceId, traceId);
+  }
+}
+
+async function revokeLeased(
+  traceId: string,
+  principal: CedarPrincipalContext,
+  deptId: VerifiedDeptId,
+  sourceId: string,
+): Promise<APIGatewayProxyResultV2> {
   const name = secretName(deptId, sourceId);
   const owner = { deptId, sourceId };
   let existing: WebhookSecretValue | undefined;

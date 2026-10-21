@@ -176,11 +176,6 @@ export const LAMBDA_ENTRIES = [
     entry: 'src/services/personnel-service/losap/updateRules.ts',
   },
   {
-    service: 'personnel-service',
-    function: 'losap-year-end-report',
-    entry: 'src/services/personnel-service/losap/yearEndReport.ts',
-  },
-  {
     // personnel.attendance.recorded -> the accrual queue's idempotent EVENT_DEDUP record
     // (infra #206). The points award itself stays inline (attendance/handler.ts,
     // shifts/completeShiftAttendance.ts) until a later change moves it off that path.
@@ -848,6 +843,11 @@ export const LAMBDA_ENTRIES = [
     service: 'inventory-service',
     function: 'consumables-list',
     entry: 'src/services/inventory-service/consumables/list/handler.ts',
+  },
+  {
+    service: 'inventory-service',
+    function: 'consumables-create',
+    entry: 'src/services/inventory-service/consumables/create/handler.ts',
   },
   {
     service: 'inventory-service',

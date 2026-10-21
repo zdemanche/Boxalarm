@@ -63,7 +63,7 @@ export interface TemplateError {
 export const MAX_PARSE_CHARS = 16_384;
 export const MAX_PATTERN_LENGTH = 200;
 export const MAX_LABEL_LENGTH = 40;
-const MAX_FIELD_CHARS = 500;
+export const MAX_FIELD_CHARS = 500;
 export const MAX_NARRATIVE_CHARS = 4_000;
 
 /**
@@ -80,6 +80,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasControlCharacter(value: string): boolean {
   return [...value].some((character) => character.charCodeAt(0) < 0x20);
 }
+
+const TRAILING_SEPARATOR = /[ \t]*[:-]+[ \t]*$/;
 
 /** Validates a template as saved by a chief. Unknown fields and keys are errors. */
 export function validateCadParserTemplate(
@@ -124,9 +126,11 @@ export function validateCadParserTemplate(
         continue;
       }
       if (label !== undefined) {
+        const bareLabel =
+          typeof label === 'string' ? label.replace(TRAILING_SEPARATOR, '').trim() : '';
         if (
           typeof label !== 'string' ||
-          label.trim().length === 0 ||
+          bareLabel.length === 0 ||
           label.length > MAX_LABEL_LENGTH ||
           hasControlCharacter(label)
         ) {
@@ -136,7 +140,7 @@ export function validateCadParserTemplate(
           });
           continue;
         }
-        fields[name as CadField] = { label: label.trim() };
+        fields[name as CadField] = { label: bareLabel };
         continue;
       }
       if (typeof pattern !== 'string' || pattern.length === 0) {

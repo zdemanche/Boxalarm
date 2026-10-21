@@ -69,6 +69,7 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
       personnelLogGroup,
       alertingLogGroup,
       policyStoreId: pulumi.output("ps-1"),
+      policyStoreArn: "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
       busName: pulumi.output("boxalarm-dev-platform-bus"),
       alertingPermissionsBoundaryArn: pulumi.output(
         "arn:aws:iam::123456789012:policy/boxalarm-dev-alerting-plane-boundary",
@@ -83,6 +84,26 @@ describe("PushTokens — member-updated consumer IAM isolation (#208 AC3)", () =
     expect(policyJson).toContain("table/alerting");
     expect(policyJson).not.toContain("table/platform");
     expect(policyJson).not.toContain("table/incident");
+  });
+
+  it("keeps the member-updated DLQ for 14 days like every other alerting DLQ", async () => {
+    const pushTokens = await build();
+    expect(await resolve(pushTokens.memberUpdatedDlq.messageRetentionSeconds)).toBe(1_209_600);
+  });
+
+  it("scopes the Verified Permissions grant of register/revoke to the policy store, never *", async () => {
+    const pushTokens = await build();
+    for (const route of [pushTokens.registerRoute, pushTokens.revokeRoute]) {
+      const statements = (
+        JSON.parse(await resolve(route.lambda.rolePolicy.policy)) as {
+          Statement: { Sid?: string; Resource: string }[];
+        }
+      ).Statement;
+      const vp = statements.find((s) => s.Sid === "VerifiedPermissionsIsAuthorized");
+      expect(vp?.Resource).toBe(
+        "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
+      );
+    }
   });
 
   it("grants register/revoke every item action of their TransactWriteCommand (Update + Put)", async () => {

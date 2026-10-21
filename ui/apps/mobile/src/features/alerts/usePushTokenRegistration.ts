@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import Config from 'react-native-config';
 import { ApiError } from '../../lib/apiClient';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { useDeviceStateReport } from './deviceStateReport';
 import {
   setPushRegistration,
   setPushRegistrationRetry,
@@ -42,6 +43,7 @@ export function retryDelayMs(failures: number): number {
  * member enabled notifications in Settings.
  */
 export function usePushTokenRegistration(): void {
+  useDeviceStateReport();
   const auth = useOptionalAuth();
   const isAuthenticated = auth?.isAuthenticated ?? false;
   const memberId = auth?.memberId ?? null;

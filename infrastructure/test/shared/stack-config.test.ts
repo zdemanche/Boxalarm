@@ -111,6 +111,19 @@ describe("webOrigin placeholder hosts (deploy-readiness M4)", () => {
     expect(stackConfigProblems(reader(COMPLETE_DEV), "dev")).toEqual([]);
   });
 
+  it.each([
+    "https://staging.nicholsfd.org/",
+    "https://staging.nicholsfd.org/app",
+    "https://Staging.NicholsFD.org",
+  ])("rejects %s because it is not a bare origin", (webOrigin) => {
+    const problems = stackConfigProblems(
+      reader({ ...COMPLETE_DEV, env: "staging", webOrigin }),
+      "staging",
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/bare origin/);
+  });
+
   it("rejects a non-https origin on every stack", () => {
     const problems = stackConfigProblems(
       reader({ ...COMPLETE_DEV, webOrigin: "http://localhost:5173" }),

@@ -1,5 +1,6 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { AccessibilityInfo } from 'react-native';
+import { ApiError } from '../../lib/apiClient';
 import { ShiftDetailScreen } from './ShiftDetailScreen';
 import { mockScheduleRepository } from '../../features/schedule/mockScheduleRepository';
 import { ConnectivityProvider } from '../../sync/ConnectivityContext';
@@ -36,6 +37,31 @@ test('claiming a position that is already taken shows the honest outcome, not a 
   });
 
   expect(await findByText(/already taken/i)).toBeTruthy();
+});
+
+test.each([
+  [
+    'a shift that has ended',
+    { type: 'https://boxalarm.dev/problems/shift-closed', status: 409 },
+    'This shift has ended',
+  ],
+  [
+    'a position the member is not qualified for',
+    { type: 'https://boxalarm.dev/problems/shift-position-not-qualified', status: 403 },
+    "You don't hold the qualification this position needs",
+  ],
+])('claiming %s says why, in plain words', async (_name, problem, message) => {
+  jest
+    .spyOn(mockScheduleRepository, 'claimPosition')
+    .mockRejectedValueOnce(new ApiError({ title: 'x', traceId: 't', ...problem }));
+  const { findByText, findAllByText, queryByText } = await render(<ShiftDetailScreen />);
+
+  await act(async () => {
+    fireEvent.press((await findAllByText('Claim'))[0]!);
+  });
+
+  expect(await findByText(message)).toBeTruthy();
+  expect(queryByText(/already taken/i)).toBeNull();
 });
 
 test('announces the claim result for screen reader users once it resolves', async () => {
@@ -131,7 +157,7 @@ test('give back releases a claimed position, returning it to Open (#146/#148)', 
   const releaseSpy = jest
     .spyOn(mockScheduleRepository, 'releasePosition')
     .mockResolvedValue(undefined);
-  const { findByText, queryByText } = await render(<ShiftDetailScreen />);
+  const { findByText, queryByText, queryByLabelText } = await render(<ShiftDetailScreen />);
   await findByText('Claimed by you');
   const giveBackButton = await findByText('Give back');
 
@@ -141,6 +167,9 @@ test('give back releases a claimed position, returning it to Open (#146/#148)', 
 
   expect(await findByText('Open')).toBeTruthy();
   expect(queryByText('Claimed by you')).toBeNull();
+  expect(queryByText('Give back')).toBeNull();
+  expect(queryByText('Propose swap')).toBeNull();
+  expect(queryByLabelText('Propose swap to member ID')).toBeNull();
   expect(releaseSpy).toHaveBeenCalledWith('SHIFT-0512', 'DRIVER');
   releaseSpy.mockRestore();
   shiftSpy.mockRestore();

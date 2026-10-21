@@ -156,12 +156,13 @@ export async function updateHydrant(
 
 export async function listDueInspections(
   tokens: AuthTokenSource,
-  month?: string,
+  { month, leadDays }: { month?: string; leadDays?: number } = {},
 ): Promise<Inspection[]> {
-  const response = await apiRequest(
-    `inspections${month ? `?month=${encodeURIComponent(month)}` : ''}`,
-    tokens,
-  );
+  const query = new URLSearchParams();
+  if (month) query.set('month', month);
+  if (leadDays !== undefined) query.set('leadDays', String(leadDays));
+  const queryString = query.toString();
+  const response = await apiRequest(`inspections${queryString ? `?${queryString}` : ''}`, tokens);
   const body = (await response.json()) as { items: Inspection[] };
   return body.items;
 }

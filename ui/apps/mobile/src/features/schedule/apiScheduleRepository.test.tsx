@@ -216,6 +216,35 @@ test('claimPosition resolves ALREADY_TAKEN on a 409 (CONFLICT)', async () => {
   await expect(result.current.claimPosition('SHIFT-1', 'DRIVER')).resolves.toBe('ALREADY_TAKEN');
 });
 
+test('claimPosition resolves ALREADY_TAKEN on a shift-position-conflict 409', async () => {
+  mockApiRequest.mockRejectedValue(
+    new ApiError({
+      type: 'https://boxalarm.dev/problems/shift-position-conflict',
+      title: 'Conflict',
+      status: 409,
+      traceId: 'trace-409',
+    }),
+  );
+
+  const { result } = await renderHook(() => useScheduleRepository());
+
+  await expect(result.current.claimPosition('SHIFT-1', 'DRIVER')).resolves.toBe('ALREADY_TAKEN');
+});
+
+test('claimPosition re-throws a shift-closed 409 instead of reporting the position as taken', async () => {
+  const closed = new ApiError({
+    type: 'https://boxalarm.dev/problems/shift-closed',
+    title: 'Conflict',
+    status: 409,
+    traceId: 'trace-409',
+  });
+  mockApiRequest.mockRejectedValue(closed);
+
+  const { result } = await renderHook(() => useScheduleRepository());
+
+  await expect(result.current.claimPosition('SHIFT-1', 'DRIVER')).rejects.toBe(closed);
+});
+
 test('claimPosition re-throws a non-409 ApiError (e.g. NOT_FOUND) instead of masking it', async () => {
   const notFound = new ApiError({
     type: 'about:blank',
@@ -255,7 +284,7 @@ test('claimPosition refuses while offline instead of returning a made-up result'
 });
 
 describe('mark-offs: list and end early (server contract pending on fix/post-merge-server)', () => {
-  test('lists current and upcoming mark-offs from GET .../availability, soonest first', async () => {
+  test('lists current, upcoming and activated-but-overdue mark-offs from GET .../availability, soonest first', async () => {
     const now = Math.floor(Date.now() / 1000);
     mockApiRequest.mockResolvedValue({
       json: async () => ({
@@ -276,6 +305,7 @@ describe('mark-offs: list and end early (server contract pending on fix/post-mer
       { apiBaseUrl: 'https://api.example.com' },
     );
     expect(markOffs).toEqual([
+      { markoffId: 'old', startAt: now - 7200, endAt: now - 3600 },
       { markoffId: 'm-1', startAt: now - 60, endAt: now + 3600, reason: 'Work' },
       { markoffId: String(now + 86400), startAt: now + 86400, endAt: now + 90000 },
     ]);

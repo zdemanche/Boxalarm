@@ -22,10 +22,21 @@
   opacity: 0.45;
 }
 
+/* A compact button for table rows and card headers. It draws at 32px, but its hit area is
+ * stretched to the 44px office target (design.md §2.5 size.target.office) by an invisible
+ * pseudo-element: the same hit-slop idea the spec uses for small field glyphs. Rows are never
+ * shorter than 44px (size.row.office.compact), so the stretched area stays inside its row.
+ * Offsets are measured from inside the 1px border, hence the extra 1px. */
 .sizeSm {
+  position: relative;
   min-height: 32px;
   padding: 0 var(--bx-space-sm);
   font-size: var(--boxalarm-font-size-xs, 12px);
+}
+.sizeSm::before {
+  content: '';
+  position: absolute;
+  inset: calc((32px - var(--bx-target-office)) / 2 - 1px) -1px;
 }
 
 .sizeMd {
@@ -84,6 +95,9 @@
 }
 .icon.sizeSm {
   width: 32px;
+}
+.icon.sizeSm::before {
+  inset: calc((32px - var(--bx-target-office)) / 2 - 1px);
 }
 .icon.sizeMd {
   width: var(--bx-target-office);

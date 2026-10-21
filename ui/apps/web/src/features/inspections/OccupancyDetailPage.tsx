@@ -3,9 +3,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Button, Card, PageHeader, Skeleton, Tabs, Textarea, TextInput } from '../../components/ui';
+import { AuditHistoryLink } from '../../components/AuditHistoryLink';
+import {
+  Button,
+  Card,
+  ConfirmDialog,
+  PageHeader,
+  Skeleton,
+  Tabs,
+  Textarea,
+  TextInput,
+} from '../../components/ui';
 import { getOccupancy, getPrePlan, putPrePlan, updateOccupancy, uploadPrePlanFile } from './api';
+import { ApiError } from '../../lib/apiClient';
 import type { UtilityShutoff } from './types';
+import { hasInspectionsWrite } from './writeRoles';
 import styles from './Inspections.module.css';
 
 type Tab = 'details' | 'preplan';
@@ -21,6 +33,8 @@ function oversizedFileNames(files: File[]): string[] {
 /** putPrePlanHandler's MAX_LIST_LENGTH for attachmentFilenames. */
 const MAX_PREPLAN_ATTACHMENTS = 50;
 
+const safeFileName = (file: File) => file.name.replace(/[^A-Za-z0-9._-]/g, '_');
+
 /** Stored asset keys end in the uploaded file's name: `{dept}/PRE_PLAN/{prePlanId}/{filename}`. */
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('/') + 1);
@@ -33,11 +47,31 @@ function splitLines(value: string): string[] {
     .filter(Boolean);
 }
 
+function SaveError({ error, subject }: { error: Error | null; subject: string }) {
+  if (!error) return null;
+  if (error instanceof ApiError && error.problem.status === 403) {
+    return (
+      <ApiForbiddenGate error={error} embedded>
+        {null}
+      </ApiForbiddenGate>
+    );
+  }
+  const reason =
+    error instanceof ApiError
+      ? (error.problem.detail ?? `HTTP ${error.problem.status}`)
+      : error.message;
+  return (
+    <p role="alert" className={styles.error}>
+      {subject} was not saved: {reason}. Your edits are still here - save again to retry.
+    </p>
+  );
+}
+
 export function OccupancyDetailPage() {
   const { id = '' } = useParams();
   const auth = useAuth();
   const queryClient = useQueryClient();
-  const canWrite = auth.roles.includes('ADMIN') || auth.roles.includes('CHIEF');
+  const canWrite = hasInspectionsWrite(auth.roles);
   const [tab, setTab] = useState<Tab>('details');
   // Both saves replace whole lists, so each editor shows what is on file until it is edited
   // (null = untouched). An editor that opened empty deleted every existing hazard and shutoff
@@ -49,6 +83,9 @@ export function OccupancyDetailPage() {
   const [prePlanHazardsDraft, setPrePlanHazardsDraft] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  // Storage keys of files on file that the next save leaves out. Nothing is removed until then.
+  const [removedKeys, setRemovedKeys] = useState<string[]>([]);
+  const [confirmRemovalOpen, setConfirmRemovalOpen] = useState(false);
 
   const occupancyQuery = useQuery({
     queryKey: ['inspections', 'occupancies', id],
@@ -68,6 +105,40 @@ export function OccupancyDetailPage() {
     setShutoffsDraft(update(shutoffs));
   const prePlanHazardsText = prePlanHazardsDraft ?? prePlanQuery.data?.hazards.join('\n') ?? '';
 
+  const filesOnFile: { key: string; kind: 'diagram' | 'attachment' }[] = [
+    ...(prePlanQuery.data?.siteDiagramS3Key
+      ? [{ key: prePlanQuery.data.siteDiagramS3Key, kind: 'diagram' as const }]
+      : []),
+    ...(prePlanQuery.data?.attachmentS3Keys ?? []).map((key) => ({
+      key,
+      kind: 'attachment' as const,
+    })),
+  ];
+  const markedNames = filesOnFile
+    .filter((file) => removedKeys.includes(file.key))
+    .map((file) => fileNameOf(file.key));
+
+  // The PUT replaces the whole pre-plan, so files already on file are named again (same
+  // pre-plan id, same key) or the save would drop them; leaving one out is how it is removed.
+  // A new attachment with an on-file name replaces that file.
+  function plannedFiles() {
+    const onFile = prePlanQuery.data;
+    const newNames = attachmentFiles.map(safeFileName);
+    const keptAttachments = (onFile?.attachmentS3Keys ?? [])
+      .filter((key) => !removedKeys.includes(key))
+      .map(fileNameOf)
+      .filter((name) => !newNames.includes(name));
+    const keptDiagram =
+      onFile?.siteDiagramS3Key && !removedKeys.includes(onFile.siteDiagramS3Key)
+        ? fileNameOf(onFile.siteDiagramS3Key)
+        : null;
+    return {
+      siteDiagramFilename: diagramFile ? safeFileName(diagramFile) : keptDiagram,
+      keptAttachments,
+      newNames,
+    };
+  }
+
   const hazardsMutation = useMutation({
     mutationFn: () => updateOccupancy(auth, id, { hazards: splitLines(hazardsText) }),
     onSuccess: (occupancy) => {
@@ -78,15 +149,8 @@ export function OccupancyDetailPage() {
 
   const prePlanMutation = useMutation({
     mutationFn: async () => {
-      // The PUT replaces the whole pre-plan, so files already on file are named again (same
-      // pre-plan id, same key) or the save would drop them. Only new files are uploaded below.
-      const onFile = prePlanQuery.data;
-      const diagramOnFile = onFile?.siteDiagramS3Key ? fileNameOf(onFile.siteDiagramS3Key) : null;
-      const newNames = attachmentFiles.map((file) => file.name);
-      const keptAttachments = (onFile?.attachmentS3Keys ?? [])
-        .map(fileNameOf)
-        .filter((name) => !newNames.includes(name));
-      const siteDiagramFilename = diagramFile?.name ?? diagramOnFile;
+      // Only new files are uploaded below.
+      const { siteDiagramFilename, keptAttachments, newNames } = plannedFiles();
       const result = await putPrePlan(auth, id, {
         ...(siteDiagramFilename ? { siteDiagramFilename } : {}),
         attachmentFilenames: [...keptAttachments, ...newNames],
@@ -101,7 +165,7 @@ export function OccupancyDetailPage() {
         );
       }
       for (const attachment of result.attachmentUploadUrls) {
-        const file = attachmentFiles.find((f) => f.name === attachment.filename);
+        const file = attachmentFiles.find((f) => safeFileName(f) === attachment.filename);
         if (file) await uploadPrePlanFile(attachment.uploadUrl, file, attachment.contentType);
       }
       return result;
@@ -111,6 +175,8 @@ export function OccupancyDetailPage() {
       setDiagramFile(null);
       setAttachmentFiles([]);
       await queryClient.invalidateQueries({ queryKey: ['inspections', 'preplan', id] });
+      // After the refetch, so a removed file doesn't flash back unmarked before it disappears.
+      setRemovedKeys([]);
       setShutoffsDraft(null);
       setPrePlanHazardsDraft(null);
     },
@@ -176,35 +242,39 @@ export function OccupancyDetailPage() {
             </Card>
           ) : null}
 
-          {hazardsMutation.error ? (
-            <ApiForbiddenGate error={hazardsMutation.error} embedded>
-              <p role="alert">Unable to save changes</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <SaveError error={hazardsMutation.error} subject="The hazards" />
         </div>
       ) : null}
     </div>
   ) : null;
 
-  // Every stored file is `{prePlanId}/{name}`: a new attachment named like the diagram would
-  // overwrite it, and the service accepts at most 50 attachments per save.
+  // Every stored file is `{prePlanId}/{name}`: a new file named like one that stays would
+  // overwrite it, and the service accepts at most 50 attachments per save. Files marked for
+  // removal don't count, so removing one frees its name and its place.
   function prePlanFileProblem(): string | null {
-    const onFile = prePlanQuery.data;
-    const diagramName =
-      diagramFile?.name ?? (onFile?.siteDiagramS3Key ? fileNameOf(onFile.siteDiagramS3Key) : null);
-    const clash = attachmentFiles.find((file) => file.name === diagramName);
+    const { siteDiagramFilename, keptAttachments, newNames } = plannedFiles();
+    const clash = attachmentFiles.find((file) => safeFileName(file) === siteDiagramFilename);
     if (clash) {
       return `${clash.name} has the same name as the site diagram. Rename one of them before saving.`;
     }
-    const newNames = attachmentFiles.map((file) => file.name);
-    const kept = (onFile?.attachmentS3Keys ?? [])
-      .map(fileNameOf)
-      .filter((name) => !newNames.includes(name));
-    if (kept.length + newNames.length > MAX_PREPLAN_ATTACHMENTS) {
-      return `A pre-plan holds at most ${MAX_PREPLAN_ATTACHMENTS} attachments; this save would have ${kept.length + newNames.length}.`;
+    if (diagramFile && keptAttachments.includes(safeFileName(diagramFile))) {
+      return `${diagramFile.name} has the same name as an attachment on file. Rename one of them before saving.`;
+    }
+    const repeated = attachmentFiles.find(
+      (file, index) => newNames.indexOf(safeFileName(file)) !== index,
+    );
+    if (repeated) {
+      return `${repeated.name} has the same name as another new attachment. Rename one of them before saving.`;
+    }
+    const total = keptAttachments.length + newNames.length;
+    if (total > MAX_PREPLAN_ATTACHMENTS) {
+      return `A pre-plan holds at most ${MAX_PREPLAN_ATTACHMENTS} attachments; this save would have ${total}.`;
     }
     return null;
   }
+
+  const toggleRemoval = (key: string) =>
+    setRemovedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
   // Success includes a 404 (no pre-plan yet), which the client maps to null.
   const showPrePlanEditor = canWrite && prePlanQuery.isSuccess;
@@ -279,14 +349,60 @@ export function OccupancyDetailPage() {
                   event.preventDefault();
                   setUploadStatus(null);
                   const problem = prePlanFileProblem();
-                  if (problem) {
-                    setFileError(problem);
+                  setFileError(problem);
+                  if (problem) return;
+                  // A saved removal can't be undone here (only by uploading the file again),
+                  // so it is confirmed by name first (docs/design.md §4.5).
+                  if (markedNames.length > 0) {
+                    setConfirmRemovalOpen(true);
                     return;
                   }
                   prePlanMutation.mutate();
                 }}
                 className={styles.formStack}
               >
+                {filesOnFile.length > 0 ? (
+                  <fieldset className={styles.fieldset}>
+                    <legend>Current files</legend>
+                    <ul className={styles.list}>
+                      {filesOnFile.map(({ key, kind }) => {
+                        const name = fileNameOf(key);
+                        const marked = removedKeys.includes(key);
+                        const what = kind === 'diagram' ? 'site diagram' : `attachment ${name}`;
+                        const meta = marked
+                          ? 'Removed when you save'
+                          : kind === 'attachment'
+                            ? 'Attachment'
+                            : diagramFile
+                              ? `Site diagram, replaced by ${diagramFile.name} when you save`
+                              : 'Site diagram';
+                        return (
+                          <li key={`${kind}:${key}`} className={styles.row}>
+                            <span className={styles.rowBody}>
+                              <span className={styles.rowTitle}>
+                                {marked ? <s>{name}</s> : name}
+                              </span>
+                              {/* Live, so pressing Remove or Undo is heard, not only seen. */}
+                              <span className={styles.rowMeta} aria-live="polite">
+                                {meta}
+                              </span>
+                            </span>
+                            <span className={styles.rowAside}>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                aria-label={marked ? `Undo removing ${what}` : `Remove ${what}`}
+                                onClick={() => toggleRemoval(key)}
+                              >
+                                {marked ? 'Undo' : 'Remove'}
+                              </Button>
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </fieldset>
+                ) : null}
                 <label className={styles.fileField}>
                   Site diagram
                   <input
@@ -385,14 +501,41 @@ export function OccupancyDetailPage() {
                   </Button>
                 </div>
               </form>
+              <ConfirmDialog
+                open={confirmRemovalOpen}
+                onOpenChange={setConfirmRemovalOpen}
+                title={
+                  markedNames.length === 1
+                    ? `Remove ${markedNames[0]} from the ${occupancy?.address ?? ''} pre-plan?`
+                    : `Remove ${markedNames.length} files from the ${occupancy?.address ?? ''} pre-plan?`
+                }
+                consequence={
+                  markedNames.length === 1
+                    ? 'Crews will no longer see it on this pre-plan. To get it back, upload it again.'
+                    : 'Crews will no longer see them on this pre-plan. To get one back, upload it again.'
+                }
+                confirmLabel={
+                  markedNames.length === 1
+                    ? `Remove ${markedNames[0]} and save`
+                    : `Remove ${markedNames.length} files and save`
+                }
+                danger
+                onConfirm={() => prePlanMutation.mutate()}
+              >
+                {markedNames.length > 1 ? (
+                  <ul className={styles.list}>
+                    {markedNames.map((name, index) => (
+                      <li key={`${index}:${name}`} className={`${styles.row} ${styles.rowTitle}`}>
+                        {name}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </ConfirmDialog>
             </Card>
           ) : null}
 
-          {prePlanMutation.error ? (
-            <ApiForbiddenGate error={prePlanMutation.error} embedded>
-              <p role="alert">Unable to save pre-plan</p>
-            </ApiForbiddenGate>
-          ) : null}
+          <SaveError error={prePlanMutation.error} subject="The pre-plan" />
         </div>
       ) : null}
     </div>
@@ -411,6 +554,9 @@ export function OccupancyDetailPage() {
             ? `${occupancy.occupancyType} occupancy — contacts, hazards and pre-plan`
             : undefined
         }
+        // Occupancy audit entries are keyed by this route's id (occupancy/repository.ts,
+        // archive/archiveRepository.ts). Pre-plan saves write no audit entry of their own.
+        actions={<AuditHistoryLink entityType="OCCUPANCY" entityId={id} />}
       />
       {occupancyQuery.isLoading || !occupancy ? (
         <Card>

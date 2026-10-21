@@ -1,6 +1,9 @@
 import { Link } from 'react-router-dom';
-import { Card, PageHeader } from '../../components/ui';
+import { useAuth } from '../../auth/AuthContext';
+import { auditLogHref } from '../../components/AuditHistoryLink';
+import { Card, PageHeader, buttonClassName } from '../../components/ui';
 import { ChevronRight } from '../../components/ui/icons';
+import { canAccessPath } from '../../routing/routeTable';
 import { CheckSheetEditor } from './CheckSheetEditor';
 import { CutoverStatusNotice } from './CutoverStatusNotice';
 import { ExportSection } from './ExportSection';
@@ -25,11 +28,6 @@ const CONFIG_SECTIONS: {
     helpText: 'Ranks, e.g. {"ranks":["Firefighter","Captain","Chief"]}',
   },
   {
-    configType: 'LOSAP_POINT_RULES',
-    label: 'LOSAP point rules',
-    helpText: 'Points per activity type, e.g. {"pointsByActivityType":{"DRILL":1}}',
-  },
-  {
     configType: 'ALERT_RULES',
     label: 'Alert rule timing',
     helpText:
@@ -43,12 +41,21 @@ const CONFIG_SECTIONS: {
   },
 ];
 
-const RELATED_SETTINGS = [
+const RELATED_SETTINGS: {
+  to: string;
+  label: string;
+  description: string;
+  /** The setting's audit trail. Saves from the LOSAP page are recorded as DEPARTMENT_CONFIG
+   * LOSAP_POINT_RULES (personnel-service losap/configRepository.ts); the editors on this page
+   * save through platform/config, which records nothing, so they get no history link. */
+  audit?: { entityType: string; entityId: string };
+}[] = [
   {
     to: '/settings/losap',
     label: 'LOSAP point rules',
     description:
       'Points awarded per attendance activity type for the length-of-service award program.',
+    audit: { entityType: 'DEPARTMENT_CONFIG', entityId: 'LOSAP_POINT_RULES' },
   },
   {
     to: '/settings/cad-sources',
@@ -59,6 +66,8 @@ const RELATED_SETTINGS = [
 ];
 
 export function SettingsPage() {
+  const { roles } = useAuth();
+  const canOpenAuditLog = canAccessPath('/audit-log', roles);
   return (
     <main id="main-content">
       <PageHeader
@@ -77,7 +86,18 @@ export function SettingsPage() {
                   </span>
                   <span className={styles.rowMeta}>{setting.description}</span>
                 </span>
-                <ChevronRight size={18} className={styles.rowGlyph} aria-hidden="true" />
+                <span className={styles.rowActions}>
+                  {setting.audit && canOpenAuditLog ? (
+                    <Link
+                      to={auditLogHref(setting.audit.entityType, setting.audit.entityId)}
+                      className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+                      aria-label={`Change history for ${setting.label}`}
+                    >
+                      Change history
+                    </Link>
+                  ) : null}
+                  <ChevronRight size={18} className={styles.rowGlyph} aria-hidden="true" />
+                </span>
               </li>
             ))}
           </ul>

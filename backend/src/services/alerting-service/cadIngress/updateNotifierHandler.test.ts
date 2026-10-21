@@ -19,10 +19,14 @@ const UPDATE_ITEM = {
 };
 const PENDING_KEY = `DEPT#nichols-fd#CAD_UPDATE_PENDING|001800000000#d-1#${UPDATE_ID}`;
 
+const memberOf = (input: PublishCommandInput): string | undefined =>
+  (JSON.parse(input.Message ?? '{}') as { payload?: { memberId?: string } }).payload?.memberId;
+
 describe('CAD update notifier', () => {
   const originalEnv = { ...process.env };
   let items: Map<string, Record<string, unknown>>;
   let published: PublishCommandInput[];
+  let failMember: string | undefined;
 
   beforeEach(() => {
     vi.resetModules();
@@ -31,6 +35,7 @@ describe('CAD update notifier', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     published = [];
+    failMember = undefined;
     items = new Map<string, Record<string, unknown>>([
       [
         `${PK}|METADATA`,
@@ -99,6 +104,9 @@ describe('CAD update notifier', () => {
       createSnsClient: () =>
         ({
           send: vi.fn((command: { input: PublishCommandInput }) => {
+            if (memberOf(command.input) === failMember) {
+              return Promise.reject(new Error('sns down'));
+            }
             published.push(command.input);
             return Promise.resolve({});
           }),
@@ -155,6 +163,22 @@ describe('CAD update notifier', () => {
     await run();
     await run();
     expect(published).toHaveLength(2);
+  });
+
+  it('B1-071: a retry after a partial publish failure re-sends only the member that failed', async () => {
+    failMember = 'mbr-2';
+    await expect(run()).rejects.toThrow('update push failed');
+    expect(published.map(memberOf)).toEqual(['mbr-1']);
+    expect(items.get(`${PK}|UPDATE#${UPDATE_ID}`)?.notifiedAt).toBeUndefined();
+    expect(items.has(PENDING_KEY)).toBe(true);
+    expect(items.get(`${PK}|CADUPDATE#${UPDATE_ID}#mbr-1#PUSH`)?.sentAt).toBe(1);
+    expect(items.get(`${PK}|CADUPDATE#${UPDATE_ID}#mbr-2#PUSH`)?.sentAt).toBeUndefined();
+
+    failMember = undefined;
+    await run();
+    expect(published.map(memberOf)).toEqual(['mbr-1', 'mbr-2']);
+    expect(items.get(`${PK}|UPDATE#${UPDATE_ID}`)?.notifiedAt).toBe(1);
+    expect(items.has(PENDING_KEY)).toBe(false);
   });
 
   it('sends nothing for an unknown update or a test dispatch, and refuses a malformed notice', async () => {

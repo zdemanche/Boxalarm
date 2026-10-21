@@ -16,6 +16,7 @@ export interface RoutesCoreArgs {
   alertingTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
+  policyStoreArn: pulumi.Input<string>;
   permissionsBoundaryArn?: pulumi.Input<string>;
   /**
    * JSON { towns, zips, state } — the department's home locality, the default the dispatch
@@ -59,7 +60,7 @@ export class RoutesCore extends pulumi.ComponentResource {
         Action: ["dynamodb:PutItem", "dynamodb:ConditionCheckItem", "dynamodb:TransactWriteItems"],
         Resource: args.alertingTableArn as string,
       },
-      verifiedPermissionsStatement(),
+      verifiedPermissionsStatement(args.policyStoreArn),
     ];
 
     this.dispatchIngress = new AlertingRoute(
@@ -116,7 +117,7 @@ export class RoutesCore extends pulumi.ComponentResource {
             ],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement(),
+          verifiedPermissionsStatement(args.policyStoreArn),
         ],
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
@@ -147,7 +148,7 @@ export class RoutesCore extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: args.alertingTableArn as string,
           },
-          verifiedPermissionsStatement(),
+          verifiedPermissionsStatement(args.policyStoreArn),
         ],
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
@@ -189,7 +190,7 @@ export class RoutesCore extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: [`${tableArn}/index/GSI1`, `${tableArn}/index/GSI2`],
           },
-          verifiedPermissionsStatement(),
+          verifiedPermissionsStatement(args.policyStoreArn),
         ]),
         reservedConcurrentExecutions: 5,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
@@ -222,7 +223,7 @@ export class RoutesCore extends pulumi.ComponentResource {
             Action: ["dynamodb:Query"],
             Resource: `${tableArn}/index/GSI2`,
           },
-          verifiedPermissionsStatement(),
+          verifiedPermissionsStatement(args.policyStoreArn),
         ]),
         reservedConcurrentExecutions: 3,
         permissionsBoundaryArn: args.permissionsBoundaryArn,
@@ -259,7 +260,7 @@ export class RoutesCore extends pulumi.ComponentResource {
               "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEPT#*#CONFIG"] },
             },
           },
-          verifiedPermissionsStatement(),
+          verifiedPermissionsStatement(args.policyStoreArn),
         ]),
         reservedConcurrentExecutions: 2,
         permissionsBoundaryArn: args.permissionsBoundaryArn,

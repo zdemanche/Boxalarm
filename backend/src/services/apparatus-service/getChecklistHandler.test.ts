@@ -40,6 +40,7 @@ function dynamoClient(
 }
 
 const APPARATUS_ITEM = { pk: 'DEPT#NICHOLS#APPARATUS#APP-ENGINE-2', sk: 'METADATA' };
+const ASSIGNED_APPARATUS_ITEM = { ...APPARATUS_ITEM, checklistTemplateId: 'CT-01' };
 const TEMPLATE_ITEM = {
   pk: 'DEPT#NICHOLS#CHECKLIST_TEMPLATE#CT-01',
   sk: 'METADATA',
@@ -128,17 +129,21 @@ describe('getChecklistHandler', () => {
     expect(result).toMatchObject({ statusCode: 503 });
   });
 
-  it('returns 200 with the resolved template, requiresPhoto round-tripped (AC1/AC3 contract)', async () => {
+  it('returns 200 with the resolved template, requiresPhoto round-tripped, never scanning the table (AC1/AC3 contract)', async () => {
+    const commands: string[] = [];
     vi.doMock('./dynamoClient.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('./dynamoClient.js')>();
       return {
         ...actual,
         createDynamoClient: () =>
-          dynamoClient((command) =>
-            Promise.resolve(
-              command.input.IndexName ? { Items: [APPARATUS_ITEM] } : { Items: [TEMPLATE_ITEM] },
-            ),
-          ),
+          dynamoClient((command) => {
+            commands.push(command.constructor.name);
+            return Promise.resolve(
+              command.input.IndexName
+                ? { Items: [ASSIGNED_APPARATUS_ITEM] }
+                : { Item: TEMPLATE_ITEM },
+            );
+          }),
       };
     });
     vi.doMock('@boxalarm/authz', async (importOriginal) => {
@@ -165,6 +170,7 @@ describe('getChecklistHandler', () => {
     };
     expect(body.templateId).toBe('CT-01');
     expect(body.items[0]?.requiresPhoto).toBe(true);
+    expect(commands).not.toContain('ScanCommand');
   });
 
   it("falls back to the department's default sheet, critical flags included, when no unit template applies", async () => {
@@ -209,6 +215,42 @@ describe('getChecklistHandler', () => {
       templateId: 'department-default-v2',
       items: [{ code: 'BRAKES', critical: true }],
     });
+  });
+
+  it("ignores an assigned template that does not list the unit, matching the submit path's rule", async () => {
+    vi.doMock('./dynamoClient.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./dynamoClient.js')>();
+      return {
+        ...actual,
+        createDynamoClient: () =>
+          dynamoClient((command) => {
+            const input = command.input as { IndexName?: string; Key?: { pk: string } };
+            if (input.IndexName) return Promise.resolve({ Items: [ASSIGNED_APPARATUS_ITEM] });
+            if (input.Key?.pk.includes('CHECKLIST_TEMPLATE')) {
+              return Promise.resolve({
+                Item: { ...TEMPLATE_ITEM, applicableApparatusIds: ['APP-LADDER-1'] },
+              });
+            }
+            return Promise.resolve({
+              Item: { version: 2, value: { items: [{ code: 'BRAKES', label: 'Brakes' }] } },
+            });
+          }),
+      };
+    });
+    vi.doMock('@boxalarm/authz', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@boxalarm/authz')>();
+      return {
+        ...actual,
+        withAuthorization: (inner: never, options: WithAuthorizationOptions) =>
+          actual.withAuthorization(inner, { ...options, client: authzClient('ALLOW') }),
+      };
+    });
+    const { handler } = await import('./getChecklistHandler.js');
+
+    const result = (await handler(buildEvent('ENGINE-2'))) as { statusCode: number; body: string };
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toMatchObject({ templateId: 'department-default-v2' });
   });
 
   it('returns 404 when the unitId does not resolve to a known apparatus', async () => {

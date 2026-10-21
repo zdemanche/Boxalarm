@@ -59,22 +59,6 @@
   color: var(--bx-fg-muted);
 }
 
-.addressBlock {
-  display: grid;
-  gap: 2px;
-  margin-top: var(--bx-space-xs);
-  padding: var(--bx-space-sm) var(--bx-space-md);
-  background: var(--bx-surface);
-  border: 1px solid var(--bx-border-decorative);
-  border-radius: var(--bx-radius-md);
-}
-
-.addressLabel {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--bx-fg-muted);
-}
-
 .actions {
   display: flex;
   flex-wrap: wrap;

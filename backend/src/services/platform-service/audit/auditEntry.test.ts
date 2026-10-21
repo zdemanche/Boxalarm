@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { marshall } from '@aws-sdk/util-dynamodb';
 import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import {
   buildAuditLogEntryItem,
@@ -28,9 +29,17 @@ function baseInput(overrides: Record<string, unknown> = {}) {
 describe('diffChangedFields', () => {
   it('treats every field on a CREATE (before=undefined) as changed', () => {
     expect(diffChangedFields(undefined, { name: 'Jane', rank: 'LT' })).toEqual({
-      name: { old: undefined, new: 'Jane' },
-      rank: { old: undefined, new: 'LT' },
+      name: { old: null, new: 'Jane' },
+      rank: { old: null, new: 'LT' },
     });
+  });
+
+  it('never leaves undefined in a diff, so the DocumentClient can marshall a CREATE or after-only entry', () => {
+    const item = buildAuditLogEntryItem(
+      baseInput({ before: undefined, after: { retentionYears: 7 }, action: 'CREATE' }),
+    );
+    expect(() => marshall(item)).not.toThrow();
+    expect(item.changedFields.retentionYears).toEqual({ old: null, new: 7 });
   });
 
   it('produces an empty diff when before and after are deep-equal (no-op update)', () => {
@@ -92,6 +101,13 @@ describe('parseAuditLogEntryItem', () => {
   it('round-trips a built item back to the same typed entry', () => {
     const item = buildAuditLogEntryItem(baseInput());
     expect(parseAuditLogEntryItem(item as unknown as Record<string, unknown>)).toEqual(item);
+  });
+
+  it('accepts the ARCHIVE audit row the inspections archive writer persists', () => {
+    const item = buildAuditLogEntryItem({ ...baseInput(), action: 'ARCHIVE' });
+    expect(parseAuditLogEntryItem(item as unknown as Record<string, unknown>).action).toBe(
+      'ARCHIVE',
+    );
   });
 
   it('throws on a malformed item', () => {

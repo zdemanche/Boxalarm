@@ -19,7 +19,7 @@ Rejected: adding a device segment to the key (`…#push#{deviceId}`, or `channel
   - If any device accepts, the guard is marked SENT, dead devices are invalidated, and a transiently-failed device is set FAILED and **not retried** — the member already rang, and the redelivery would hold every later member's push in the dispatch's FIFO group.
   - Only when **no** device accepts does a transient failure mark the guard FAILED and rethrow. The redelivery re-sends only to devices with no final outcome, at most `MAX_DEVICE_SEND_ATTEMPTS = 2` per device per page; past that the device is FAILED and terminal (`SendFailed`, alarmed). `UNAVAILABLE` (no gateway credentials for the device's APNs environment) is terminal at once (`PushCredentialsUnavailable`, alarmed).
   - If every device is dead, the page fails terminally, as a single dead token did.
-  - If the mass-invalidation latch holds a token valid, the page still throws, redelivers and dead-letters.
+  - A device the mass-invalidation latch holds back counts as not paged. If another device accepted the page, the guard is marked SENT and `MassInvalidationBlocked` is the only signal; the page is not recorded FAILED and not redelivered. Only when no device was paged does the latch case throw, redeliver and dead-letter. *(Amended 2026-10-14.)*
 - **Invalidation** (`receipts/invalidatePushToken.ts`) marks only the dead token's entry invalid. The member's other devices stay valid.
 
 ## Dead tokens (review MINOR-2)

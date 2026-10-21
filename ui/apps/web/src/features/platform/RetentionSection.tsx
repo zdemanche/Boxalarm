@@ -3,9 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
-import { Badge, Button, Card, ConfirmDialog, Skeleton, TextInput } from '../../components/ui';
-import { getRetentionConfig, putRetentionConfig, runDisposal } from './api';
-import { LIFE_SAFETY_RECORD_CLASSES, type DisposalResult } from './types';
+import { Badge, Button, Card, Skeleton, TextInput } from '../../components/ui';
+import { RetryableApiGate } from './RetryableApiGate';
+import { getRetentionConfig, putRetentionConfig } from './api';
+import { LIFE_SAFETY_RECORD_CLASSES } from './types';
 import styles from './Settings.module.css';
 
 const RETENTION_QUERY_KEY = ['platform', 'retention'];
@@ -22,10 +23,6 @@ export function RetentionSection() {
   const [years, setYears] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formForbidden, setFormForbidden] = useState<unknown>(null);
-  const [disposalResult, setDisposalResult] = useState<DisposalResult | null>(null);
-  const [disposalError, setDisposalError] = useState<string | null>(null);
-  const [disposalForbidden, setDisposalForbidden] = useState<unknown>(null);
-  const [confirmDisposalOpen, setConfirmDisposalOpen] = useState(false);
 
   useEffect(() => {
     if (retentionQuery.data) {
@@ -57,24 +54,6 @@ export function RetentionSection() {
     },
   });
 
-  const disposalMutation = useMutation({
-    mutationFn: () => runDisposal(auth),
-    onSuccess: (result) => {
-      setDisposalError(null);
-      setDisposalForbidden(null);
-      setDisposalResult(result);
-    },
-    onError: (error: unknown) => {
-      if (error instanceof ApiError && error.problem.status === 403) {
-        setDisposalError(null);
-        setDisposalForbidden(error);
-        return;
-      }
-      setDisposalForbidden(null);
-      setDisposalError('Disposal could not be run. Try again.');
-    },
-  });
-
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setFormForbidden(null);
@@ -86,8 +65,6 @@ export function RetentionSection() {
     saveMutation.mutate(parsed);
   }
 
-  const retentionYears = retentionQuery.data?.retentionYears;
-
   return (
     <Card title="Records retention">
       <p className={styles.lead}>
@@ -96,9 +73,12 @@ export function RetentionSection() {
       {retentionQuery.isLoading ? (
         <Skeleton lines={2} />
       ) : retentionQuery.error ? (
-        <ApiForbiddenGate error={retentionQuery.error} embedded>
+        <RetryableApiGate
+          error={retentionQuery.error}
+          onRetry={() => void retentionQuery.refetch()}
+        >
           <p role="alert">Unable to load the retention configuration.</p>
-        </ApiForbiddenGate>
+        </RetryableApiGate>
       ) : (
         <form onSubmit={handleSubmit} className={styles.form}>
           <TextInput
@@ -135,54 +115,11 @@ export function RetentionSection() {
       </div>
 
       <div className={styles.subsection}>
-        <h3 className={styles.subheading}>Dispose of expired records</h3>
-        <div className={styles.dangerRow}>
-          <span className={styles.rowMeta}>
-            Permanently removes records past the retention period.
-          </span>
-          <Button
-            type="button"
-            variant="danger"
-            onClick={() => setConfirmDisposalOpen(true)}
-            loading={disposalMutation.isPending}
-            disabled={retentionQuery.isLoading || Boolean(retentionQuery.error)}
-          >
-            Run disposal
-          </Button>
-        </div>
-      </div>
-      <ConfirmDialog
-        open={confirmDisposalOpen}
-        onOpenChange={setConfirmDisposalOpen}
-        title={`Permanently dispose of records older than ${retentionYears ?? '?'} years?`}
-        consequence="Records past the retention period are permanently destroyed (deleted or crypto-shredded) and an audit event is written. Life-safety record classes listed above are not touched."
-        confirmLabel="Run disposal"
-        onConfirm={() => disposalMutation.mutate()}
-        danger
-      />
-      <div className={styles.feedback}>
-        {retentionQuery.error ? (
-          <p role="alert" className={styles.message}>
-            The retention period could not be confirmed, so disposal is disabled until it loads
-            successfully.
-          </p>
-        ) : null}
-        {disposalForbidden ? (
-          <ApiForbiddenGate error={disposalForbidden} embedded>
-            <p role="alert">Disposal could not be run.</p>
-          </ApiForbiddenGate>
-        ) : null}
-        {disposalError ? (
-          <p role="alert" aria-live="assertive" className={styles.message}>
-            {disposalError}
-          </p>
-        ) : null}
-        {disposalResult ? (
-          <p role="status" className={styles.message}>
-            {disposalResult.hardDeleted} deleted, {disposalResult.cryptoShredded} crypto-shredded,{' '}
-            {disposalResult.refused.length} refused.
-          </p>
-        ) : null}
+        <h3 className={styles.subheading}>Disposal of expired records</h3>
+        <p className={styles.rowMeta}>
+          Records past the retention period are not listed here yet, so disposal cannot be started
+          from this page. The daily retention sweep notifies the chief when records have passed it.
+        </p>
       </div>
     </Card>
   );

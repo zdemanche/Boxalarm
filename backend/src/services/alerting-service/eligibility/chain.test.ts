@@ -317,16 +317,18 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
     expect(typeof markedOffEnvelope.eventId).toBe('string');
     expect(typeof markedOffEnvelope.eventTime).toBe('string');
 
-    await consume({
-      Records: [
-        {
-          messageId: 'm1',
-          body: JSON.stringify({
-            detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
-          }),
-        },
-      ],
-    } as unknown as SQSEvent);
+    expect(
+      await consume({
+        Records: [
+          {
+            messageId: 'm1',
+            body: JSON.stringify({
+              detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
+            }),
+          },
+        ],
+      } as unknown as SQSEvent),
+    ).toEqual({ batchItemFailures: [] });
 
     const eligibleWhileMarkedOff = await queryEligibleMembers(
       { send: alerting.send } as unknown as DynamoDBDocumentClient,
@@ -353,16 +355,18 @@ describe('E2-S5 chain: markoff creation suppresses fan-out eligibility and rever
     await drainOutbox(outboxInsert(revertOutboxEntry!, 'seq-2'), ebSend, personnel.send);
     expect(publishedDetails).toHaveLength(2);
 
-    await consume({
-      Records: [
-        {
-          messageId: 'm2',
-          body: JSON.stringify({
-            detail: JSON.parse(publishedDetails[1]!) as Record<string, unknown>,
-          }),
-        },
-      ],
-    } as unknown as SQSEvent);
+    expect(
+      await consume({
+        Records: [
+          {
+            messageId: 'm2',
+            body: JSON.stringify({
+              detail: JSON.parse(publishedDetails[1]!) as Record<string, unknown>,
+            }),
+          },
+        ],
+      } as unknown as SQSEvent),
+    ).toEqual({ batchItemFailures: [] });
 
     const eligibleAfterRevert = await queryEligibleMembers(
       { send: alerting.send } as unknown as DynamoDBDocumentClient,
@@ -536,20 +540,22 @@ describe('E3-S8 chain: expired certification revokes qual currency and suppresse
     const consumerHandler = createConsumerHandler({
       client: { send: alerting.send } as unknown as DynamoDBDocumentClient,
     });
-    await consumerHandler(
-      {
-        Records: [
-          {
-            messageId: 'm1',
-            body: JSON.stringify({
-              detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
-            }),
-          },
-        ],
-      } as unknown as SQSEvent,
-      {} as never,
-      () => undefined,
-    );
+    expect(
+      await consumerHandler(
+        {
+          Records: [
+            {
+              messageId: 'm1',
+              body: JSON.stringify({
+                detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
+              }),
+            },
+          ],
+        } as unknown as SQSEvent,
+        {} as never,
+        () => undefined,
+      ),
+    ).toEqual({ batchItemFailures: [] });
 
     const { queryEligiblePartition } = await import('./selector.js');
     const snapshot = await queryEligiblePartition(
@@ -706,20 +712,22 @@ describe('E3-S8 chain: expired certification revokes qual currency and suppresse
     const consumerHandler = createConsumerHandler({
       client: { send: alerting.send } as unknown as DynamoDBDocumentClient,
     });
-    await consumerHandler(
-      {
-        Records: [
-          {
-            messageId: 'm1',
-            body: JSON.stringify({
-              detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
-            }),
-          },
-        ],
-      } as unknown as SQSEvent,
-      {} as never,
-      () => undefined,
-    );
+    expect(
+      await consumerHandler(
+        {
+          Records: [
+            {
+              messageId: 'm1',
+              body: JSON.stringify({
+                detail: JSON.parse(publishedDetails[0]!) as Record<string, unknown>,
+              }),
+            },
+          ],
+        } as unknown as SQSEvent,
+        {} as never,
+        () => undefined,
+      ),
+    ).toEqual({ batchItemFailures: [] });
 
     const { queryEligiblePartition } = await import('./selector.js');
     const snapshot = await queryEligiblePartition(

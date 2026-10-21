@@ -18,6 +18,8 @@ export interface DispatchAlertCopy {
   readonly dispatchedAt: number;
   /** A CAD dispatch that couldn't be parsed: the address is a placeholder; read the text. */
   readonly verifyRequired?: true;
+  /** Producer's update counter: 0 for the original dispatch, higher for each CAD correction. */
+  readonly revision?: number;
 }
 
 export interface RosterCopyEntry {
@@ -34,28 +36,39 @@ export async function putDispatchAlertCopy(
   client: DynamoDBDocumentClient,
   tableName: string,
   copy: DispatchAlertCopy,
-): Promise<void> {
-  await client.send(
-    new PutCommand({
-      TableName: tableName,
-      Item: {
-        ...dispatchCopyKey(copy.deptId, copy.dispatchId),
-        entityType: 'DISPATCH_ALERT_COPY',
-        dispatchId: copy.dispatchId,
-        deptId: copy.deptId,
-        incidentType: copy.incidentType,
-        address: copy.address,
-        crossStreets: copy.crossStreets,
-        narrative: copy.narrative,
-        dispatchedAt: copy.dispatchedAt,
-        ...(copy.verifyRequired ? { verifyRequired: true } : {}),
-        // Lists the department's dispatches newest first for "Start a report" (GSI1, beside
-        // the INCIDENT#{alarmAt} rows in the same department partition).
-        gsi1pk: buildDeptScopedPk(copy.deptId),
-        gsi1sk: `${DISPATCH_GSI1_PREFIX}${copy.dispatchedAt}`,
-      },
-    }),
-  );
+): Promise<'updated' | 'stale'> {
+  const revision = copy.revision ?? 0;
+  try {
+    await client.send(
+      new PutCommand({
+        TableName: tableName,
+        ConditionExpression:
+          'attribute_not_exists(pk) OR attribute_not_exists(revision) OR revision <= :revision',
+        ExpressionAttributeValues: { ':revision': revision },
+        Item: {
+          ...dispatchCopyKey(copy.deptId, copy.dispatchId),
+          entityType: 'DISPATCH_ALERT_COPY',
+          dispatchId: copy.dispatchId,
+          deptId: copy.deptId,
+          incidentType: copy.incidentType,
+          address: copy.address,
+          crossStreets: copy.crossStreets,
+          narrative: copy.narrative,
+          dispatchedAt: copy.dispatchedAt,
+          ...(copy.verifyRequired ? { verifyRequired: true } : {}),
+          // Lists the department's dispatches newest first for "Start a report" (GSI1, beside
+          // the INCIDENT#{alarmAt} rows in the same department partition).
+          gsi1pk: buildDeptScopedPk(copy.deptId),
+          gsi1sk: `${DISPATCH_GSI1_PREFIX}${copy.dispatchedAt}`,
+          revision,
+        },
+      }),
+    );
+    return 'updated';
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) return 'stale';
+    throw error;
+  }
 }
 
 const DISPATCH_GSI1_PREFIX = 'DISPATCH#';

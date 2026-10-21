@@ -185,14 +185,30 @@ test('audit log lookup renders a readable diff; a 400 shows detail next to the i
   renderRoute(['ADMIN'], '/audit-log');
   await screen.findByRole('heading', { name: 'Audit log' });
 
-  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
-  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.selectOptions(screen.getByLabelText('Record type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Record ID'), 'ALERT_RULES');
   await user.click(screen.getByRole('button', { name: 'Look up' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/escalationThresholdN: 60 → 90/)).toBeTruthy();
+    expect(changeRowText('escalationThresholdN')).toBe('escalationThresholdN 60 → to 90');
   });
+
+  await user.clear(screen.getByLabelText('Record ID'));
+  await user.type(screen.getByLabelText('Record ID'), 'bad id');
+  await user.click(screen.getByRole('button', { name: 'Look up' }));
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'entityType and entityId query parameters are required and must not contain "," or "#".',
+  );
 });
+
+/** One changed-fields row as it reads: field, old value, arrow, the screen-reader "to", new. */
+function changeRowText(field: string): string | undefined {
+  return screen
+    .getByText(field, { selector: 'span' })
+    .closest('li')
+    ?.textContent?.replace(/\s+/g, ' ')
+    .trim();
+}
 
 test('an audit body without an entries array shows the error state, not a crash', async () => {
   // A proxy error page or a stale mock: 200, but not an AuditPage.
@@ -200,10 +216,10 @@ test('an audit body without an entries array shows the error state, not a crash'
   const user = userEvent.setup();
   renderRoute(['ADMIN'], '/audit-log');
   await screen.findByRole('heading', { name: 'Audit log' });
-  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
-  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.selectOptions(screen.getByLabelText('Record type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Record ID'), 'ALERT_RULES');
   await user.click(screen.getByRole('button', { name: 'Look up' }));
-  // The gate's generic retryable state - never the route error boundary.
+  // The generic retryable state - never the route error boundary.
   expect(
     (await screen.findAllByText(/Try again, or contact your department administrator/)).length,
   ).toBeGreaterThan(0);
@@ -294,36 +310,13 @@ test('a 403 saving a config shows a generic message, not the raw server detail',
   expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
 });
 
-test('a 403 running disposal shows a generic message, not the raw server detail', async () => {
-  server.use(
-    ...settingsDefaultHandlers(),
-    http.post('/api/v1/platform/retention/disposal', () =>
-      HttpResponse.json(
-        {
-          type: 'about:blank',
-          title: 'Forbidden',
-          status: 403,
-          detail: SECRET_CEDAR_DETAIL,
-          traceId: 't4',
-        },
-        { status: 403 },
-      ),
-    ),
-  );
+test('does not offer a disposal button, and says disposal candidates are not listed yet', async () => {
+  server.use(...settingsDefaultHandlers());
 
-  const user = userEvent.setup();
   renderRoute(['ADMIN'], '/settings');
-  await user.click(await screen.findByRole('button', { name: 'Run disposal' }));
-  const disposalDialog = await screen.findByRole('dialog', {
-    name: 'Permanently dispose of records older than 7 years?',
-  });
-  await user.click(within(disposalDialog).getByRole('button', { name: 'Run disposal' }));
 
-  await waitFor(() => {
-    expect(screen.getByText('You do not have access to this page.')).toBeTruthy();
-  });
-  expect(screen.queryByText(SECRET_CEDAR_DETAIL)).toBeNull();
-  expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
+  expect(await screen.findByText(/cannot be started from this page/)).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Run disposal' })).toBeNull();
 });
 
 test('a 403 starting an export shows a generic message, not the raw server detail', async () => {
@@ -406,7 +399,7 @@ test('a 403 revoking sessions shows a generic message, not the raw server detail
   expect(document.body.textContent).not.toContain(SECRET_CEDAR_DETAIL);
 });
 
-test('a failed retention load shows an explicit error and disables Run disposal, instead of a silently-empty input', async () => {
+test('a failed retention load shows an explicit error, instead of a silently-empty input', async () => {
   server.use(
     http.get('/api/v1/platform/config/STATIONS', () =>
       HttpResponse.json(
@@ -460,9 +453,6 @@ test('a failed retention load shows an explicit error and disables Run disposal,
   // The empty/unset-looking retention input must not render — an admin who never sees an
   // error could otherwise save over the real value with an unintentionally low one.
   expect(screen.queryByLabelText('Retention period (years)')).toBeNull();
-  expect((screen.getByRole('button', { name: 'Run disposal' }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
 });
 
 test('resubmitting the same audit lookup refreshes the results table', async () => {
@@ -511,12 +501,12 @@ test('resubmitting the same audit lookup refreshes the results table', async () 
   renderRoute(['ADMIN'], '/audit-log');
   await screen.findByRole('heading', { name: 'Audit log' });
 
-  await user.type(screen.getByLabelText('Entity type'), 'DEPARTMENT_CONFIG');
-  await user.type(screen.getByLabelText('Entity ID'), 'ALERT_RULES');
+  await user.selectOptions(screen.getByLabelText('Record type'), 'DEPARTMENT_CONFIG');
+  await user.type(screen.getByLabelText('Record ID'), 'ALERT_RULES');
   await user.click(screen.getByRole('button', { name: 'Look up' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/escalationThresholdN: 60 → 90/)).toBeTruthy();
+    expect(changeRowText('escalationThresholdN')).toBe('escalationThresholdN 60 → to 90');
   });
   expect(screen.queryByText('No change history for this record.')).toBeNull();
 
@@ -526,8 +516,12 @@ test('resubmitting the same audit lookup refreshes the results table', async () 
   await user.click(screen.getByRole('button', { name: 'Look up' }));
 
   await waitFor(() => {
-    expect(screen.getByText(/escalationThresholdN: 90 → 120/)).toBeTruthy();
+    expect(screen.getAllByText('escalationThresholdN', { selector: 'span' })).toHaveLength(2);
   });
+  const rows = screen
+    .getAllByText('escalationThresholdN', { selector: 'span' })
+    .map((field) => field.closest('li')?.textContent?.replace(/\s+/g, ' ').trim());
+  expect(rows).toContain('escalationThresholdN 90 → to 120');
   expect(screen.queryByText('No change history for this record.')).toBeNull();
   expect(calls).toBe(2);
 });
@@ -564,6 +558,61 @@ test('admin revokes a member’s sessions from /personnel/:id', async () => {
   await waitFor(() => {
     expect(screen.getByText(/Sam Lee is signed out everywhere/)).toBeTruthy();
   });
+});
+
+test('a member page links to that member’s change history for CHIEF and ADMIN only', async () => {
+  const member: Member = {
+    memberId: 'm1',
+    firstName: 'Sam',
+    lastName: 'Lee',
+    email: 'sam@example.com',
+    phone: '203-555-0199',
+    status: 'ACTIVE',
+    joinDate: '2020-01-01',
+    rank: 'Lt',
+    agencyId: 'NFD-1',
+  };
+  server.use(http.get('/api/v1/personnel/members/m1', () => HttpResponse.json(member)));
+
+  renderRoute(['CHIEF'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  expect(screen.getByRole('link', { name: 'Change history' }).getAttribute('href')).toBe(
+    '/audit-log?entityType=MEMBER&entityId=m1',
+  );
+
+  cleanup();
+  renderRoute(['OFFICER'], '/personnel/m1');
+  await screen.findByRole('heading', { name: 'Sam Lee' });
+  expect(screen.queryByRole('link', { name: 'Change history' })).toBeNull();
+});
+
+test('Settings links LOSAP point rules to its change history', async () => {
+  server.use(...settingsDefaultHandlers());
+  renderRoute(['ADMIN'], '/settings');
+
+  const link = await screen.findByRole('link', { name: 'Change history for LOSAP point rules' });
+  expect(link.getAttribute('href')).toBe(
+    '/audit-log?entityType=DEPARTMENT_CONFIG&entityId=LOSAP_POINT_RULES',
+  );
+  // Only the LOSAP page's saves are recorded; nothing else on Settings claims a history.
+  expect(screen.getAllByRole('link', { name: /^Change history/ })).toHaveLength(1);
+});
+
+test('Settings has no generic editor for LOSAP point rules', async () => {
+  const losapReads = vi.fn();
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.get('/api/v1/platform/config/LOSAP_POINT_RULES', () => {
+      losapReads();
+      return HttpResponse.json({}, { status: 404 });
+    }),
+  );
+  renderRoute(['ADMIN'], '/settings');
+
+  await screen.findByRole('link', { name: 'LOSAP point rules' });
+  await screen.findByText('Alert rule timing');
+  expect(screen.getAllByText('LOSAP point rules')).toHaveLength(1);
+  expect(losapReads).not.toHaveBeenCalled();
 });
 
 test('a 400 saving a config lists the RFC 7807 field-level errors (m1)', async () => {
@@ -808,4 +857,46 @@ test('an accepted cutover decision never claims tone-out paging is disabled', as
   expect(await screen.findByText('Not required')).toBeTruthy();
   expect(screen.queryByText(/does not disable, pause, or otherwise change/i)).toBeTruthy();
   expect(screen.queryByText(/tone-out paging is (now )?disabled/i)).toBeNull();
+});
+
+test('a failed export status poll retries in place instead of reloading and losing the job', async () => {
+  let polls = 0;
+  server.use(
+    ...settingsDefaultHandlers(),
+    http.get('/api/v1/platform/config/NERIS', () =>
+      HttpResponse.json(
+        { type: 'about:blank', title: 'Not Found', status: 404, traceId: 't1' },
+        { status: 404 },
+      ),
+    ),
+    http.post('/api/v1/platform/export', () => HttpResponse.json({ jobId: 'job-1' })),
+    http.get('/api/v1/platform/export/job-1', () => {
+      polls += 1;
+      return polls === 1
+        ? HttpResponse.json(
+            { type: 'about:blank', title: 'Unavailable', status: 503, traceId: 't6' },
+            { status: 503 },
+          )
+        : HttpResponse.json({
+            status: 'COMPLETE',
+            files: [{ table: 'members', url: 'https://files.example.org/members.csv' }],
+          });
+    }),
+  );
+  const reload = vi.fn();
+  vi.stubGlobal('location', { ...window.location, reload });
+
+  const user = userEvent.setup();
+  renderRoute(['ADMIN'], '/settings');
+  await user.click(await screen.findByRole('button', { name: 'Export department data' }));
+  const exportDialog = await screen.findByRole('dialog', {
+    name: "Export all of your department's data?",
+  });
+  await user.click(within(exportDialog).getByRole('button', { name: 'Export department data' }));
+
+  await user.click(await screen.findByRole('button', { name: 'Try again' }));
+
+  expect(await screen.findByRole('link', { name: 'members' })).toBeTruthy();
+  expect(reload).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
 });

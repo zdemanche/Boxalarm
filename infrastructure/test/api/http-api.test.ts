@@ -392,6 +392,90 @@ describe("HttpApi", () => {
       await settle(api);
     });
 
+    it("tells the ops topic when the authorizer serves a stale revocation answer", async () => {
+      const api = await buildApi("stale-alarm");
+      api.sealRouteSettings();
+      const { revocationStale } = api.addAlarms(
+        "arn:aws:sns:us-east-1:123456789012:chief",
+        "arn:aws:sns:us-east-1:123456789012:alerting-page",
+      );
+      const [metric, namespace, threshold, actions] = await Promise.all([
+        resolve(revocationStale.metricName),
+        resolve(revocationStale.namespace),
+        resolve(revocationStale.threshold),
+        resolve(revocationStale.alarmActions),
+      ]);
+      expect([metric, namespace, threshold]).toEqual([
+        "RevocationCheckStale",
+        "Boxalarm/authorizer",
+        0,
+      ]);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+      await settle(api);
+    });
+
+    it("pages alerting-page when the authorizers deny most requests, which Lambda Errors never shows", async () => {
+      const api = await buildApi("deny-ratio-alarm");
+      api.sealRouteSettings();
+      const { authorizerDenyRatio } = api.addAlarms(
+        "arn:aws:sns:us-east-1:123456789012:chief",
+        "arn:aws:sns:us-east-1:123456789012:alerting-page",
+      );
+      const [queries, threshold, actions, datapoints] = await Promise.all([
+        resolve(authorizerDenyRatio.metricQueries),
+        resolve(authorizerDenyRatio.threshold),
+        resolve(authorizerDenyRatio.alarmActions),
+        resolve(authorizerDenyRatio.datapointsToAlarm),
+      ]);
+      expect(queries?.find((q) => q.id === "denied")?.metric).toMatchObject({
+        namespace: "Boxalarm/authorizer",
+        metricName: "AuthorizerDenied",
+        stat: "Sum",
+      });
+      expect(queries?.find((q) => q.id === "allowed")?.metric).toMatchObject({
+        namespace: "Boxalarm/authorizer",
+        metricName: "AuthorizerAllowed",
+        stat: "Sum",
+      });
+      expect(queries?.find((q) => q.returnData)?.expression).toContain(">= 10");
+      expect(threshold).toBe(0.5);
+      expect(datapoints).toBe(2);
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:alerting-page"]);
+      await settle(api);
+    });
+
+    it("tells the ops topic about throttles and errors of the main authorizer", async () => {
+      const api = await buildApi("main-authorizer-alarms");
+      api.sealRouteSettings();
+      const { authorizerThrottles, authorizerErrors } = api.addAlarms(
+        "arn:aws:sns:us-east-1:123456789012:chief",
+        "arn:aws:sns:us-east-1:123456789012:alerting-page",
+      );
+      const [
+        fnName,
+        throttleMetric,
+        errorMetric,
+        dimensions,
+        errorDimensions,
+        actions,
+        errorActions,
+      ] = await Promise.all([
+        resolve(api.authorizerLambda.function.name),
+        resolve(authorizerThrottles.metricName),
+        resolve(authorizerErrors.metricName),
+        resolve(authorizerThrottles.dimensions),
+        resolve(authorizerErrors.dimensions),
+        resolve(authorizerThrottles.alarmActions),
+        resolve(authorizerErrors.alarmActions),
+      ]);
+      expect([throttleMetric, errorMetric]).toEqual(["Throttles", "Errors"]);
+      expect(dimensions).toEqual({ FunctionName: fnName });
+      expect(errorDimensions).toEqual({ FunctionName: fnName });
+      expect(actions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+      expect(errorActions).toEqual(["arn:aws:sns:us-east-1:123456789012:chief"]);
+      await settle(api);
+    });
+
     it("pages alerting-page (and the ops topic) on every RevocationCheckFailOpen", async () => {
       const api = await buildApi("fail-open-alarm");
       api.sealRouteSettings();

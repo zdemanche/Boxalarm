@@ -18,6 +18,7 @@ import type {
   ChecklistTemplate,
   DefectSeverity,
   ItemResult,
+  ApparatusStatus,
   OpenDefect,
 } from '../../features/checks/types';
 import { ApiError } from '../../lib/apiClient';
@@ -112,15 +113,18 @@ export type DefectPlan = 'file' | 'escalate' | 'skip';
  * What submitting does with a failed item (R2-M2). A known open defect is skipped only when this
  * check adds nothing: same or lower severity, no note, no photo. A higher severity, a note or a
  * photo is filed as an update - and "Out of service now" must reach the defect API, which is what
- * takes the unit out of service.
+ * takes the unit out of service. An "Out of service now" defect still open on a unit that has
+ * since been returned to service is filed again, so the unit goes back out.
  */
 export function defectPlan(
   known: OpenDefect | undefined,
   severity: DefectSeverity,
   note: string,
   hasPhoto: boolean,
+  unitStatus?: ApparatusStatus,
 ): DefectPlan {
   if (!known) return 'file';
+  if (known.severity === 'OUT_OF_SERVICE' && unitStatus === 'IN_SERVICE') return 'escalate';
   const addsNothing =
     SEVERITY_RANK[severity] <= SEVERITY_RANK[known.severity] && !note.trim() && !hasPhoto;
   return addsNothing ? 'skip' : 'escalate';
@@ -161,14 +165,17 @@ export function CheckRunnerScreen() {
   // null = couldn't be loaded (offline or refused): a check then can't tell what is already
   // reported, and says so.
   const [openDefects, setOpenDefects] = useState<OpenDefect[] | null>([]);
+  const [unitStatus, setUnitStatus] = useState<ApparatusStatus | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     if (!repository.getOpenDefects) return undefined;
     repository
       .getOpenDefects(apparatusId)
-      .then((defects) => {
-        if (!cancelled) setOpenDefects(defects);
+      .then((result) => {
+        if (cancelled) return;
+        setOpenDefects(result.defects);
+        setUnitStatus(result.unitStatus);
       })
       .catch(() => {
         if (!cancelled) setOpenDefects(null);
@@ -433,25 +440,32 @@ export function CheckRunnerScreen() {
     // Re-read open defects so one closed during the check isn't treated as open. Bounded, and a
     // failure falls back to the list loaded at the start: submit never waits long on the network.
     let latestDefects = openDefects;
+    let latestUnitStatus = unitStatus;
     if (repository.getOpenDefects && isOnline) {
       const fresh = await Promise.race([
         repository.getOpenDefects(apparatusId).catch(() => null),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), OPEN_DEFECTS_REFRESH_MS)),
       ]);
       if (fresh) {
-        latestDefects = fresh;
-        setOpenDefects(fresh);
+        latestDefects = fresh.defects;
+        latestUnitStatus = fresh.unitStatus;
+        setOpenDefects(fresh.defects);
+        setUnitStatus(fresh.unitStatus);
       }
     }
     const planFor = (item: ChecklistItem) => {
       const known = latestDefects ? findKnownDefect(latestDefects, apparatusId, item) : undefined;
+      const chosen = severities[item.code] ?? DEFAULT_SEVERITY;
+      const refile = known?.severity === 'OUT_OF_SERVICE' && latestUnitStatus === 'IN_SERVICE';
       return {
         known,
+        severity: refile ? 'OUT_OF_SERVICE' : chosen,
         plan: defectPlan(
           known,
-          severities[item.code] ?? DEFAULT_SEVERITY,
+          chosen,
           notes[item.code] ?? '',
           photosCaptured[item.code] !== undefined,
+          latestUnitStatus,
         ),
       };
     };
@@ -485,7 +499,7 @@ export function CheckRunnerScreen() {
       for (const item of failedItems) {
         // Already reported and still open, and this check adds nothing: don't file it again
         // (review m3). A higher severity, a note or a photo is filed as an update (R2-M2).
-        const { known, plan } = planFor(item);
+        const { known, plan, severity } = planFor(item);
         if (plan === 'skip') continue;
         // The photo taken for this item goes with its defect through the defect API's own
         // signed-upload step (review m2).
@@ -497,7 +511,7 @@ export function CheckRunnerScreen() {
             (plan === 'escalate' && known
               ? ` Update to the open defect reported as ${SEVERITY_LABEL[known.severity]}.`
               : ''),
-          severity: severities[item.code] ?? DEFAULT_SEVERITY,
+          severity,
           idempotencyKey: `${idempotencyKey}-defect-${item.code}`,
           itemCode: item.code,
           ...(photo ? { photoLocalUri: photo.uri, photoFileName: photo.fileName } : {}),
@@ -520,7 +534,7 @@ export function CheckRunnerScreen() {
       passed: template.items.length - failedItems.length,
       defects: failedItems.map((item) => ({
         label: item.label,
-        severity: severities[item.code] ?? DEFAULT_SEVERITY,
+        severity: planFor(item).severity,
         plan: planFor(item).plan,
       })),
       durationSeconds,
@@ -633,6 +647,7 @@ export function CheckRunnerScreen() {
               severity={severities[item.code] ?? DEFAULT_SEVERITY}
               note={notes[item.code] ?? ''}
               unitId={apparatusId}
+              unitStatus={unitStatus}
               onAnswer={(pass) =>
                 answer(
                   item.code,
@@ -712,6 +727,7 @@ interface ItemRowProps {
   severity: DefectSeverity;
   note: string;
   unitId: string;
+  unitStatus: ApparatusStatus | undefined;
   onAnswer: (pass: boolean) => void;
   onAddPhoto: () => void;
   onSeverity: (value: DefectSeverity) => void;
@@ -719,7 +735,13 @@ interface ItemRowProps {
 }
 
 function ItemRow(props: ItemRowProps) {
-  const plan = defectPlan(props.knownDefect, props.severity, props.note, props.photoCaptured);
+  const plan = defectPlan(
+    props.knownDefect,
+    props.severity,
+    props.note,
+    props.photoCaptured,
+    props.unitStatus,
+  );
   return <ItemRowView {...props} plan={plan} />;
 }
 
@@ -735,6 +757,7 @@ function ItemRowView({
   severity,
   note,
   unitId,
+  unitStatus,
   onAnswer,
   onAddPhoto,
   onSeverity,
@@ -861,9 +884,11 @@ function ItemRowView({
           <Text style={{ color: theme.fg, fontSize: typeScale.body.size }}>
             {!knownDefect
               ? 'This is reported to the apparatus officer as a defect when you submit.'
-              : plan === 'skip'
-                ? `Already reported as ${SEVERITY_LABEL[knownDefect.severity]} and still open, so it won't be reported again. Choose a higher severity, or add a note or photo, to send an update.`
-                : `Already reported as ${SEVERITY_LABEL[knownDefect.severity]}. This is sent to the apparatus officer as an update when you submit.`}
+              : knownDefect.severity === 'OUT_OF_SERVICE' && unitStatus === 'IN_SERVICE'
+                ? `Already reported as ${SEVERITY_LABEL[knownDefect.severity]} and still open, but ${unitId} is back in service. This is sent again when you submit, so ${unitId} goes back out of service.`
+                : plan === 'skip'
+                  ? `Already reported as ${SEVERITY_LABEL[knownDefect.severity]} and still open, so it won't be reported again. Choose a higher severity, or add a note or photo, to send an update.`
+                  : `Already reported as ${SEVERITY_LABEL[knownDefect.severity]}. This is sent to the apparatus officer as an update when you submit.`}
           </Text>
           {/* Nothing higher to choose when the open defect is already "Out of service now". */}
           {knownDefect?.severity === 'OUT_OF_SERVICE' ? null : (

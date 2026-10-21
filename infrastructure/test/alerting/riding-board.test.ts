@@ -50,6 +50,7 @@ async function build() {
     platformTableName: "boxalarm-dev-platform-table",
     logGroup: new ServiceLogGroup("apparatus-lg", { env: "dev", serviceName: "apparatus-service" }),
     policyStoreId: "policy-store-id",
+    policyStoreArn: "arn:aws:verifiedpermissions::123456789012:policy-store/policy-store-id",
     platformBus,
     alertingTableArn: pulumi.output(ALERTING_TABLE_ARN),
     alertingTableName: "boxalarm-dev-alerting-table",

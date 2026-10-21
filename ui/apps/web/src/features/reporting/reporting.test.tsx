@@ -16,6 +16,7 @@ import type {
   ReportExportJob,
 } from './types';
 import { formatCalendarDate } from '../../lib/dates';
+import { dayBounds } from './format';
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -217,6 +218,15 @@ test('response times sends epoch-second bounds and formats turnout/travel/total'
   expect(to - from).toBeGreaterThan(29 * 86_400);
   expect(to - from).toBeLessThan(32 * 86_400);
   expect(from).toBeLessThan(10_000_000_000);
+  const newYorkClock = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+  expect(newYorkClock.format(from * 1000)).toBe('00:00:00');
+  expect(newYorkClock.format(to * 1000)).toBe('23:59:59');
   expect(screen.getAllByText('1:35').length).toBeGreaterThan(0);
   // An unmeasurable leg renders a dash, never a made-up zero.
   expect(screen.getByRole('cell', { name: 'Engine 301' })).toBeTruthy();
@@ -306,7 +316,7 @@ test('grants shows incident volume as unavailable rather than a number', async (
   expect(Number(seen?.get('periodEnd'))).toBeGreaterThan(Number(seen?.get('periodStart')));
 });
 
-test('grants shows incident volume and the by-type table once the report carries it', async () => {
+test('grants shows incident volume once the report carries it', async () => {
   server.use(
     dashboardHandler(DASHBOARD),
     http.get('/api/v1/reporting/grants', () =>
@@ -319,11 +329,7 @@ test('grants shows incident volume and the by-type table once the report carries
         memberCountTrend: { joinedInPeriod: 2, trendMethod: 'joinDateApproximation' },
         totalIncidentVolume: {
           available: true,
-          total: 53,
-          byType: [
-            { incidentType: 'Fire alarm activation', count: 20 },
-            { incidentType: 'Motor vehicle accident', count: 13 },
-          ],
+          totalIncidents: 53,
         },
         trainingHoursCompliance: { totalHours: 120, memberCount: 15, eventCount: 9 },
         apparatusOutOfServiceHistory: { records: [], totalOutOfServiceEvents: 0 },
@@ -335,9 +341,7 @@ test('grants shows incident volume and the by-type table once the report carries
 
   expect(await screen.findByText('53')).toBeTruthy();
   expect(screen.queryByText('Not available')).toBeNull();
-  const table = screen.getByRole('table', { name: 'Incident volume by type' });
-  expect(within(table).getByRole('rowheader', { name: 'Fire alarm activation' })).toBeTruthy();
-  expect(within(table).getByRole('cell', { name: '13' })).toBeTruthy();
+  expect(screen.queryByRole('table', { name: 'Incident volume by type' })).toBeNull();
 });
 
 test('membership trends refuses a range over 731 days without calling the API', async () => {
@@ -693,4 +697,41 @@ test('the route guard blocks a MEMBER before any report is requested', async () 
 
   expect(await screen.findByText('You do not have access to this page.')).toBeTruthy();
   expect(request).not.toHaveBeenCalled();
+});
+
+test('grants shows out-of-service dates from epoch seconds, not 1970', async () => {
+  server.use(
+    dashboardHandler(DASHBOARD),
+    http.get('/api/v1/reporting/grants', () =>
+      HttpResponse.json({
+        periodStart: 1,
+        periodEnd: 2,
+        fields: [],
+        fieldSetSource: 'default',
+        activeMemberCount: 17,
+        memberCountTrend: { joinedInPeriod: 2, trendMethod: 'joinDateApproximation' },
+        totalIncidentVolume: { available: false, reason: 'E6-S1' },
+        trainingHoursCompliance: { totalHours: 120, memberCount: 15, eventCount: 9 },
+        apparatusOutOfServiceHistory: {
+          records: [
+            { unitId: 'Engine 301', reason: 'Pump', startAt: 1_790_812_800, endAt: 1_790_899_200 },
+          ],
+          totalOutOfServiceEvents: 1,
+        },
+      }),
+    ),
+  );
+  renderPage();
+  await openTab('Grants');
+
+  const row = (await screen.findByRole('cell', { name: 'Engine 301' })).closest('tr')!;
+  expect(row.textContent).toContain('2026');
+  expect(row.textContent).not.toContain('1970');
+});
+
+test('report days are department-local: a Q3 range ends at local midnight, across DST', () => {
+  expect(dayBounds('2026-09-30')).toEqual({ from: 1_790_740_800, to: 1_790_827_199 });
+  const dstEnd = dayBounds('2026-11-01');
+  expect(dstEnd.to - dstEnd.from + 1).toBe(25 * 3600);
+  expect(dayBounds('2026-03-08').to - dayBounds('2026-03-08').from + 1).toBe(23 * 3600);
 });

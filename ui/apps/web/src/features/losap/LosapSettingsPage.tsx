@@ -1,11 +1,15 @@
-import { FormEvent, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { FormEvent, useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
-import { Button, Card, PageHeader, TextInput } from '../../components/ui';
+import { Button, Card, PageHeader, Skeleton, TextInput } from '../../components/ui';
+import { ApiError } from '../../lib/apiClient';
+import type { ConfigResponse } from '../platform/types';
 import { canAccessPath } from '../../routing/routeTable';
 import type { AttendanceActivityType } from '../personnel/types';
 import { humanize } from '../../lib/labels';
-import { updateLosapRules } from './api';
+import { getLosapRules, updateLosapRules } from './api';
+import { problemMessage } from '../personnel/problemMessage';
+import type { LosapPointRules } from './types';
 import styles from './LosapSettingsPage.module.css';
 
 const ACTIVITY_TYPES: AttendanceActivityType[] = [
@@ -18,6 +22,19 @@ const ACTIVITY_TYPES: AttendanceActivityType[] = [
 
 export function LosapSettingsPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
+  const queryKey = ['platform', 'config', 'LOSAP_POINT_RULES'];
+  const rulesQuery = useQuery({
+    queryKey,
+    queryFn: async (): Promise<ConfigResponse | null> => {
+      try {
+        return await getLosapRules(auth);
+      } catch (error) {
+        if (error instanceof ApiError && error.problem.status === 404) return null;
+        throw error;
+      }
+    },
+  });
   const [points, setPoints] = useState<Record<AttendanceActivityType, string>>({
     CALL: '',
     DRILL: '',
@@ -25,6 +42,19 @@ export function LosapSettingsPage() {
     WORK_DETAIL: '',
     STANDBY: '',
   });
+
+  useEffect(() => {
+    const current = rulesQuery.data?.value.pointsByActivityType as LosapPointRules | undefined;
+    if (!current) return;
+    setPoints(
+      Object.fromEntries(
+        ACTIVITY_TYPES.map((type) => [
+          type,
+          current[type] === undefined ? '' : String(current[type]),
+        ]),
+      ) as Record<AttendanceActivityType, string>,
+    );
+  }, [rulesQuery.data]);
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -37,6 +67,7 @@ export function LosapSettingsPage() {
           ]),
         ),
       ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
 
   return (
@@ -56,13 +87,20 @@ export function LosapSettingsPage() {
       />
       <Card title="Points per activity">
         <p className={styles.intro}>
-          Saving publishes a new rule version. An activity left blank is left out of it.
+          Saving publishes a new rule version. An activity left blank earns 0 points.
         </p>
+        {rulesQuery.isLoading ? <Skeleton lines={3} /> : null}
+        {rulesQuery.error ? (
+          <p role="alert" className={styles.error}>
+            The current rules could not be loaded, so they can&rsquo;t be edited safely. Reload to
+            try again.
+          </p>
+        ) : null}
         <form
           aria-label="LOSAP point rules"
           onSubmit={(event: FormEvent) => {
             event.preventDefault();
-            saveMutation.mutate();
+            if (rulesQuery.isSuccess) saveMutation.mutate();
           }}
         >
           <div className={styles.grid}>
@@ -82,13 +120,13 @@ export function LosapSettingsPage() {
           <div className={styles.actions}>
             {saveMutation.error ? (
               <p role="alert" aria-live="assertive" className={styles.error}>
-                {saveMutation.error.message}
+                {problemMessage(saveMutation.error)}
               </p>
             ) : null}
             {saveMutation.data ? (
               <p role="status">Saved as rule version {saveMutation.data.ruleVersionId}.</p>
             ) : null}
-            <Button type="submit" loading={saveMutation.isPending}>
+            <Button type="submit" loading={saveMutation.isPending || rulesQuery.isPending}>
               Save rules
             </Button>
           </div>

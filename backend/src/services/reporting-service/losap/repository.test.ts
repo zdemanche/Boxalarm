@@ -10,7 +10,7 @@ vi.mock('../logger.js', () => ({
   logger: { warn, error: vi.fn() },
 }));
 
-const { buildYearEndReport, listLosapEligibleMembers, sumLosapPointsForMemberYear } =
+const { buildYearEndReport, listLosapRoster, sumLosapPointsForMemberYear } =
   await import('./repository.js');
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
@@ -25,8 +25,8 @@ beforeEach(() => {
   warn.mockClear();
 });
 
-describe('listLosapEligibleMembers', () => {
-  it('queries GSI3 for the department member list and keeps only ACTIVE/RETIRED members', async () => {
+describe('listLosapRoster', () => {
+  it('queries GSI3 for the department member list and returns the whole roster with each member status', async () => {
     const send = vi.fn().mockResolvedValue({
       Items: [
         { memberId: 'MBR-0001', status: 'ACTIVE' },
@@ -36,10 +36,12 @@ describe('listLosapEligibleMembers', () => {
       ],
     });
     const client = fakeClient(send);
-    const roster = await listLosapEligibleMembers(client, TABLE, DEPT_ID);
+    const roster = await listLosapRoster(client, TABLE, DEPT_ID);
     expect(roster).toEqual([
       { memberId: 'MBR-0001', status: 'ACTIVE' },
       { memberId: 'MBR-0002', status: 'RETIRED' },
+      { memberId: 'MBR-0003', status: 'PROBATIONARY' },
+      { memberId: 'MBR-0004', status: 'LOA' },
     ]);
     const command = send.mock.calls[0]?.[0] as {
       input: { IndexName: string; ExpressionAttributeValues: Record<string, unknown> };
@@ -57,7 +59,7 @@ describe('listLosapEligibleMembers', () => {
       })
       .mockResolvedValueOnce({ Items: [{ memberId: 'MBR-0002', status: 'ACTIVE' }] });
     const client = fakeClient(send);
-    const roster = await listLosapEligibleMembers(client, TABLE, DEPT_ID);
+    const roster = await listLosapRoster(client, TABLE, DEPT_ID);
     expect(roster).toHaveLength(2);
     expect(send).toHaveBeenCalledTimes(2);
   });
@@ -66,7 +68,7 @@ describe('listLosapEligibleMembers', () => {
     const failure = new Error('table unavailable');
     const send = vi.fn().mockRejectedValue(failure);
     const client = fakeClient(send);
-    await expect(listLosapEligibleMembers(client, TABLE, DEPT_ID)).rejects.toBe(failure);
+    await expect(listLosapRoster(client, TABLE, DEPT_ID)).rejects.toBe(failure);
     expect(logError).toHaveBeenCalledWith(
       'reporting.losap.roster.failed',
       failure,
@@ -192,6 +194,36 @@ describe('buildYearEndReport', () => {
     );
     expect(report.members).toHaveLength(2);
     expect(report.totalUnreadableEntryCount).toBe(0);
+  });
+
+  it('keeps LOA and probationary members who earned points for the year and omits those with none', async () => {
+    const send = vi.fn().mockImplementation((command: unknown) => {
+      const input = (
+        command as {
+          input: { IndexName: string; ExpressionAttributeValues: Record<string, unknown> };
+        }
+      ).input;
+      if (input.IndexName === 'GSI3') {
+        return Promise.resolve({
+          Items: [
+            { memberId: 'MBR-0001', status: 'LOA' },
+            { memberId: 'MBR-0002', status: 'PROBATIONARY' },
+            { memberId: 'MBR-0003', status: 'LOA' },
+          ],
+        });
+      }
+      const gsi1pk = input.ExpressionAttributeValues[':gsi1pk'];
+      return Promise.resolve({
+        Items: gsi1pk === 'MEMBER#MBR-0003' ? [] : [{ points: 120 }],
+      });
+    });
+    const client = fakeClient(send);
+    const report = await buildYearEndReport(client, TABLE, DEPT_ID, 2025);
+    expect(report.members).toEqual([
+      { memberId: 'MBR-0001', totalPoints: 120, entryCount: 1, unreadableEntryCount: 0 },
+      { memberId: 'MBR-0002', totalPoints: 120, entryCount: 1, unreadableEntryCount: 0 },
+    ]);
+    expect(report.hasData).toBe(true);
   });
 
   it('sets hasData=false when every eligible member has zero entries for the year (AC4)', async () => {

@@ -45,6 +45,17 @@ describe('revocationStore', () => {
     await expect(readRevokedAt(fakeDoc(undefined).client, 't', 'N', 's')).resolves.toBeUndefined();
   });
 
+  it('asks DynamoDB for a consistent read only when told to', async () => {
+    const strong = fakeDoc({ revokedAt: 1 });
+    const eventual = fakeDoc({ revokedAt: 1 });
+
+    await readRevokedAt(strong.client, 't', 'N', 's', true);
+    await readRevokedAt(eventual.client, 't', 'N', 's');
+
+    expect(strong.inputs[0]).toMatchObject({ ConsistentRead: true });
+    expect(eventual.inputs[0]).toMatchObject({ ConsistentRead: false });
+  });
+
   it('refuses a deptId or sub carrying the pk delimiter', async () => {
     await expect(readRevokedAt(fakeDoc().client, 't', 'A#B', 's')).rejects.toThrow("'#'");
     await expect(readRevokedAt(fakeDoc().client, 't', 'A', 's#x')).rejects.toThrow("'#'");

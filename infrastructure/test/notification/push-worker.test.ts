@@ -109,6 +109,19 @@ describe("notification push worker wiring (M7)", { timeout: 30_000 }, () => {
     expect(redrive.maxReceiveCount).toBe(5);
   });
 
+  it("covers a full record of 10 devices at the 8s send budget and keeps visibility at 6x the timeout", async () => {
+    await build();
+    const esm = esmFor(WORKER);
+    expect(esm.inputs.batchSize).toBe(1);
+    const lambda = resourcesOfType("aws:lambda/function:Function").find(
+      (f) => f.inputs.name === WORKER,
+    );
+    const queue = resourcesOfType("aws:sqs/queue:Queue").find((q) => q.inputs.name === QUEUE_NAME);
+    const timeout = lambda?.inputs.timeout as number;
+    expect(timeout).toBeGreaterThanOrEqual(10 * 8);
+    expect(queue?.inputs.visibilityTimeoutSeconds).toBe(timeout * 6);
+  });
+
   it("alarms the ops topic on DLQ depth, worker errors and first-attempt send failures", async () => {
     await build();
     for (const name of [

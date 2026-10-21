@@ -53,6 +53,8 @@ export function MutualAidPromptScreen() {
   const navigation = useNavigation<NavigationProp<AlertsStackParamList>>();
   const theme = useTheme();
   const repository = useAlertsRepository();
+  const navigationRef = useRef(navigation);
+  navigationRef.current = navigation;
   const roles = useOptionalAuth()?.roles ?? [];
   const canConfirm = roles.some((role) => CONFIRMING_ROLES.includes(role));
   // undefined: not read yet or unreadable; null: the server says none was requested.
@@ -91,7 +93,9 @@ export function MutualAidPromptScreen() {
     onFocus();
     const unsubscribeFocus = navigation.addListener?.('focus', onFocus);
     const subscription = AppState.addEventListener('change', (status) => {
-      if (status === 'background') setAlertShowsOverLockScreen(false);
+      if (status === 'background' && navigationRef.current.isFocused?.() !== false) {
+        setAlertShowsOverLockScreen(false);
+      }
     });
     return () => {
       cancelled = true;
@@ -103,7 +107,7 @@ export function MutualAidPromptScreen() {
   const load = useCallback(async () => {
     try {
       const dispatch = await repository.getDispatch(dispatchId);
-      setLoadFailed(false);
+      setLoadFailed(dispatch.mutualAid === undefined);
       setCall({ incidentType: dispatch.incidentType, address: dispatch.address });
       setMutualAid(dispatch.mutualAid);
       // Another officer already confirmed the call: nothing is left to act on, so it stops
@@ -111,7 +115,7 @@ export function MutualAidPromptScreen() {
       if (dispatch.mutualAid?.acknowledgedAt != null && !releasedRef.current) {
         releasedRef.current = true;
         silence();
-        setAlertShowsOverLockScreen(false);
+        if (navigationRef.current.isFocused?.() !== false) setAlertShowsOverLockScreen(false);
       }
     } catch (loadError) {
       console.warn('[mutual-aid] reading the dispatch failed', loadError);

@@ -39,6 +39,34 @@ describe('createApparatusRepository', () => {
     });
   });
 
+  it('carries the out-of-service reason, start and elapsed time on listed apparatus', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-14T01:00:00Z'));
+    const startAt = Math.floor(Date.now() / 1000) - 3600;
+    const send = vi.fn().mockResolvedValue({
+      Items: [
+        {
+          apparatusId: 'APP-ENGINE-2',
+          unitId: 'ENGINE-2',
+          type: 'ENGINE',
+          status: 'OUT_OF_SERVICE',
+          outOfServiceReason: 'Brake repair',
+          outOfServiceStartAt: startAt,
+        },
+        { apparatusId: 'APP-ENGINE-3', unitId: 'ENGINE-3', type: 'ENGINE', status: 'IN_SERVICE' },
+      ],
+    });
+    const repository = createApparatusRepository(fakeClient(send), TABLE_NAME);
+
+    const result = await repository.listApparatus(DEPT_ID);
+
+    expect(result[0]).toMatchObject({
+      outOfService: { reason: 'Brake repair', startAt, elapsedSeconds: 3600 },
+    });
+    expect(result[1]).not.toHaveProperty('outOfService');
+    vi.useRealTimers();
+  });
+
   it('resolves detail via gsi3pk/gsi3sk on unitId, never a direct GetItem by unitId', async () => {
     const send = vi.fn().mockResolvedValue({
       Items: [
@@ -147,8 +175,14 @@ describe('getApparatusDetail (AC3)', () => {
         const items = (options.defectItems ?? []).filter((item) => item.status === openValue);
         return Promise.resolve({ Items: items });
       }
-      if (prefix === 'TEST#') {
-        return Promise.resolve({ Items: options.testItems ?? [] });
+      if (typeof prefix === 'string' && prefix.startsWith('TEST#')) {
+        const skOf = (item: Record<string, unknown>): string =>
+          `TEST#${String(item.testType)}#${String(item.testDate)}`;
+        const matching = (options.testItems ?? [])
+          .filter((item) => skOf(item).startsWith(prefix))
+          .sort((a, b) => skOf(b).localeCompare(skOf(a)));
+        const limit = input.Limit as number | undefined;
+        return Promise.resolve({ Items: limit ? matching.slice(0, limit) : matching });
       }
       return Promise.resolve({ Items: options.apparatusItems ?? [] });
     });
@@ -212,6 +246,33 @@ describe('getApparatusDetail (AC3)', () => {
       ],
       failedTests: [{ testType: 'HOSE', testDate: '2026-05-01', nextDueDate: '2027-05-01' }],
     });
+  });
+
+  it('finds the latest AERIAL FAIL even when PUMP/LADDER/HOSE history exceeds one page of test rows', async () => {
+    const history = ['PUMP', 'LADDER', 'HOSE'].flatMap((testType) =>
+      Array.from({ length: 7 }, (_, year) => ({
+        testType,
+        testDate: `${2020 + year}-05-01`,
+        result: 'PASS',
+        nextDueDate: `${2021 + year}-05-01`,
+      })),
+    );
+    const { client } = fakeDetailClient({
+      apparatusItems: [
+        { apparatusId: 'APP-LADDER-1', unitId: 'L1', type: 'LADDER', status: 'IN_SERVICE' },
+      ],
+      testItems: [
+        ...history,
+        { testType: 'AERIAL', testDate: '2026-05-01', result: 'FAIL', nextDueDate: '2027-05-01' },
+      ],
+    });
+    const repository = createApparatusRepository(client, TABLE_NAME);
+
+    const result = await repository.getApparatusDetail(DEPT_ID, 'L1');
+
+    expect(result?.failedTests).toEqual([
+      { testType: 'AERIAL', testDate: '2026-05-01', nextDueDate: '2027-05-01' },
+    ]);
   });
 
   it('returns a null photoS3Key when the defect has no photo', async () => {

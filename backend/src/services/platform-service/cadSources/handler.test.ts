@@ -24,6 +24,7 @@ process.env.CAD_WEBHOOK_URL = 'https://cad.example.org/api/v1/alerting/ingress/c
 process.env.CAD_WEBHOOK_SECRET_PREFIX = 'boxalarm-dev-cad-webhook/';
 process.env.CAD_WEBHOOK_USAGE_PLAN_ID = 'plan-1';
 
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { Decision } from '@aws-sdk/client-verifiedpermissions';
 import {
   ResourceNotFoundException,
@@ -78,6 +79,7 @@ beforeEach(() => {
   vpSend.mockResolvedValue({ decision: Decision.ALLOW });
   ddbSend.mockImplementation((command: Command) => {
     if (command.constructor.name === 'GetCommand') return Promise.resolve({ Item: stored });
+    if (command.constructor.name === 'PutCommand') return Promise.resolve({});
     if (command.constructor.name === 'TransactWriteCommand') {
       const item = (command.input.TransactItems as { Put: { Item: Record<string, unknown> } }[])[0]!
         .Put.Item;
@@ -183,6 +185,40 @@ describe('PUT /platform/cad-sources', () => {
       SecretId: 'boxalarm-dev-cad-webhook/nichols-fd/county',
       ForceDeleteWithoutRecovery: true,
     });
+  });
+
+  it('a failed secret delete is logged, returned as secretCleanupFailed, and not retried silently', async () => {
+    setSettingsSecretsClient({
+      send: vi.fn().mockRejectedValue(new Error('throttled')),
+    } as unknown as SecretsManagerClient);
+    stored = {
+      version: 2,
+      value: {
+        sources: [
+          {
+            sourceId: 'county',
+            label: 'County',
+            enabled: true,
+            webhookEnabled: true,
+            webhookKey: {
+              keyId: 'nichols-fd.county',
+              secretName: 'other-prefix/x',
+              rotatedAt: 'x',
+            },
+          },
+        ],
+      },
+    };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const response = (await handler(
+      event('PUT /api/v1/platform/cad-sources', { sources: [], expectedVersion: 2 }),
+    )) as { statusCode: number; body: string };
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toMatchObject({ secretCleanupFailed: 1 });
+    const logged = [...errorSpy.mock.calls, ...vi.mocked(console.log).mock.calls]
+      .map(([l]) => String(l))
+      .join('\n');
+    expect(logged).toContain('platform.cadSources.secretDeleteFailed');
   });
 
   it('is 400 with field errors for an invalid template', async () => {
@@ -431,6 +467,90 @@ describe('POST /platform/cad-sources/{sourceId}/webhook-key', () => {
       deptId: 'nichols-fd',
       sourceId: 'county',
       current: current.secret,
+    });
+  });
+
+  it('a rotation that fails after the secret was written puts the live key back, so a retry keeps it as previous', async () => {
+    await saveSource();
+    const first = JSON.parse((await rotate()).body) as { secret: string };
+    const original = gw.getMockImplementation();
+    gw.mockRejectedValueOnce(new Error('throttled'));
+    await expect(rotate()).rejects.toThrow('throttled');
+    expect(secretValue()).toMatchObject({ current: first.secret });
+    expect(secretValue().previous).toBeUndefined();
+
+    gw.mockImplementation(original as never);
+    const realPut = ddbSend.getMockImplementation() as (command: Command) => Promise<unknown>;
+    ddbSend.mockImplementation((command: Command) =>
+      command.constructor.name === 'TransactWriteCommand'
+        ? Promise.reject(new Error('ddb down'))
+        : realPut(command),
+    );
+    await expect(rotate()).rejects.toThrow('ddb down');
+    expect(secretValue()).toMatchObject({ current: first.secret });
+    expect(secretValue().previous).toBeUndefined();
+    const deleted = gw.mock.calls
+      .filter(([c]) => (c as Command).constructor.name === 'DeleteApiKeyCommand')
+      .map(([c]) => (c as Command).input.apiKey);
+    expect(deleted).toEqual(['ak-2']);
+
+    ddbSend.mockImplementation(realPut);
+    const third = JSON.parse((await rotate()).body) as { secret: string };
+    expect(secretValue()).toMatchObject({ current: third.secret, previous: first.secret });
+    expect(Number(secretValue().previousExpiresAt)).toBeGreaterThan(Date.now() / 1000);
+  });
+
+  it('refuses a second key change for the same source while the first holds the lease (409)', async () => {
+    await saveSource();
+    const realPut = ddbSend.getMockImplementation() as (command: Command) => Promise<unknown>;
+    ddbSend.mockImplementation((command: Command) =>
+      command.constructor.name === 'PutCommand'
+        ? Promise.reject(new ConditionalCheckFailedException({ message: 'held', $metadata: {} }))
+        : realPut(command),
+    );
+    expect((await rotate()).statusCode).toBe(409);
+    const revoke = (await rotateHandler(
+      event('POST /api/v1/platform/cad-sources/{sourceId}/webhook-key/revoke-previous', undefined, {
+        sourceId: 'county',
+      }),
+    )) as { statusCode: number };
+    expect(revoke.statusCode).toBe(409);
+    expect(smSend).not.toHaveBeenCalled();
+  });
+
+  it('takes the lease before reading the secret and releases it after the rotation', async () => {
+    await saveSource();
+    await rotate();
+    const names = ddbSend.mock.calls.map(([c]) => (c as Command).constructor.name);
+    const puts = ddbSend.mock.calls
+      .filter(([c]) => (c as Command).constructor.name === 'PutCommand')
+      .map(([c]) => (c as Command).input);
+    expect(puts).toHaveLength(2);
+    expect(puts[0]).toMatchObject({
+      Item: { sk: 'CADKEY_LOCK#county', pk: 'DEPT#nichols-fd' },
+      ConditionExpression: 'attribute_not_exists(pk) OR leaseUntil < :now',
+    });
+    expect(puts[1]).toMatchObject({ Item: { leaseUntil: 0 } });
+    expect(names.indexOf('PutCommand')).toBeLessThan(names.indexOf('TransactWriteCommand'));
+  });
+
+  it('a re-created source does not inherit the key of a secret its config does not reference (security review M5)', async () => {
+    await saveSource();
+    secretStore.set(
+      NAME,
+      JSON.stringify({ deptId: 'nichols-fd', sourceId: 'county', current: 'o'.repeat(64) }),
+    );
+    const body = JSON.parse((await rotate()).body) as {
+      secret: string;
+      previousKeyStillValid: boolean;
+      previousKeyExpiresAt: string | null;
+    };
+    expect(body.previousKeyStillValid).toBe(false);
+    expect(body.previousKeyExpiresAt).toBeNull();
+    expect(secretValue()).toEqual({
+      deptId: 'nichols-fd',
+      sourceId: 'county',
+      current: body.secret,
     });
   });
 

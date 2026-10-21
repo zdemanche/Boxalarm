@@ -20,7 +20,7 @@ const buttonStyle: CSSProperties = {
   borderRadius: radius.default,
 };
 
-export function SignInPage() {
+export function SignInPage({ returnTo }: { returnTo?: string }) {
   const { signIn } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
@@ -31,7 +31,7 @@ export function SignInPage() {
 
   const handleSignIn = () => {
     setError(null);
-    signIn().catch(() => {
+    signIn(returnTo).catch(() => {
       setError('Sign-in could not be started. Check your connection and try again.');
     });
   };

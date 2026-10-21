@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, TextInput } from '../../components/ui';
-import { formatCalendarDate, toCalendarDate } from '../../lib/dates';
+import { formatCalendarDate, parseCalendarDate, toCalendarDate } from '../../lib/dates';
 import { createMaintenance, getMaintenance } from './api';
 import type { CreateMaintenanceInput } from './types';
 import styles from './Apparatus.module.css';
@@ -87,7 +87,7 @@ export function MaintenanceTab({ apparatusId }: { apparatusId: string }) {
               vendor: form.vendor,
               cost,
               scheduledNextAt: form.scheduledNextAt
-                ? Math.floor(new Date(form.scheduledNextAt).getTime() / 1000)
+                ? Math.floor(parseCalendarDate(form.scheduledNextAt).getTime() / 1000)
                 : null,
             });
           }}

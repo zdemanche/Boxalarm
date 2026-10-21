@@ -191,4 +191,65 @@ describe('disposalHandler', () => {
     expect(result.statusCode).toBe(400);
     expect(send).not.toHaveBeenCalled();
   });
+
+  it('returns 400 when candidates is absent, so the UI cannot report a false success', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    const send = vi.fn().mockResolvedValue({});
+    const { createHandler } = await import('./disposalHandler.js');
+    const handler = createHandler({ docClient: fakeDocClient(send), kmsClient: fakeKmsClient() });
+
+    const result = (await handler(
+      buildEvent('POST /api/v1/platform/retention/disposal', ADMIN, JSON.stringify({})),
+    )) as { statusCode: number };
+
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('audits under the validated caller trace id and returns it so the audit page can search it', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const send = vi.fn().mockResolvedValue({});
+    const { createHandler } = await import('./disposalHandler.js');
+    const handler = createHandler({ docClient: fakeDocClient(send), kmsClient: fakeKmsClient() });
+    const event = buildEvent(
+      'POST /api/v1/platform/retention/disposal',
+      ADMIN,
+      JSON.stringify({ candidates: [] }),
+    );
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+
+    const result = (await handler({
+      ...event,
+      headers: { ...event.headers, traceparent: `00-${traceId}-0000000000000001-01` },
+    })) as { statusCode: number; body: string };
+
+    expect(result.statusCode).toBe(200);
+    expect(JSON.parse(result.body)).toMatchObject({ traceId });
+    const audits = send.mock.calls
+      .map(([command]) => (command as { input?: { Item?: Record<string, unknown> } }).input?.Item)
+      .filter((item) => item?.entityType === 'AUDIT_LOG_ENTRY');
+    expect(audits.length).toBeGreaterThan(0);
+    for (const audit of audits) {
+      expect(audit?.mutatedEntityId).toBe(traceId);
+    }
+  });
+
+  it('returns 400 when a candidate locator exceeds the length cap', async () => {
+    mockVerifiedPermissions(() => Promise.resolve({ decision: 'ALLOW' }));
+    const send = vi.fn().mockResolvedValue({});
+    const { createHandler } = await import('./disposalHandler.js');
+    const handler = createHandler({ docClient: fakeDocClient(send), kmsClient: fakeKmsClient() });
+
+    const result = (await handler(
+      buildEvent(
+        'POST /api/v1/platform/retention/disposal',
+        ADMIN,
+        JSON.stringify({ candidates: [{ pk: `DEPT#${DEPT_ID}#${'x'.repeat(300)}`, sk: 'a' }] }),
+      ),
+    )) as { statusCode: number };
+
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
 });

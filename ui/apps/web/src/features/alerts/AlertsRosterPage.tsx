@@ -4,6 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { ApiError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
+import { listMembers } from '../personnel/api';
 import {
   Button,
   Card,
@@ -27,6 +28,7 @@ import {
   submitManualDispatch,
 } from './api';
 import { PrePlanPanel } from './PrePlanPanel';
+import { StaleNotice } from './StaleNotice';
 import { ToneLadderPanel } from './ToneLadderPanel';
 import type {
   ActiveDispatch,
@@ -57,21 +59,28 @@ function ackLabel(status: RosterEntry['ackStatus']): string {
   return 'Awaiting response';
 }
 
+function occupantNote(entry: RosterEntry | undefined): string {
+  if (!entry) return '';
+  if (entry.ackStatus === 'NOT_RESPONDING') return ' (not responding)';
+  if (entry.ackStatus === 'UNANSWERED') return ' (no answer)';
+  return '';
+}
+
 /** design.md §2.3: both kinds of responding are ok; not responding and no answer are neutral. */
 function ackRole(status: RosterEntry['ackStatus']): StatusRole {
   return status === 'RESPONDING' || status === 'DIRECT_TO_SCENE' ? 'ok' : 'neutral';
 }
 
 function receiptLabel(status: DeliveryReceipt['status']): string {
-  return status === 'SENT_UNCONFIRMED'
-    ? 'Sent, not confirmed delivered'
-    : status.charAt(0) + status.slice(1).toLowerCase();
+  if (status === 'SENT_UNCONFIRMED') return 'Sent, not confirmed delivered';
+  if (status === 'NOT_SENT') return 'Not sent';
+  return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
-/** Delivered/opened ok, failed alarm, sent-but-unconfirmed a caution (a11y-spec §1.8). */
+/** Delivered/opened ok, failed or never sent alarm, sent-but-unconfirmed a caution (a11y-spec §1.8). */
 function receiptRole(status: DeliveryReceipt['status']): StatusRole {
   if (status === 'DELIVERED' || status === 'OPENED') return 'ok';
-  if (status === 'FAILED') return 'danger';
+  if (status === 'FAILED' || status === 'NOT_SENT') return 'danger';
   if (status === 'SENT_UNCONFIRMED') return 'warning';
   return 'info';
 }
@@ -166,7 +175,9 @@ function ManualEntryForm({ onCreated }: { onCreated: (dispatchId: string) => voi
         error as { problem?: { status?: number; detail?: string; errors?: FieldError[] } }
       ).problem;
       if (problem?.status === 409) {
-        setFormError('This dispatch was already entered. It has not been resubmitted.');
+        setFormError(
+          'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+        );
       } else if (problem?.errors) {
         setFieldErrors(problem.errors);
       } else {
@@ -288,6 +299,19 @@ function ReceiptsUnavailable({ error }: { error: unknown }) {
   );
 }
 
+function useMemberNameOf(): (memberId: string) => string {
+  const auth = useAuth();
+  const members = useQuery({
+    queryKey: ['personnel', 'members'],
+    queryFn: () => listMembers(auth),
+    staleTime: 60_000,
+  });
+  return (memberId) => {
+    const member = members.data?.find((m) => m.memberId === memberId);
+    return member ? `${member.firstName} ${member.lastName}` : memberId;
+  };
+}
+
 function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
   const query = useQuery({
@@ -295,28 +319,23 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getReceipts(auth, dispatchId),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
-  // Receipts carry member ids; the roster (already fetched for this dispatch) has the names.
-  const roster = useQuery({
-    queryKey: ['alerts', 'roster', dispatchId],
-    queryFn: () => getRoster(auth, dispatchId),
-    refetchInterval: REFETCH_INTERVAL_MS,
-  });
-  const nameOf = (memberId: string): string =>
-    roster.data?.find((entry) => entry.memberId === memberId)?.name ?? memberId;
+  const nameOf = useMemberNameOf();
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return <ReceiptsUnavailable error={query.error} />;
   }
 
-  const byMember = new Map<string, Map<string, DeliveryReceipt>>();
+  const byMember = new Map<string, Map<string, DeliveryReceipt[]>>();
   for (const receipt of query.data ?? []) {
-    const row = byMember.get(receipt.memberId) ?? new Map();
-    row.set(receipt.channel.toLowerCase(), receipt);
+    const row = byMember.get(receipt.memberId) ?? new Map<string, DeliveryReceipt[]>();
+    const channel = receipt.channel.toLowerCase();
+    row.set(channel, [...(row.get(channel) ?? []), receipt]);
     byMember.set(receipt.memberId, row);
   }
 
   return (
     <Card title="Delivery receipts">
+      <StaleNotice query={query} />
       <div role="region" aria-label="Delivery receipts" tabIndex={0} className={styles.tableWrap}>
         <table className={styles.table}>
           <caption className="visually-hidden">Delivery receipts</caption>
@@ -335,16 +354,22 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
               <tr key={memberId}>
                 <th scope="row">{nameOf(memberId)}</th>
                 {RECEIPT_CHANNELS.map((channel) => {
-                  const receipt = channels.get(channel);
+                  const attempts = [...(channels.get(channel) ?? [])].sort(
+                    (a, b) => a.toneSequence - b.toneSequence,
+                  );
                   return (
                     <td key={channel}>
-                      {receipt ? (
-                        <StatusChip status={receiptRole(receipt.status)}>
-                          {receiptLabel(receipt.status)}
-                        </StatusChip>
-                      ) : (
-                        '—'
-                      )}
+                      {attempts.length === 0
+                        ? '—'
+                        : attempts.map((receipt) => (
+                            <StatusChip
+                              key={receipt.toneSequence}
+                              status={receiptRole(receipt.status)}
+                            >
+                              {attempts.length > 1 ? `Tone ${receipt.toneSequence}: ` : ''}
+                              {receiptLabel(receipt.status)}
+                            </StatusChip>
+                          ))}
                     </td>
                   );
                 })}
@@ -359,13 +384,14 @@ function ReceiptsTable({ dispatchId }: { dispatchId: string }) {
 
 function RosterTable({ dispatchId }: { dispatchId: string }) {
   const auth = useAuth();
+  const nameOf = useMemberNameOf();
   const query = useQuery({
     queryKey: ['alerts', 'roster', dispatchId],
     queryFn: () => getRoster(auth, dispatchId),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Roster is unavailable.</p>
@@ -375,6 +401,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card title="Live roster">
+      <StaleNotice query={query} />
       <div role="region" aria-label="Live roster" tabIndex={0} className={styles.tableWrap}>
         <table className={styles.table}>
           <caption className="visually-hidden">Live roster</caption>
@@ -392,7 +419,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
           <tbody>
             {(query.data ?? []).map((entry) => (
               <tr key={entry.memberId}>
-                <th scope="row">{entry.name}</th>
+                <th scope="row">{nameOf(entry.memberId)}</th>
                 <td>
                   <StatusChip status={ackRole(entry.ackStatus)}>
                     {ackLabel(entry.ackStatus)}
@@ -403,7 +430,7 @@ function RosterTable({ dispatchId }: { dispatchId: string }) {
                 <td className={styles.endCell}>
                   <Link
                     to={`/alerts/diagnostics?dispatchId=${encodeURIComponent(dispatchId)}&memberId=${encodeURIComponent(entry.memberId)}`}
-                    aria-label={`Delivery diagnostics for ${entry.name}`}
+                    aria-label={`Delivery diagnostics for ${nameOf(entry.memberId)}`}
                   >
                     Diagnose
                   </Link>
@@ -426,6 +453,7 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getRidingBoard(auth, dispatchId),
     refetchInterval: REFETCH_INTERVAL_MS,
   });
+  const nameOf = useMemberNameOf();
   const rosterQuery = useQuery({
     queryKey: ['alerts', 'roster', dispatchId],
     queryFn: () => getRoster(auth, dispatchId),
@@ -466,7 +494,7 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
     },
   });
 
-  if (boardQuery.error) {
+  if (boardQuery.error && !boardQuery.data) {
     return (
       <ApiForbiddenGate error={boardQuery.error} embedded>
         <p>Riding board is unavailable.</p>
@@ -480,6 +508,7 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
 
   return (
     <Card title="Riding board">
+      <StaleNotice query={boardQuery.error ? boardQuery : rosterQuery} />
       {assignError ? (
         <p role="alert" aria-live="assertive" className={styles.alert}>
           <AlertTriangle size={16} aria-hidden="true" />
@@ -501,31 +530,40 @@ function RidingBoardSection({ dispatchId }: { dispatchId: string }) {
             ) : null}
           </div>
           <ul className={styles.seats}>
-            {unit.positions.map((position) => (
-              <li key={position.code}>
-                <Select
-                  label={`${position.label}${position.assignment?.qualStatus === 'UNMET' ? ' (missing qualification)' : ''}`}
-                  disabled={!unit.assignable}
-                  value={position.assignment?.memberId ?? ''}
-                  onChange={(e) =>
-                    assignMutation.mutate({
-                      unitId: unit.unitId,
-                      positionCode: position.code,
-                      memberId: e.target.value || null,
-                      expectedVersion: position.assignment?.version ?? 0,
-                    })
-                  }
-                >
-                  <option value="">Unassigned</option>
-                  {assignable.map((member) => (
-                    <option key={member.memberId} value={member.memberId}>
-                      {member.name}
-                      {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
-                    </option>
-                  ))}
-                </Select>
-              </li>
-            ))}
+            {unit.positions.map((position) => {
+              const occupant = position.assignment?.memberId;
+              return (
+                <li key={position.code}>
+                  <Select
+                    label={`${position.label}${position.assignment?.qualStatus === 'UNMET' ? ' (missing qualification)' : ''}`}
+                    disabled={!unit.assignable}
+                    value={position.assignment?.memberId ?? ''}
+                    onChange={(e) =>
+                      assignMutation.mutate({
+                        unitId: unit.unitId,
+                        positionCode: position.code,
+                        memberId: e.target.value || null,
+                        expectedVersion: position.version,
+                      })
+                    }
+                  >
+                    <option value="">Unassigned</option>
+                    {occupant && !assignable.some((m) => m.memberId === occupant) ? (
+                      <option value={occupant}>
+                        {nameOf(occupant)}
+                        {occupantNote(rosterQuery.data?.find((m) => m.memberId === occupant))}
+                      </option>
+                    ) : null}
+                    {assignable.map((member) => (
+                      <option key={member.memberId} value={member.memberId}>
+                        {nameOf(member.memberId)}
+                        {member.ackStatus === 'DIRECT_TO_SCENE' ? ' (direct to scene)' : ''}
+                      </option>
+                    ))}
+                  </Select>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ))}
@@ -544,7 +582,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
     queryFn: () => getDispatch(auth, dispatchId),
   });
 
-  if (query.error) {
+  if (query.error && !query.data) {
     return (
       <ApiForbiddenGate error={query.error} embedded>
         <p>Dispatch details are unavailable.</p>
@@ -562,6 +600,7 @@ function DispatchHeader({ dispatchId }: { dispatchId: string }) {
   return (
     <>
       <Card>
+        <StaleNotice query={query} />
         {query.data.verifyRequired ? <VerifyBanner /> : null}
         <h2 className={styles.dispatchTitle}>{query.data.incidentType}</h2>
         <p className={styles.address}>{query.data.address}</p>

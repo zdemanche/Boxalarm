@@ -26,6 +26,7 @@ function detailBody(
         deptId: 'NICHOLS',
         dispatchId: 'DISPATCH-1',
         apparatusId: 'APP-ENGINE-2',
+        positionCode: 'OFFICER',
         memberId: 'MBR-0012',
         previousMemberId: null,
         ...payloadOverrides,
@@ -90,7 +91,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       if (command.constructor.name === 'GetCommand') {
         const sk = (command.input.Key as { sk: string }).sk;
         if (sk.startsWith('RESPONSE#')) {
-          return { Item: { assignedPositions: ['MBR-0034'], assignedPositionsUpdatedAt: 500 } };
+          return { Item: { seats: { OFFICER: { memberId: 'MBR-0034', updatedAt: 500 } } } };
         }
         return {};
       }
@@ -119,7 +120,7 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       if (command.constructor.name === 'GetCommand') {
         const sk = (command.input.Key as { sk: string }).sk;
         if (sk.startsWith('RESPONSE#')) {
-          return { Item: { assignedPositions: ['MBR-0012'], assignedPositionsUpdatedAt: 500 } };
+          return { Item: { seats: { OFFICER: { memberId: 'MBR-0012', updatedAt: 500 } } } };
         }
         return {};
       }
@@ -146,6 +147,95 @@ describe('ridingAssignmentConsumer handler (entrypoint, AC6)', () => {
       updateCall?.[0] as { input: { ExpressionAttributeValues: Record<string, unknown> } }
     ).input.ExpressionAttributeValues;
     expect(values[':next']).toEqual([]);
+  });
+
+  it('applies an older event for a different seat instead of dropping it as stale', async () => {
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'GetCommand') {
+        const sk = (command.input.Key as { sk: string }).sk;
+        if (sk.startsWith('RESPONSE#')) {
+          const later = Date.parse('2026-09-14T12:00:05.000Z');
+          return { Item: { seats: { DRIVER: { memberId: 'MBR-0099', updatedAt: later } } } };
+        }
+      }
+      return {};
+    });
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    const input = responseUnitUpdate(send)?.[0].input as {
+      ExpressionAttributeValues: Record<string, unknown>;
+    };
+    expect(input.ExpressionAttributeValues[':next']).toEqual(['MBR-0099', 'MBR-0012']);
+  });
+
+  it('skips an older event for the same seat as stale', async () => {
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'GetCommand') {
+        const sk = (command.input.Key as { sk: string }).sk;
+        if (sk.startsWith('RESPONSE#')) {
+          const later = Date.parse('2026-09-14T12:00:05.000Z');
+          return { Item: { seats: { OFFICER: { memberId: 'MBR-0099', updatedAt: later } } } };
+        }
+      }
+      return {};
+    });
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    expect(responseUnitUpdate(send)).toBeUndefined();
+  });
+
+  it.each([
+    ['no row yet', undefined, 'attribute_not_exists(pk)', false],
+    [
+      'row without seats',
+      { entityType: 'INCIDENT_RESPONSE_UNIT' },
+      'attribute_not_exists(seats)',
+      false,
+    ],
+    [
+      'row with seats',
+      { seats: { DRIVER: { memberId: 'MBR-0099', updatedAt: 1 } } },
+      'seats = :priorSeats',
+      true,
+    ],
+  ])('builds a condition DynamoDB accepts when %s', async (_name, item, condition, hasPrior) => {
+    const send = stubSend((command) => {
+      if (command.constructor.name === 'GetCommand') {
+        const sk = (command.input.Key as { sk: string }).sk;
+        if (sk.startsWith('RESPONSE#')) return { Item: item };
+      }
+      return {};
+    });
+    const { createHandler } = await import('./ridingAssignmentConsumer.js');
+    const handler = createHandler({ client: { send } as unknown as DynamoDBDocumentClient });
+
+    await handler(
+      { Records: [{ messageId: 'm1', body: detailBody() }] } as unknown as SQSEvent,
+      {} as never,
+      () => undefined,
+    );
+
+    const input = responseUnitUpdate(send)?.[0].input as {
+      ConditionExpression: string;
+      ExpressionAttributeValues: Record<string, unknown>;
+    };
+    expect(input.ConditionExpression).toBe(condition);
+    expect(input.ConditionExpression).not.toContain('if_not_exists');
+    expect(':priorSeats' in input.ExpressionAttributeValues).toBe(hasPrior);
   });
 
   it('skips a duplicate eventId redelivery without touching assignedPositions (dedup)', async () => {

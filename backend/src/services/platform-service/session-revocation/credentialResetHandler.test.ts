@@ -26,8 +26,16 @@ function buildEvent(body: unknown): GuardEvent {
   } as unknown as GuardEvent;
 }
 
+function identityIn(deptId: string | undefined) {
+  return vi
+    .fn()
+    .mockImplementation((_client: unknown, input: { username: string }) =>
+      Promise.resolve({ deptId, sub: input.username }),
+    );
+}
+
 interface Mocks {
-  resolveMemberDeptId: ReturnType<typeof vi.fn>;
+  resolveMemberIdentity: ReturnType<typeof vi.fn>;
   isProtectedTarget: ReturnType<typeof vi.fn>;
   resetMemberPassword: ReturnType<typeof vi.fn>;
   revokeMemberSession: ReturnType<typeof vi.fn>;
@@ -35,16 +43,17 @@ interface Mocks {
 
 function mockDeps(overrides: Partial<Mocks> = {}): Mocks {
   const mocks: Mocks = {
-    resolveMemberDeptId: vi.fn().mockResolvedValue('NICHOLS'),
+    resolveMemberIdentity: identityIn('NICHOLS'),
     isProtectedTarget: vi.fn().mockResolvedValue(false),
     resetMemberPassword: vi.fn().mockResolvedValue(undefined),
     revokeMemberSession: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
-  vi.doMock('./cognitoRevocationClient.js', () => ({
+  vi.doMock('./cognitoRevocationClient.js', async (importOriginal) => ({
     readRevocationConfig: () => ({ userPoolId: 'pool-1' }),
     createRevocationClient: () => ({}),
-    mayActOnProtectedTarget: (groups: string) => groups.split(' ').includes('ADMIN'),
+    mayActOnProtectedTarget: (await importOriginal<typeof import('./cognitoRevocationClient.js')>())
+      .mayActOnProtectedTarget,
     ...mocks,
   }));
   vi.doMock('@boxalarm/authz', async () => {
@@ -139,7 +148,7 @@ describe('credentialResetHandler', () => {
   });
 
   it('refuses a member in another department without touching Cognito state (F9.6)', async () => {
-    const mocks = mockDeps({ resolveMemberDeptId: vi.fn().mockResolvedValue('OTHER') });
+    const mocks = mockDeps({ resolveMemberIdentity: identityIn('OTHER') });
     const handler = await load();
 
     const result = await handler(buildEvent({ memberId: 'sub-9' }), ADMIN);
@@ -149,8 +158,22 @@ describe('credentialResetHandler', () => {
     expect(mocks.revokeMemberSession).not.toHaveBeenCalled();
   });
 
+  it('answers 404 and changes nothing when memberId is a login name rather than the sub', async () => {
+    const mocks = mockDeps({
+      resolveMemberIdentity: vi.fn().mockResolvedValue({ deptId: 'NICHOLS', sub: 'uuid-1' }),
+    });
+    const handler = await load();
+
+    const result = await handler(buildEvent({ memberId: 'jsmith@nicholsfd.org' }), ADMIN);
+
+    expect(result.statusCode).toBe(404);
+    expect(mocks.resetMemberPassword).not.toHaveBeenCalled();
+    expect(mocks.revokeMemberSession).not.toHaveBeenCalled();
+    expect(writeRevocationMarker).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the target has no department attribute', async () => {
-    const mocks = mockDeps({ resolveMemberDeptId: vi.fn().mockResolvedValue(undefined) });
+    const mocks = mockDeps({ resolveMemberIdentity: identityIn(undefined) });
     const handler = await load();
 
     expect((await handler(buildEvent({ memberId: 'sub-9' }), ADMIN)).statusCode).toBe(403);
@@ -185,7 +208,7 @@ describe('credentialResetHandler', () => {
 
   it('answers 404 for an unknown member', async () => {
     mockDeps({
-      resolveMemberDeptId: vi
+      resolveMemberIdentity: vi
         .fn()
         .mockRejectedValue(new UserNotFoundException({ message: 'x', $metadata: {} })),
     });
@@ -270,7 +293,9 @@ describe('credentialResetHandler', () => {
 describe('credentialResetHandler Cedar wiring', () => {
   it('is gated by the ResetMemberCredentials action and alarms on every invocation', async () => {
     vi.resetModules();
-    const withAuthorization = vi.fn((inner: unknown) => inner);
+    const withAuthorization = vi.fn<
+      (inner: unknown, options: { resourceId: (event: unknown) => string }) => unknown
+    >((inner) => inner);
     vi.doMock('@boxalarm/authz', async () => {
       const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
       return { ...actual, withAuthorization };
@@ -287,6 +312,8 @@ describe('credentialResetHandler Cedar wiring', () => {
         alarmOnInvocation: 'ResetMemberCredentialsInvoked',
       }),
     );
+    const options = withAuthorization.mock.calls[0]?.[1];
+    expect(options?.resourceId({ body: JSON.stringify({}) })).not.toBe('');
     vi.doUnmock('@boxalarm/authz');
   });
 });

@@ -229,6 +229,28 @@ describe('handler (POST /api/v1/alerting/dispatches)', () => {
     expect(result.statusCode).toBe(409);
   });
 
+  it('bounds the manual reference lock so a reused reference is not refused forever', async () => {
+    const { authorizeManualDispatchSubmission } = await import('./authorization.js');
+    vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');
+    const { createManualDispatch } = await import('./repository.js');
+    vi.mocked(createManualDispatch).mockClear();
+    vi.mocked(createManualDispatch).mockResolvedValue({ outcome: 'created', dispatchId: 'D-3' });
+
+    const { handler } = await import('./handler.js');
+    const result = (await handler(
+      buildEvent({
+        headers: AUTH_HEADERS,
+        authorizerContext: AUTH_CONTEXT,
+        body: JSON.stringify(VALID_BODY),
+      }),
+      {} as never,
+      () => undefined,
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(201);
+    const input = vi.mocked(createManualDispatch).mock.calls.at(-1)?.[2];
+    expect(input?.lockExpiresAt).toBe((input?.dispatchedAt ?? 0) + 10 * 60);
+  });
+
   it('returns 503 when DynamoDB is unavailable (non-conditional failure)', async () => {
     const { authorizeManualDispatchSubmission } = await import('./authorization.js');
     vi.mocked(authorizeManualDispatchSubmission).mockResolvedValue('ALLOWED');

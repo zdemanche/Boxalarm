@@ -112,10 +112,18 @@ describe('inventory ppe issue handler', () => {
 
   it.each([
     ['missing itemType', JSON.stringify({ size: '44R', issueDate: '2026-01-10' })],
+    [
+      'itemType with no letters or digits',
+      JSON.stringify({ itemType: '###', size: '44R', issueDate: '2026-01-10' }),
+    ],
     ['missing size', JSON.stringify({ itemType: 'TURNOUT_COAT', issueDate: '2026-01-10' })],
     [
       'non-ISO issueDate',
       JSON.stringify({ itemType: 'TURNOUT_COAT', size: '44R', issueDate: '01/10/2026' }),
+    ],
+    [
+      'impossible calendar issueDate',
+      JSON.stringify({ itemType: 'TURNOUT_COAT', size: '44R', issueDate: '2025-02-31' }),
     ],
     [
       'future issueDate',

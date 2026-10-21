@@ -27,6 +27,14 @@ type BodyValidationResult =
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+function isCalendarDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) {
+    return false;
+  }
+  const parsed = Date.parse(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
+}
+
 function serverErrorProblem(traceId: string): ProblemResponse {
   return {
     statusCode: 500,
@@ -75,17 +83,17 @@ function validateBody(raw: string | undefined): BodyValidationResult {
   const issuingAuthority = requireString(parsed.issuingAuthority, 'issuingAuthority', errors);
   const attachmentFilename = validateAttachment(parsed.attachment, errors);
 
-  if (issueDate !== undefined && !ISO_DATE.test(issueDate)) {
-    errors.push({ field: 'issueDate', detail: 'must be an ISO date (YYYY-MM-DD)' });
+  if (issueDate !== undefined && !isCalendarDate(issueDate)) {
+    errors.push({ field: 'issueDate', detail: 'must be a valid calendar date (YYYY-MM-DD)' });
   }
-  if (expiryDate !== undefined && !ISO_DATE.test(expiryDate)) {
-    errors.push({ field: 'expiryDate', detail: 'must be an ISO date (YYYY-MM-DD)' });
+  if (expiryDate !== undefined && !isCalendarDate(expiryDate)) {
+    errors.push({ field: 'expiryDate', detail: 'must be a valid calendar date (YYYY-MM-DD)' });
   }
   if (
     issueDate !== undefined &&
     expiryDate !== undefined &&
-    ISO_DATE.test(issueDate) &&
-    ISO_DATE.test(expiryDate) &&
+    isCalendarDate(issueDate) &&
+    isCalendarDate(expiryDate) &&
     expiryDate < issueDate
   ) {
     errors.push({ field: 'expiryDate', detail: 'must not be before issueDate' });

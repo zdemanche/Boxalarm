@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
+import { nerisOpenKey } from '../submissionRepository.js';
 import type { NerisApi, NerisHistoryEntry } from './api.js';
 import {
   MAX_RECORDS_PER_RUN,
@@ -83,6 +85,26 @@ describe('pollRecord', () => {
     expect(sent.map((c) => c.constructor.name)).toEqual(['GetCommand']);
   });
 
+  it('drops a final record from the work list when its stored status is already final', async () => {
+    const { client, sent } = ddb({ ...METADATA, nerisStatus: 'APPROVED' });
+    const outcome = await pollRecord(
+      client,
+      'table',
+      api([{ status: 'APPROVED', current: true, lastModified: '2026-09-29T10:05:00Z' }]),
+      DEPT,
+      'FD09190828',
+      OPEN,
+      1_798_100_000,
+    );
+    expect(outcome).toBe('unchanged');
+    expect(sent.map((c) => c.constructor.name)).toEqual(['GetCommand', 'DeleteCommand']);
+    expect(sent[1]!.input).toMatchObject({
+      Key: nerisOpenKey(DEPT, OPEN.incidentId),
+      ConditionExpression: 'nerisIncidentId = :nerisId',
+      ExpressionAttributeValues: { ':nerisId': OPEN.nerisIncidentId },
+    });
+  });
+
   it('on REJECTED: stores status and history, notifies the owner via the outbox, stops watching', async () => {
     const { client, sent } = ddb(METADATA);
     const outcome = await pollRecord(
@@ -115,6 +137,27 @@ describe('pollRecord', () => {
         incidentNumber: '4471',
       },
     });
+    expect(items.some((i) => i.Delete)).toBe(true);
+  });
+
+  it('on DELETED: flags the report missing so it can be re-created, emits neris.incident.deleted, stops watching', async () => {
+    const { client, sent } = ddb(METADATA);
+    await pollRecord(
+      client,
+      'table',
+      api([{ status: 'DELETED', current: true, lastModified: '2026-09-30T09:00:00Z' }]),
+      DEPT,
+      'FD09190828',
+      OPEN,
+      1_798_100_000,
+    );
+    const items = transactItems(sent);
+    expect(items[0]!.Update!.UpdateExpression).toContain('nerisMissingAt = :now');
+    expect(
+      items.some(
+        (i) => (i.Put?.Item as { eventType?: string })?.eventType === 'neris.incident.deleted',
+      ),
+    ).toBe(true);
     expect(items.some((i) => i.Delete)).toBe(true);
   });
 
@@ -378,5 +421,84 @@ describe('work-list rotation, backoff and age-out (review M7)', () => {
       eventType: 'neris.incident.poll_expired',
       payload: { reason: 'POLL_FAILURES', failures: 12 },
     });
+  });
+
+  it('reaches the tail of the final page when the budget runs out partway through it', async () => {
+    const rows = Array.from({ length: 300 }, (_, i) => ({
+      incidentId: `I-${String(i).padStart(4, '0')}`,
+      nerisIncidentId: `FD09190828|${i}|1798000000`,
+      since: NOW - 600,
+      ...(i >= 120 && i < MAX_RECORDS_PER_RUN ? { nextPollAt: NOW + 1_000 } : {}),
+    }));
+    const { api, history } = unchangedApi();
+    const first = world(rows);
+    await runStatusPoll('c', { client: first.client, api, now: () => NOW });
+    expect(history).toHaveBeenCalledTimes(MAX_RECORDS_PER_RUN);
+    const saved = first.sent.find(
+      (c) =>
+        c.constructor.name === 'PutCommand' &&
+        (c.input.Item as { sk: string }).sk === 'POLLER#CURSOR',
+    );
+    expect(saved!.input.Item).toMatchObject({ lastIncidentId: 'I-0279' });
+
+    const second = unchangedApi();
+    await runStatusPoll('c', {
+      client: world(rows, 'I-0279').client,
+      api: second.api,
+      now: () => NOW,
+    });
+    expect(second.history.mock.calls[0]![1]).toBe('FD09190828|280|1798000000');
+  });
+
+  it('does not report a record that reached a final status as expired', async () => {
+    const approvedApi = {
+      getIncidentHistory: vi.fn().mockResolvedValue({
+        ok: true,
+        httpStatus: 200,
+        history: [{ status: 'APPROVED', current: true, lastModified: 't' }],
+      }),
+    } as unknown as NerisApi;
+    const { client, sent } = world([
+      {
+        incidentId: 'A',
+        nerisIncidentId: 'FD09190828|A|1',
+        since: NOW - 61 * 86_400,
+      },
+    ]);
+    const send = (command: Command) =>
+      (client as unknown as { send: (c: Command) => Promise<unknown> }).send(command);
+    const gone = new Set<string>();
+    const guarded = vi.fn((command: Command) => {
+      const items = (command.input.TransactItems ?? []) as Record<
+        string,
+        Record<string, unknown>
+      >[];
+      const deletes = items.filter((i) => i.Delete).map((i) => JSON.stringify(i.Delete!.Key));
+      const conditional = items.some((i) => i.Delete?.ConditionExpression);
+      if (command.constructor.name === 'TransactWriteCommand') {
+        if (conditional && deletes.every((key) => gone.has(key))) {
+          return Promise.reject(
+            new TransactionCanceledException({
+              $metadata: {},
+              message: 'cancelled',
+              CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+            }),
+          );
+        }
+        deletes.forEach((key) => gone.add(key));
+      }
+      return send(command);
+    });
+    await runStatusPoll('c', {
+      client: { send: guarded } as unknown as DynamoDBDocumentClient,
+      api: approvedApi,
+      now: () => NOW,
+    });
+    const events = sent
+      .filter((c) => c.constructor.name === 'TransactWriteCommand')
+      .flatMap((c) => c.input.TransactItems as Record<string, Record<string, unknown>>[])
+      .map((i) => (i.Put?.Item as { eventType?: string } | undefined)?.eventType);
+    expect(events).toContain('neris.incident.approved');
+    expect(events).not.toContain('neris.incident.poll_expired');
   });
 });

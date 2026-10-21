@@ -1,5 +1,10 @@
 import type { APIGatewayProxyResultV2 } from 'aws-lambda';
-import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  PutCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
 import {
   extractTraceId,
@@ -31,6 +36,7 @@ interface PostTestRecordDeps {
   readonly tableName: string;
   readonly apparatusRepository: ApparatusRepository;
   readonly now: () => string;
+  readonly loggedAt: () => string;
 }
 
 interface ValidatedFields {
@@ -102,6 +108,26 @@ function validateFields(
   };
 }
 
+function isDueNotSuperseded(error: unknown): boolean {
+  return (
+    error instanceof TransactionCanceledException &&
+    error.CancellationReasons?.[0]?.Code !== 'ConditionalCheckFailed' &&
+    error.CancellationReasons?.[1]?.Code === 'ConditionalCheckFailed'
+  );
+}
+
+function created(
+  item: Record<string, unknown>,
+  apparatusId: string,
+  deptId: string,
+): APIGatewayProxyResultV2 {
+  return {
+    statusCode: 201,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(parseTestRecordItem(item, apparatusId, deptId)),
+  };
+}
+
 async function postTestRecord(
   event: GuardEvent,
   principal: CedarPrincipalContext,
@@ -140,19 +166,15 @@ async function postTestRecord(
     return apparatusNotFoundProblem(traceId);
   }
 
-  const item = buildTestRecordItem(deptId, apparatus.apparatusId, validation.value);
+  const item = buildTestRecordItem(
+    deptId,
+    apparatus.apparatusId,
+    validation.value,
+    deps.loggedAt(),
+  );
   const dueItem = buildTestDueItem(deptId, apparatus.apparatusId, validation.value);
 
-  try {
-    await deps.client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          { Put: { TableName: deps.tableName, Item: item } },
-          { Put: { TableName: deps.tableName, Item: dueItem } },
-        ],
-      }),
-    );
-  } catch (error) {
+  const logPutFailed = (error: unknown): void => {
     console.error(
       JSON.stringify({
         event: 'apparatusTest.put_failed',
@@ -163,15 +185,63 @@ async function postTestRecord(
       }),
     );
     emitOutcomeMetric(METRIC_NAMESPACE, 'TestRecordLogFailed');
+  };
+
+  try {
+    await deps.client.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: deps.tableName,
+              Item: item,
+              ConditionExpression: 'attribute_not_exists(sk)',
+            },
+          },
+          {
+            Put: {
+              TableName: deps.tableName,
+              Item: dueItem,
+              ConditionExpression: 'attribute_not_exists(testDate) OR testDate <= :testDate',
+              ExpressionAttributeValues: { ':testDate': validation.value.testDate },
+            },
+          },
+        ],
+      }),
+    );
+  } catch (error) {
+    if (isDueNotSuperseded(error)) {
+      console.warn(
+        JSON.stringify({
+          event: 'apparatusTest.due_not_superseded',
+          correlationId: traceId,
+          deptId,
+          apparatusId: apparatus.apparatusId,
+          testType: validation.value.testType,
+          testDate: validation.value.testDate,
+        }),
+      );
+      try {
+        await deps.client.send(
+          new PutCommand({
+            TableName: deps.tableName,
+            Item: item,
+            ConditionExpression: 'attribute_not_exists(sk)',
+          }),
+        );
+      } catch (fallbackError) {
+        logPutFailed(fallbackError);
+        throw fallbackError;
+      }
+      emitOutcomeMetric(METRIC_NAMESPACE, 'TestRecordLogged');
+      return created(item, apparatus.apparatusId, deptId);
+    }
+    logPutFailed(error);
     throw error;
   }
   emitOutcomeMetric(METRIC_NAMESPACE, 'TestRecordLogged');
 
-  return {
-    statusCode: 201,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(parseTestRecordItem(item, apparatus.apparatusId, deptId)),
-  };
+  return created(item, apparatus.apparatusId, deptId);
 }
 
 interface PostTestRecordOverrides {
@@ -179,6 +249,7 @@ interface PostTestRecordOverrides {
   readonly tableName?: string;
   readonly apparatusRepository?: ApparatusRepository;
   readonly now?: () => string;
+  readonly loggedAt?: () => string;
   readonly authzClient?: VerifiedPermissionsClient;
 }
 
@@ -191,6 +262,7 @@ function resolveDeps(overrides: PostTestRecordOverrides): PostTestRecordDeps {
     apparatusRepository:
       overrides.apparatusRepository ?? createApparatusRepository(client, tableName),
     now: overrides.now ?? (() => new Date().toISOString().slice(0, 10)),
+    loggedAt: overrides.loggedAt ?? (() => new Date().toISOString()),
   };
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { APIGatewayProxyEventV2WithLambdaAuthorizer } from 'aws-lambda';
-import { toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
+import { buildDeptScopedPk, toVerifiedDeptId, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import type { AuthorizerContext } from '../authorizer/handler.js';
 import { buildAuditLogEntryTransactItem } from './auditEntry.js';
 
@@ -103,6 +103,7 @@ describe('handler', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.AUDIT_TABLE_NAME = 'platform-table';
+    process.env.INCIDENT_AUDIT_TABLE_NAME = 'incident-table';
     process.env.VERIFIED_PERMISSIONS_POLICY_STORE_ID = 'ps-1';
   });
 
@@ -285,6 +286,91 @@ describe('handler', () => {
       }),
     );
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('AuditQueryServed'));
+  });
+
+  it('queries GSI3 on the incident table (not the platform table) when entityType=INCIDENT', async () => {
+    const fakeClient = createFakeDocumentClient();
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocumentClient: () => fakeClient,
+      readAuditConfig: () => ({ tableName: 'platform-table', incidentTableName: 'incident-table' }),
+    }));
+    const { handler } = await import('./handler.js');
+    const result = (await handler(
+      buildEvent({ queryStringParameters: { entityType: 'INCIDENT', entityId: 'INC-1' } }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(200);
+    expect(fakeClient.send.mock.calls[0]?.[0]).toMatchObject({
+      input: { TableName: 'incident-table', IndexName: 'GSI3' },
+    });
+  });
+
+  it('returns incident rows written by the incident-service review and secondary writers', async () => {
+    const fakeClient = createFakeDocumentClient();
+    const gsi3pk = buildDeptScopedPk(DEPT_ID, 'AUDIT', 'ENTITY', 'INCIDENT', 'INC-1');
+    const base = {
+      entityType: 'AUDIT_LOG_ENTRY',
+      mutatedEntityType: 'INCIDENT',
+      mutatedEntityId: 'INC-1',
+      actorId: 'm-1',
+      gsi3pk,
+    };
+    fakeClient.items.push(
+      {
+        ...base,
+        pk: buildDeptScopedPk(DEPT_ID, 'AUDIT', '2026-10-01'),
+        sk: '1#INCIDENT#INC-1#m-1',
+        action: 'LOCK',
+        changedFields: { status: { old: 'DRAFT', new: 'LOCKED' } },
+        ts: 1,
+        gsi3sk: '1',
+      },
+      {
+        ...base,
+        pk: buildDeptScopedPk(DEPT_ID, 'AUDIT', '2026-10-01'),
+        sk: '2#INCIDENT#INC-1#m-1',
+        action: 'CREATE_SECONDARY',
+        secondaryType: 'INJURY',
+        changedFields: {},
+        ts: 2,
+        gsi3sk: '2',
+      },
+    );
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocumentClient: () => fakeClient,
+      readAuditConfig: () => ({ tableName: 'platform-table', incidentTableName: 'incident-table' }),
+    }));
+    const { handler } = await import('./handler.js');
+    const result = (await handler(
+      buildEvent({ queryStringParameters: { entityType: 'INCIDENT', entityId: 'INC-1' } }),
+    )) as { statusCode: number; body: string };
+    expect(result.statusCode).toBe(200);
+    const entries = (JSON.parse(result.body) as { entries: Record<string, unknown>[] }).entries;
+    expect(entries.map((e) => e.action).sort()).toEqual(['CREATE_SECONDARY', 'LOCK']);
+    expect(entries.find((e) => e.action === 'CREATE_SECONDARY')?.secondaryType).toBe('INJURY');
+  });
+
+  it('keeps non-incident entity types on the platform table', async () => {
+    const fakeClient = createFakeDocumentClient();
+    vi.doMock('./dynamoClient.js', () => ({
+      getDocumentClient: () => fakeClient,
+      readAuditConfig: () => ({ tableName: 'platform-table', incidentTableName: 'incident-table' }),
+    }));
+    const { handler } = await import('./handler.js');
+    await handler(
+      buildEvent({ queryStringParameters: { entityType: 'CERTIFICATION', entityId: 'C-1' } }),
+    );
+    expect(fakeClient.send.mock.calls[0]?.[0]).toMatchObject({
+      input: { TableName: 'platform-table' },
+    });
+  });
+
+  it('returns 500 when INCIDENT_AUDIT_TABLE_NAME is unset', async () => {
+    delete process.env.INCIDENT_AUDIT_TABLE_NAME;
+    const { handler } = await import('./handler.js');
+    const result = (await handler(
+      buildEvent({ queryStringParameters: { entityType: 'INCIDENT', entityId: 'INC-1' } }),
+    )) as { statusCode: number };
+    expect(result.statusCode).toBe(500);
   });
 
   it('write → read round trip: a written audit entry is returned by GET /platform/audit with actor and changedFields (core-harm)', async () => {

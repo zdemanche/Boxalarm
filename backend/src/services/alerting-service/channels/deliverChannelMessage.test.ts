@@ -3,6 +3,7 @@ import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { toVerifiedDeptId } from '@boxalarm/dept-scope';
 import type { DeliverChannelMessageParams } from './deliverChannelMessage.js';
+import { TEST_AUDIT_TTL_SECONDS } from './channelEnvelope.js';
 
 const deptId = toVerifiedDeptId({ deptId: 'NICHOLS' });
 
@@ -82,6 +83,35 @@ describe('deliverChannelMessage', () => {
     expect(putInput.Item.sentAt).toBeLessThan(10_000_000_000);
     expect(putInput.Item.gsi1sk).toBe(`RECEIPT#${putInput.Item.sentAt as number}#dispatch-1`);
     expect(sendPush).toHaveBeenCalledWith(...expectedPushCall());
+  });
+
+  it('keeps a self-test or canary send guard out of the member delivery history and expires it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockAdapter(vi.fn().mockResolvedValue({ outcome: 'sent' }));
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', { ...baseParams, isTest: true });
+
+    const { Item } = (send.mock.calls[0]?.[0] as { input: { Item: Record<string, unknown> } })
+      .input;
+    expect(Item).not.toHaveProperty('gsi1pk');
+    expect(Item).not.toHaveProperty('gsi1sk');
+    expect(Item.isTest).toBe(true);
+    expect(Item.ttl).toBe((Item.sentAt as number) + TEST_AUDIT_TTL_SECONDS);
+  });
+
+  it('indexes a real page guard by member and never expires it', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    mockAdapter(vi.fn().mockResolvedValue({ outcome: 'sent' }));
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await deliverChannelMessage(fakeDdb(send), 'alerting-table', baseParams);
+
+    const { Item } = (send.mock.calls[0]?.[0] as { input: { Item: Record<string, unknown> } })
+      .input;
+    expect(Item.gsi1pk).toBe('MEMBER#mbr-1');
+    expect(Item).not.toHaveProperty('ttl');
+    expect(Item).not.toHaveProperty('isTest');
   });
 
   it('no-ops without calling the provider when the idempotency key already exists for a prior successful attempt (duplicate skip)', async () => {
@@ -808,6 +838,47 @@ describe('deliverChannelMessage — multi-device push', () => {
       .filter((command) => command.constructor.name === 'UpdateCommand')
       .map((command) => command.input);
   }
+
+  it('a device held valid by the live mass-invalidation latch does not fail a page another device already delivered', async () => {
+    const sendPush = vi
+      .fn()
+      .mockImplementation((notification: { token: string }) =>
+        Promise.resolve(
+          notification.token === PHONE.token
+            ? { outcome: 'sent' }
+            : { outcome: 'invalid_token', reason: 'FCM_UNREGISTERED' },
+        ),
+      );
+    mockPush(sendPush);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi
+      .fn()
+      .mockImplementation(
+        (command: { constructor: { name: string }; input: Record<string, unknown> }) => {
+          const sk = (command.input.Key as { sk?: string } | undefined)?.sk;
+          if (command.constructor.name === 'GetCommand' && sk === 'MEMBER#mbr-1') {
+            return Promise.resolve({
+              Item: { snapshotUpdatedAt: 1, contactChannels: [PHONE, TABLET] },
+            });
+          }
+          if (command.constructor.name === 'GetCommand' && sk === 'TRIPPED') {
+            return Promise.resolve({ Item: { ttl: Math.floor(Date.now() / 1000) + 600 } });
+          }
+          return Promise.resolve({});
+        },
+      );
+    const { deliverChannelMessage } = await import('./deliverChannelMessage.js');
+
+    await expect(
+      deliverChannelMessage(fakeDdb(send), 'alerting-table', params),
+    ).resolves.toBeUndefined();
+
+    expect(updates(send).at(-1)?.ExpressionAttributeValues).toMatchObject({
+      ':sent': 'SENT',
+      ':deviceSends': { phone: 'SENT' },
+    });
+    errorSpy.mockRestore();
+  });
 
   it('pages every registered device under the one per-channel guard and idempotency key', async () => {
     const sendPush = vi.fn().mockResolvedValue({ outcome: 'sent' });

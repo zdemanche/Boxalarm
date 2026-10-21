@@ -11,9 +11,11 @@ vi.mock('../fanout/snsClient.js', () => ({
   readFanOutTopicConfig: vi.fn(() => ({ topicArn: 'arn:aws:sns:us-east-1:1:alerting-topic.fifo' })),
 }));
 
+const readEscalationThresholdSeconds = vi.fn<(...args: unknown[]) => Promise<number>>();
 vi.mock('./scheduleEscalation.js', () => ({
   getSchedulerClient: vi.fn(() => ({})),
   createEscalationSchedule: vi.fn().mockResolvedValue('schedule-name'),
+  readEscalationThresholdSeconds: (...args: unknown[]) => readEscalationThresholdSeconds(...args),
 }));
 
 interface MutualAidResult {
@@ -28,7 +30,8 @@ const requestMutualAid = vi
     officersNotified: 1,
     adapterUsed: 'OFFICER_MANUAL_PROMPT',
   });
-vi.mock('./mutualAidPort.js', () => ({
+vi.mock('./mutualAidPort.js', async (importActual) => ({
+  ...(await importActual<typeof import('./mutualAidPort.js')>()),
   requestMutualAid: (...args: unknown[]) => requestMutualAid(...args),
 }));
 
@@ -122,6 +125,7 @@ function createFakeDdb(
     readonly failReceiptForMemberId?: string;
     readonly failReceiptTimes?: number;
     readonly failTransactTimes?: number;
+    readonly failRosterSeedTimes?: number;
     readonly failTransactReasons?: ReadonlyArray<{ readonly Code: string }>;
     readonly completeLadderBeforeTransact?: {
       readonly currentToneSequence: number;
@@ -144,6 +148,7 @@ function createFakeDdb(
       ? 0
       : (options.failReceiptTimes ?? Number.POSITIVE_INFINITY);
   let remainingTransactFailures = options.failTransactTimes ?? 0;
+  let remainingRosterSeedFailures = options.failRosterSeedTimes ?? 0;
   const sns = {
     send: vi.fn<(command: SnsPublishCommand) => Promise<unknown>>().mockResolvedValue({}),
   };
@@ -200,11 +205,35 @@ function createFakeDdb(
         items.set(key, next);
         return Promise.resolve({});
       }
+      if (update.ExpressionAttributeValues && ':rosterNone' in update.ExpressionAttributeValues) {
+        if (remainingRosterSeedFailures > 0) {
+          remainingRosterSeedFailures -= 1;
+          return Promise.reject(new Error('roster seed unavailable'));
+        }
+        const key = `${update.Key.pk}#${update.Key.sk}`;
+        const values = update.ExpressionAttributeValues;
+        const existing = items.get(key);
+        items.set(key, {
+          ...existing,
+          pk: update.Key.pk,
+          sk: update.Key.sk,
+          entityType: values[':rosterEntityType'],
+          memberId: values[':rosterMemberId'],
+          quals: existing?.quals ?? values[':rosterQuals'],
+          ackStatus: existing?.ackStatus ?? values[':rosterNone'],
+        });
+        return Promise.resolve({});
+      }
       if (update.ExpressionAttributeValues && ':sentAt' in update.ExpressionAttributeValues) {
         const key = `${update.Key.pk}#${update.Key.sk}`;
         const receipt = items.get(key);
-        if (receipt)
-          items.set(key, { ...receipt, sentAt: update.ExpressionAttributeValues[':sentAt'] });
+        if (receipt) {
+          const { failureReason, ...rest } = receipt;
+          const kept = update.UpdateExpression.includes('REMOVE failureReason')
+            ? rest
+            : { ...rest, failureReason };
+          items.set(key, { ...kept, sentAt: update.ExpressionAttributeValues[':sentAt'] });
+        }
         return Promise.resolve({});
       }
       applyMetadataUpdate(
@@ -332,6 +361,7 @@ describe('toneEvaluatorHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     requestMutualAid.mockClear();
+    readEscalationThresholdSeconds.mockReset().mockResolvedValue(75);
     process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
     process.env.ESCALATION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::1:role/scheduler';
     process.env.ESCALATION_SCHEDULE_GROUP_NAME = 'boxalarm-dev-alerting-escalation';
@@ -371,6 +401,85 @@ describe('toneEvaluatorHandler', () => {
         eligibleMemberCount: 1,
       },
     });
+  });
+
+  it('seeds the roster row of a member first paged at tone 2, so their voice escalation can run', async () => {
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    expect(items.get(`${PK}#ROSTER#mbr-1`)).toMatchObject({
+      entityType: 'DISPATCH_ROSTER_ENTRY',
+      memberId: 'mbr-1',
+      ackStatus: 'NONE',
+      quals: [],
+    });
+  });
+
+  it('keeps an answer that arrived before the tone-2 roster seed', async () => {
+    const answered: FakeItem = {
+      pk: PK,
+      sk: 'ROSTER#mbr-1',
+      entityType: 'DISPATCH_ROSTER_ENTRY',
+      memberId: 'mbr-1',
+      ackStatus: 'NOT_RESPONDING',
+      quals: ['EMT'],
+    };
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER, answered]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    expect(items.get(`${PK}#ROSTER#mbr-1`)).toMatchObject({
+      ackStatus: 'NOT_RESPONDING',
+      quals: ['EMT'],
+    });
+  });
+
+  it("schedules tone 2 voice escalation at the department's configured threshold", async () => {
+    readEscalationThresholdSeconds.mockResolvedValue(240);
+    const { send, sns } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    const { createEscalationSchedule } = await import('./scheduleEscalation.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    expect(createEscalationSchedule).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ memberId: 'mbr-1', toneSequence: 2, delaySeconds: 240 }),
+      expect.anything(),
+      'alerting-table',
+    );
+  });
+
+  it('does not page a self-test or canary dispatch', async () => {
+    const { send, sns } = createFakeDdb([
+      { ...METADATA_ITEM, isTest: true, targetMemberId: 'mbr-1' },
+      ELIGIBLE_MEMBER,
+    ]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    const result = await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    expect(result).toEqual({ outcome: 'SKIPPED_TEST_DISPATCH' });
+    expect(sns.send).not.toHaveBeenCalled();
   });
 
   it('does not re-fire a tone that already ran (at-least-once Scheduler delivery)', async () => {
@@ -653,6 +762,48 @@ describe('toneEvaluatorHandler', () => {
     expect(items.get(`${PK}#RECEIPT#mbr-1#push#2`)?.sentAt).toEqual(expect.any(Number));
   });
 
+  it('records why a tone page was not published, leaving the receipt unsent', async () => {
+    class SnsUnavailableError extends Error {}
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER]);
+    sns.send.mockRejectedValue(new SnsUnavailableError('sns down'));
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await expect(
+      handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 }),
+    ).rejects.toThrow('sns down');
+
+    const receipt = items.get(`${PK}#RECEIPT#mbr-1#push#2`);
+    expect(receipt?.failureReason).toBe('SnsUnavailableError');
+    expect(receipt?.sentAt).toBeUndefined();
+  });
+
+  it('clears a stale failure reason once a retry publishes the page', async () => {
+    const failedClaim: FakeItem = {
+      pk: PK,
+      sk: 'RECEIPT#mbr-1#push#2',
+      entityType: 'DELIVERY_RECEIPT',
+      memberId: 'mbr-1',
+      idempotencyKey: 'dispatch-1#2#mbr-1#push',
+      failureReason: 'SnsUnavailableError',
+    };
+    const { send, sns, items } = createFakeDdb([METADATA_ITEM, ELIGIBLE_MEMBER, failedClaim]);
+    const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
+    const { createSnsClient } = await import('../fanout/snsClient.js');
+    vi.mocked(createDynamoClient).mockReturnValue({ send } as unknown as DynamoDBDocumentClient);
+    vi.mocked(createSnsClient).mockReturnValue(sns as never);
+
+    const { handler } = await import('./toneEvaluatorHandler.js');
+    await handler({ deptId: 'NICHOLS', dispatchId: 'dispatch-1', toneSequence: 2 });
+
+    const receipt = items.get(`${PK}#RECEIPT#mbr-1#push#2`);
+    expect(receipt?.sentAt).toEqual(expect.any(Number));
+    expect(receipt?.failureReason).toBeUndefined();
+  });
+
   it('does not re-publish a receipt already marked sent', async () => {
     const sentClaim: FakeItem = {
       pk: PK,
@@ -803,6 +954,7 @@ describe('toneEvaluatorHandler manual override (POST /tone-ladder/advance)', () 
   beforeEach(() => {
     vi.clearAllMocks();
     requestMutualAid.mockClear();
+    readEscalationThresholdSeconds.mockReset().mockResolvedValue(75);
     process.env.ESCALATION_HANDLER_ARN = 'arn:aws:lambda:us-east-1:1:function:escalation';
     process.env.ESCALATION_SCHEDULER_ROLE_ARN = 'arn:aws:iam::1:role/scheduler';
     process.env.ESCALATION_SCHEDULE_GROUP_NAME = 'boxalarm-dev-alerting-escalation';
@@ -980,6 +1132,22 @@ describe('toneEvaluatorHandler manual override (POST /tone-ladder/advance)', () 
     expect(items.get(`${PK}#TONE#3`)).toBeUndefined();
   });
 
+  it('still pages and schedules voice when the roster seed fails, rethrows, and re-seeds on retry', async () => {
+    const { handler, sns, items } = await load([METADATA_ITEM, ELIGIBLE_MEMBER], {
+      failRosterSeedTimes: 1,
+    });
+    const { createEscalationSchedule } = await import('./scheduleEscalation.js');
+    vi.mocked(createEscalationSchedule).mockClear();
+
+    await expect(handler(manual(2))).rejects.toThrow('roster seed unavailable');
+    expect(publishedMemberIds(sns)).toEqual(['mbr-1']);
+    expect(createEscalationSchedule).toHaveBeenCalledTimes(1);
+    expect(items.get(`${PK}#ROSTER#mbr-1`)).toBeUndefined();
+
+    await handler(manual(2));
+    expect(items.get(`${PK}#ROSTER#mbr-1`)).toMatchObject({ ackStatus: 'NONE' });
+  });
+
   it('a failed push page still sends the SMS page to that member', async () => {
     const withSms: FakeItem = {
       ...ELIGIBLE_MEMBER,
@@ -1052,6 +1220,62 @@ describe('toneEvaluatorHandler manual override (POST /tone-ladder/advance)', () 
     // Done: a further retry neither re-pages nor re-prompts.
     await expect(handler(scheduled)).resolves.toEqual({ outcome: 'SKIPPED_COMPLETED' });
     expect(requestMutualAid).toHaveBeenCalledTimes(2);
+  });
+
+  it('a manual tone-2 advance after tone 3 was already evaluated leaves no next tone', async () => {
+    const { handler, items } = await load([
+      { ...METADATA_ITEM, nextToneAt: 1000, tone3At: 1360 },
+      ELIGIBLE_MEMBER,
+      RESPONDING,
+    ]);
+    const scheduled = (toneSequence: number) => ({
+      deptId: 'NICHOLS',
+      dispatchId: 'dispatch-1',
+      toneSequence,
+    });
+    await expect(handler(scheduled(2))).resolves.toEqual({ outcome: 'SKIPPED_PREDICATE_MET' });
+    await expect(handler(scheduled(3))).resolves.toEqual({ outcome: 'SKIPPED_PREDICATE_MET' });
+    items.set(`${PK}#ROSTER#mbr-1`, { ...RESPONDING, ackStatus: 'NOT_RESPONDING' });
+
+    await expect(handler(manual(2))).resolves.toEqual({ outcome: 'FIRED_MANUAL_OVERRIDE' });
+    expect(items.get(`${PK}#METADATA`)).toMatchObject({ currentToneSequence: 2, nextToneAt: null });
+  });
+
+  it('a manual tone-2 advance while tone 3 is still to come points nextToneAt at tone 3', async () => {
+    const { handler, items } = await load([
+      { ...METADATA_ITEM, nextToneAt: 1000, tone3At: 1360 },
+      ELIGIBLE_MEMBER,
+    ]);
+
+    await expect(handler(manual(2))).resolves.toEqual({ outcome: 'FIRED_MANUAL_OVERRIDE' });
+    expect(items.get(`${PK}#METADATA`)?.nextToneAt).toBe(1360);
+  });
+
+  it('reports a non-prompt mutual-aid failure after a committed tone 3 as an incomplete request', async () => {
+    const { handler, items } = await load([
+      { ...METADATA_ITEM, currentToneSequence: 2 },
+      ELIGIBLE_MEMBER,
+    ]);
+    requestMutualAid.mockRejectedValueOnce(
+      Object.assign(new Error('throttled'), { name: 'TransactionCanceledException' }),
+    );
+
+    await expect(handler(manual(3))).rejects.toMatchObject({
+      name: 'MutualAidRequestIncompleteError',
+      message: 'throttled',
+    });
+    expect(items.get(`${PK}#TONE#3`)).toMatchObject({ skipped: false, mutualAidPending: true });
+    expect(items.get(`${PK}#METADATA`)).toMatchObject({ toneLadderStatus: 'COMPLETED' });
+  });
+
+  it('rethrows an incomplete officer prompt under its own error name', async () => {
+    const { MutualAidPromptIncompleteError } = await import('./mutualAidPort.js');
+    const { handler } = await load([{ ...METADATA_ITEM, currentToneSequence: 2 }, ELIGIBLE_MEMBER]);
+    requestMutualAid.mockRejectedValueOnce(new MutualAidPromptIncompleteError(1, 2));
+
+    await expect(handler(manual(3))).rejects.toMatchObject({
+      name: 'MutualAidPromptIncompleteError',
+    });
   });
 
   it('keeps the prompts pending while the re-prompt keeps failing', async () => {

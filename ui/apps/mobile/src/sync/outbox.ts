@@ -174,12 +174,9 @@ export function responseDispatchId(row: Pick<OutboxRow, 'path'>): string | null 
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
-/** Rows the signed-in member may send now: their own (R2-M3) and recent ownerless answers
- * (R3-C1). Another member's rows, and other ownerless rows, are held. */
-export async function listDrainable(
-  now: number,
-  ownerMemberId: string | null,
-): Promise<OutboxRow[]> {
+/** Rows the signed-in member may send, whenever their backoff ends: their own (R2-M3) and recent
+ * ownerless answers (R3-C1). Another member's rows, and other ownerless rows, are held. */
+async function sendableBy(now: number, ownerMemberId: string | null): Promise<OutboxRow[]> {
   const rows = await store.all();
   // No owner columns (failed migration): nothing can be scoped, so every row is the signed-in
   // member's, as before R2-M3 - checks, defects, attendance and mark-offs keep sending.
@@ -190,9 +187,22 @@ export async function listDrainable(
         (ownerMemberId !== null && row.ownerMemberId === ownerMemberId) ||
         isRecentOwnerlessResponse(row, now, ownerMemberId)) &&
       row.status !== 'SYNCING' &&
-      row.status !== 'REJECTED' &&
-      row.nextAttemptAt <= now,
+      row.status !== 'REJECTED',
   );
+}
+
+/** The sendable rows whose backoff has ended. */
+export async function listDrainable(
+  now: number,
+  ownerMemberId: string | null,
+): Promise<OutboxRow[]> {
+  return (await sendableBy(now, ownerMemberId)).filter((row) => row.nextAttemptAt <= now);
+}
+
+/** When the earliest sendable row is next due; null when nothing is waiting to be sent. */
+export async function nextDueAt(now: number, ownerMemberId: string | null): Promise<number | null> {
+  const due = (await sendableBy(now, ownerMemberId)).map((row) => row.nextAttemptAt);
+  return due.length > 0 ? Math.min(...due) : null;
 }
 
 /** Rows the member queued and hasn't sent yet - what signing out would leave behind. */
@@ -249,7 +259,13 @@ export async function recoverOrphanedSyncing(): Promise<void> {
   const rows = await store.all();
   const orphaned = rows.filter((row) => row.status === 'SYNCING');
   await Promise.all(
-    orphaned.map((row) => store.update(row.id, { status: 'QUEUED', nextAttemptAt: Date.now() })),
+    orphaned.map((row) =>
+      store.update(row.id, {
+        status: 'QUEUED',
+        attempts: row.attempts + 1,
+        nextAttemptAt: Date.now(),
+      }),
+    ),
   );
 }
 

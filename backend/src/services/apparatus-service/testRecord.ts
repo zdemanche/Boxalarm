@@ -24,7 +24,8 @@ export type TestRecordItem = Record<string, unknown>;
 const TEST_SK_PREFIX = 'TEST#';
 
 /**
- * Pure append-only audit record — carries no GSI2 keys. The due-date index lives on a
+ * Pure append-only audit record (one row per submission: the sk ends in the submission
+ * timestamp, so a same-day retest never replaces the earlier result) — carries no GSI2 keys. The due-date index lives on a
  * separate, single-valued-per-(apparatusId, testType) item (buildTestDueItem) so a re-test
  * supersedes the prior due entry instead of leaving it live in GSI2 forever.
  */
@@ -32,15 +33,17 @@ export function buildTestRecordItem(
   deptId: VerifiedDeptId,
   apparatusId: string,
   input: TestRecordInput,
+  loggedAt: string,
 ): TestRecordItem {
   return {
     pk: buildDeptScopedPk(deptId, 'APPARATUS', apparatusId),
-    sk: `${TEST_SK_PREFIX}${input.testType}#${input.testDate}`,
+    sk: `${TEST_SK_PREFIX}${input.testType}#${input.testDate}#${loggedAt}`,
     entityType: 'APPARATUS_TEST_RECORD',
     testType: input.testType,
     testDate: input.testDate,
     result: input.result,
     nextDueDate: input.nextDueDate,
+    loggedAt,
   };
 }
 
@@ -85,6 +88,7 @@ export function buildTestDueItem(
     entityType: 'APPARATUS_TEST_DUE',
     apparatusId,
     testType: input.testType,
+    testDate: input.testDate,
     nextDueDate: input.nextDueDate,
     gsi2pk: buildDeptScopedPk(deptId, 'DUE', 'APPARATUS_TEST'),
     gsi2sk: `${input.nextDueDate}#${apparatusId}#${input.testType}`,

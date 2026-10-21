@@ -14,6 +14,7 @@ import {
   unlockIncident,
   validateIncident,
 } from './api';
+import { problemMessage } from './format';
 import { applyValidationFix } from './reviewFix';
 import type {
   IncidentDetail,
@@ -35,7 +36,7 @@ export const SECTION_LABEL: Record<ValidationSection, string> = {
 };
 
 function problemText(error: unknown, fallback: string): string {
-  if (error instanceof ApiError) return error.problem.detail ?? error.problem.title;
+  if (error instanceof ApiError) return problemMessage(error, fallback);
   return error instanceof Error ? error.message : fallback;
 }
 
@@ -62,7 +63,7 @@ export function NerisReviewPanel({
 }: {
   incident: IncidentDetail;
   /** Merge a server response into the cached incident. */
-  onPatched: (patch: Partial<IncidentDetail>) => void;
+  onPatched: (patch: Partial<IncidentDetail>, fixedPath?: string) => void;
   /** Move to the report step (and field) an issue points at. */
   onGoTo: (issue: ValidationIssue) => void;
   /** The editor step an issue opens, so "Go to" names a step that exists ("Apparatus and
@@ -128,7 +129,7 @@ export function NerisReviewPanel({
     setFixError(null);
     try {
       const patch = await applyValidationFix(auth, incident, issue.fix);
-      onPatched(patch);
+      onPatched(patch, issue.fix.path);
       setLockRefusal(null);
       setMessage(`Fixed: ${issue.fix.label}. Checking again.`);
       await queryClient.invalidateQueries({ queryKey: ['incident-validation', incidentId] });
@@ -203,8 +204,9 @@ export function NerisReviewPanel({
     try {
       await unlockIncident(auth, incidentId, trimmed);
       setUnlockOpen(false);
-      onPatched({ lockedAt: null, lockedBy: null });
+      onPatched({ lockedAt: null, lockedBy: null, status: 'DRAFT' });
       void queryClient.invalidateQueries({ queryKey: ['incident-validation', incidentId] });
+      void queryClient.invalidateQueries({ queryKey: ['incident-submission', incidentId] });
       setMessage('Report unlocked. Edits are open again.');
     } catch (error) {
       setUnlockError(problemText(error, 'Unable to unlock the report.'));

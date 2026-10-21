@@ -128,7 +128,11 @@ describe('putCompartmentItem', () => {
         itemName: { old: null, new: 'Pike pole' },
         quantity: { old: null, new: 1 },
       },
+      gsi3pk: `DEPT#dept-001#AUDIT#ENTITY#COMPARTMENT_ITEM#${created.itemId}`,
     });
+    const auditTs = auditPut.Put.Item.ts as number;
+    expect(auditTs).toBeGreaterThan(1_000_000_000_000);
+    expect(auditPut.Put.Item.gsi3sk).toBe(`${auditTs}`);
     expect(String(auditPut.Put.Item.sk)).toContain(
       `#COMPARTMENT_ITEM#${created.itemId}#${ACTOR_ID}`,
     );
@@ -203,8 +207,9 @@ describe('updateCompartmentItemQuantity', () => {
       TableName: TABLE_NAME,
       Key: { pk: 'DEPT#dept-001#APPARATUS#ENGINE-2', sk: 'COMPARTMENT_ITEM#CI-021' },
       UpdateExpression: 'SET quantity = :quantity',
-      ConditionExpression: 'attribute_exists(pk) AND attribute_exists(sk)',
-      ExpressionAttributeValues: { ':quantity': 5 },
+      ConditionExpression:
+        'attribute_exists(pk) AND attribute_exists(sk) AND quantity = :oldQuantity',
+      ExpressionAttributeValues: { ':quantity': 5, ':oldQuantity': 2 },
     });
     expect(auditPut.Put.Item).toMatchObject({
       action: 'UPDATE',
@@ -214,14 +219,9 @@ describe('updateCompartmentItemQuantity', () => {
     });
   });
 
-  it('maps a conditional-update miss (unknown itemId) to CompartmentItemNotFoundError, logging first', async () => {
+  it('maps a missing item (consistent re-read finds nothing) to CompartmentItemNotFoundError with no transaction, logging first', async () => {
     const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const cause = new TransactionCanceledException({
-      message: 'Transaction cancelled',
-      $metadata: {},
-      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
-    });
-    const send = vi.fn().mockResolvedValueOnce({ Item: undefined }).mockRejectedValueOnce(cause);
+    const send = vi.fn().mockResolvedValueOnce({ Item: undefined });
     const client = fakeClient(send);
 
     await expect(
@@ -235,16 +235,136 @@ describe('updateCompartmentItemQuantity', () => {
         ACTOR_ID,
       ),
     ).rejects.toBeInstanceOf(CompartmentItemNotFoundError);
+    expect(send).toHaveBeenCalledTimes(1);
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('inventory.updateQuantity.notFound'),
     );
     logSpy.mockRestore();
   });
 
+  it('B2-098: reads the current quantity with ConsistentRead', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { quantity: 2 } })
+      .mockResolvedValueOnce({});
+
+    await updateCompartmentItemQuantity(
+      fakeClient(send),
+      TABLE_NAME,
+      DEPT_ID,
+      'ENGINE-2',
+      'CI-021',
+      5,
+      ACTOR_ID,
+    );
+
+    const getInput = (send.mock.calls[0]?.[0] as { input: Record<string, unknown> }).input;
+    expect(getInput).toMatchObject({ ConsistentRead: true });
+  });
+
+  it('B2-098: a concurrent writer changing the quantity retries with the fresh old value in the audit row', async () => {
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const cause = new TransactionCanceledException({
+      message: 'Transaction cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+    });
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { quantity: 5 } })
+      .mockRejectedValueOnce(cause)
+      .mockResolvedValueOnce({ Item: { quantity: 3 } })
+      .mockResolvedValueOnce({});
+
+    await updateCompartmentItemQuantity(
+      fakeClient(send),
+      TABLE_NAME,
+      DEPT_ID,
+      'ENGINE-2',
+      'CI-021',
+      2,
+      ACTOR_ID,
+    );
+
+    expect(send).toHaveBeenCalledTimes(4);
+    const retried = (
+      send.mock.calls[3]?.[0] as {
+        input: { TransactItems: [unknown, { Put: { Item: Record<string, unknown> } }] };
+      }
+    ).input;
+    expect(retried.TransactItems[1].Put.Item).toMatchObject({
+      changedFields: { quantity: { old: 3, new: 2 } },
+    });
+    logSpy.mockRestore();
+  });
+
+  it('B2-100: an audit-row key collision retries with a fresh audit row instead of reporting not found', async () => {
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const collision = new TransactionCanceledException({
+      message: 'Transaction cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+    });
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { quantity: 4 } })
+      .mockRejectedValueOnce(collision)
+      .mockResolvedValueOnce({ Item: { quantity: 4 } })
+      .mockResolvedValueOnce({});
+
+    await expect(
+      updateCompartmentItemQuantity(
+        fakeClient(send),
+        TABLE_NAME,
+        DEPT_ID,
+        'ENGINE-2',
+        'CI-021',
+        5,
+        ACTOR_ID,
+      ),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(4);
+    logSpy.mockRestore();
+  });
+
+  it('B2-098: persistent contention surfaces as CompartmentItemStoreUnavailableError after bounded retries', async () => {
+    const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const cause = new TransactionCanceledException({
+      message: 'Transaction cancelled',
+      $metadata: {},
+      CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }],
+    });
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { quantity: 5 } })
+      .mockRejectedValueOnce(cause)
+      .mockResolvedValueOnce({ Item: { quantity: 4 } })
+      .mockRejectedValueOnce(cause)
+      .mockResolvedValueOnce({ Item: { quantity: 3 } })
+      .mockRejectedValueOnce(cause);
+
+    await expect(
+      updateCompartmentItemQuantity(
+        fakeClient(send),
+        TABLE_NAME,
+        DEPT_ID,
+        'ENGINE-2',
+        'CI-021',
+        2,
+        ACTOR_ID,
+      ),
+    ).rejects.toBeInstanceOf(CompartmentItemStoreUnavailableError);
+    expect(send).toHaveBeenCalledTimes(6);
+    logSpy.mockRestore();
+  });
+
   it('wraps any other DynamoDB error as CompartmentItemStoreUnavailableError with a reason, logging first', async () => {
     const logSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const cause = new Error('ServiceUnavailableException');
-    const send = vi.fn().mockResolvedValueOnce({ Item: undefined }).mockRejectedValueOnce(cause);
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ Item: { quantity: 2 } })
+      .mockRejectedValueOnce(cause);
     const client = fakeClient(send);
 
     const rejection = updateCompartmentItemQuantity(

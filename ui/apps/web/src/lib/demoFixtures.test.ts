@@ -233,3 +233,35 @@ test('demo mutual aid: trigger once, acknowledge once, and acknowledge before tr
   expect(detail.mutualAid.reason).toBe('MANUAL');
   expect(detail.mutualAid.acknowledgedAt).not.toBeNull();
 });
+
+test('demo audit history: every record page that links to it has rows, matched like the server', async () => {
+  const history = async (entityType: string, entityId: string) => {
+    const params = new URLSearchParams({ entityType, entityId });
+    const response = await apiRequest(`platform/audit?${params.toString()}`, tokens);
+    return ((await response.json()) as { entries: { action: string; ts: number }[] }).entries;
+  };
+
+  // The pages with a Change history link: a member, an equipment asset, LOSAP point rules.
+  for (const [type, id] of [
+    ['MEMBER', 'm-1'],
+    ['MEMBER', 'm-24'],
+    ['EQUIPMENT_ASSET', 'eq-1'],
+    ['EQUIPMENT_ASSET', 'eq-3'],
+    ['DEPARTMENT_CONFIG', 'LOSAP_POINT_RULES'],
+    ['OCCUPANCY', 'occ-6'],
+    ['MEMBER_QUALIFICATION', 'm-24-INTERIOR'],
+  ] as const) {
+    const entries = await history(type, id);
+    expect(entries.length, `${type} ${id}`).toBeGreaterThan(0);
+    // Newest first, as platform/audit returns it; the oldest is the record's creation.
+    expect(entries.map((e) => e.ts)).toEqual([...entries.map((e) => e.ts)].sort((a, b) => b - a));
+    expect(entries.at(-1)?.action, `${type} ${id}`).toBe('CREATE');
+  }
+
+  // Exact match, as the server's key lookup: another case is another record.
+  expect(await history('MEMBER', 'M-1')).toEqual([]);
+  // Both keys are required: the server's 400, with its detail.
+  await expect(apiRequest('platform/audit?entityType=MEMBER', tokens)).rejects.toMatchObject({
+    problem: { status: 400 },
+  });
+});

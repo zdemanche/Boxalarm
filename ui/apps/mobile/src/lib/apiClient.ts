@@ -18,6 +18,18 @@ export class ApiError extends Error {
   }
 }
 
+const UNKNOWN_TRACE_ID = 'unknown';
+
+// The API Gateway answers a rejected or missing token itself (401, or 403 from the authorizer)
+// with a bare { message } body; every backend problem carries a traceId. A gateway 403 is a
+// sign-in or authorizer problem that a new session or a later try can clear, not a refusal of
+// this request. Any other 403 without a backend problem body (a WAF block) matches too: it is
+// treated as recoverable and retried.
+export function isGatewayDenial(error: ApiError): boolean {
+  const { status, traceId } = error.problem;
+  return status === 403 && traceId === UNKNOWN_TRACE_ID;
+}
+
 /** A request that got no answer within its time limit. Never a 4xx/5xx: the server may not have
  * seen it at all, so callers treat it like "unreachable", not like a refusal. */
 export class ApiTimeoutError extends Error {
@@ -40,7 +52,7 @@ const API_PATH_PREFIX = '/api/v1/';
 /** Long enough for a slow rural link, short enough that nobody stares at a spinner. */
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController();
   const callerSignal = init.signal;
   const forwardAbort = () => controller.abort();
@@ -107,15 +119,15 @@ export async function apiRequest(
   }
 
   if (!response.ok) {
-    const problem = (await response.json().catch(() => null)) as ProblemDetails | null;
-    throw new ApiError(
-      problem ?? {
-        type: 'about:blank',
-        title: response.statusText,
-        status: response.status,
-        traceId: 'unknown',
-      },
-    );
+    const problem = (await response.json().catch(() => null)) as
+      (Partial<ProblemDetails> & { message?: string }) | null;
+    throw new ApiError({
+      type: 'about:blank',
+      title: problem?.message ?? response.statusText,
+      traceId: UNKNOWN_TRACE_ID,
+      ...problem,
+      status: response.status,
+    });
   }
 
   return response;

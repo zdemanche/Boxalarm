@@ -1,6 +1,9 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { act, fireEvent, render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { targetSize } from '@boxalarm/design-tokens';
+import { testSafeAreaMetrics } from '../testUtils/safeAreaMetrics';
 import { AppTabs } from './AppTabs';
 
 jest.mock('../auth/AuthContext', () => ({
@@ -55,4 +58,14 @@ test("switching tabs shows that tab's real content - Apparatus (5), Schedule (6)
     fireEvent.press(await findByText('Schedule'));
   });
   expect((await findAllByText('STATION-1')).length).toBeGreaterThan(0);
+});
+
+test('the tab row clears the field floor once the home-indicator inset is taken out of the bar', async () => {
+  const { getByLabelText } = await renderTabs();
+
+  let node = getByLabelText('Alerts, tab, 1 of 4').parent;
+  while (node && StyleSheet.flatten(node.props.style)?.height === undefined) node = node.parent;
+  const { height, paddingTop, paddingBottom } = StyleSheet.flatten(node!.props.style);
+  expect(paddingBottom).toBe(testSafeAreaMetrics.insets.bottom);
+  expect(height - paddingTop - paddingBottom).toBeGreaterThanOrEqual(targetSize.field);
 });

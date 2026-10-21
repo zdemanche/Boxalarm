@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { RouteErrorBoundary } from './RouteErrorBoundary';
+import * as telemetry from '../lib/telemetry';
 
 afterEach(cleanup);
 
@@ -37,4 +38,21 @@ test('renders children when nothing has failed', () => {
   );
 
   expect(screen.getByText('page content')).toBeTruthy();
+});
+
+test('reports the caught render error to telemetry', () => {
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  const report = vi.spyOn(telemetry, 'reportClientError').mockImplementation(() => undefined);
+
+  render(
+    <RouteErrorBoundary>
+      <Boom />
+    </RouteErrorBoundary>,
+  );
+
+  expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: 'backend 500' }), {
+    boundary: 'route',
+  });
+  consoleError.mockRestore();
+  report.mockRestore();
 });

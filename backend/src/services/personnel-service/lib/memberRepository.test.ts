@@ -110,6 +110,7 @@ describe('memberRepository', () => {
       expect(auditPut?.Item.mutatedEntityId).toBe(member.memberId);
       expect(auditPut?.Item.actorId).toBe('actor-1');
       expect(auditPut?.Item.pk).toMatch(/^DEPT#NICHOLS#AUDIT#\d{4}-\d{2}-\d{2}$/);
+      expect(auditPut?.Item.gsi3sk).toBe(String(auditPut?.Item.ts));
     });
 
     // Design review C2: the alerting plane projects `phone` into the member's SMS and VOICE
@@ -246,7 +247,7 @@ describe('memberRepository', () => {
       expect(auditPut?.Put?.Item.changedFields).toEqual({
         status: { old: 'PROBATIONARY', new: 'ACTIVE' },
       });
-      expect(typeof auditPut?.Put?.Item.gsi3sk).toBe('string');
+      expect(auditPut?.Put?.Item.gsi3sk).toBe(String(auditPut?.Put?.Item.ts));
 
       expect(outboxPut?.Put?.Item.pk).toBe('DEPT#NICHOLS#OUTBOX#m1');
       expect(outboxPut?.Put?.Item.eventType).toBe('personnel.member.updated');
@@ -283,6 +284,7 @@ describe('memberRepository', () => {
         ['MEMBER'],
         ['MEMBER', 'OFFICER'],
         'actor-1',
+        1700000000000,
       );
 
       expect(sendMock).toHaveBeenCalledTimes(1);
@@ -290,10 +292,10 @@ describe('memberRepository', () => {
 
       expect(memberUpdate?.Update?.Key).toEqual({ pk: 'DEPT#NICHOLS#MEMBER#m1', sk: 'METADATA' });
       expect(memberUpdate?.Update?.ConditionExpression).toBe(
-        'attribute_exists(pk) AND #roles = :previousRoles',
+        'attribute_exists(pk) AND updatedAt = :previousUpdatedAt',
       );
       expect(memberUpdate?.Update?.ExpressionAttributeValues).toMatchObject({
-        ':previousRoles': ['MEMBER'],
+        ':previousUpdatedAt': 1700000000000,
         ':roles': ['MEMBER', 'OFFICER'],
       });
 
@@ -302,6 +304,7 @@ describe('memberRepository', () => {
         roles: { old: ['MEMBER'], new: ['MEMBER', 'OFFICER'] },
       });
       expect(auditPut?.Put?.Item.actorId).toBe('actor-1');
+      expect(auditPut?.Put?.Item.gsi3sk).toBe(String(auditPut?.Put?.Item.ts));
 
       const outbox = outboxPut?.Put?.Item;
       expect(outbox).toMatchObject({
@@ -324,7 +327,7 @@ describe('memberRepository', () => {
     it('propagates a failed transaction so the handler can answer 503', async () => {
       sendMock.mockRejectedValueOnce(new Error('TransactionCanceledException'));
       await expect(
-        updateMemberRoles('table', PRINCIPAL, 'm1', ['MEMBER'], ['MEMBER', 'CHIEF'], 'actor-1'),
+        updateMemberRoles('table', PRINCIPAL, 'm1', ['MEMBER'], ['MEMBER', 'CHIEF'], 'actor-1', 1),
       ).rejects.toThrow('TransactionCanceledException');
     });
   });

@@ -8,6 +8,8 @@ import {
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { resolveCadMessageTime } from '@boxalarm/cad-parser';
 import type { DispatchReceived } from '../dispatches/dispatchIngressPort.js';
+import type { ReplayMarkerItem } from '../dispatches/repository.js';
+import { buildBridgeOutboxRecord } from '../platformBusBridge.js';
 import type { CadChannel } from './metrics.js';
 
 /**
@@ -18,9 +20,13 @@ import type { CadChannel } from './metrics.js';
  *      update is a duplicate and notifies nobody twice;
  *   1. the DISPATCH_ALERT itself, refreshed where the CAD changed it, conditional on its
  *      stored content hash differing (a resend of the ORIGINAL message is a duplicate too);
- *   2. the message's replay marker (same all-or-nothing rule as a new dispatch).
- * No bridge outbox row (the incident draft already exists) and no new tone ladder. The
- * non-escalating UPDATE push is sent by cadIngress/updateNotifierHandler.ts from the stream
+ *   2. when the update changed something: a dispatch.alert.received outbox row carrying the
+ *      refreshed fields and a `revision`, so the LOB plane's dispatch copy (the source of a
+ *      report's pre-fill) follows the correction - it is an upsert keyed by dispatchId, never a
+ *      second incident draft;
+ *   3. the message's replay marker (same all-or-nothing rule as a new dispatch).
+ * An update that changes nothing (a resend with a new timestamp) is recorded and stamped notified, so it pushes nobody.
+ * No new tone ladder. The non-escalating UPDATE push is sent by cadIngress/updateNotifierHandler.ts from the stream
  * INSERT of item 0 - the same single-producer shape as the tone-1 fan-out.
  */
 
@@ -39,6 +45,8 @@ export type RecordUpdateResult =
   | { readonly outcome: 'recorded'; readonly updateId: string; readonly changes: CadFieldChange[] }
   /** An older CAD message: kept in the history, nothing applied, nobody notified (R2-M1). */
   | { readonly outcome: 'history'; readonly updateId: string }
+  /** Nothing on the call changed: recorded so it is a duplicate next time, nobody notified. */
+  | { readonly outcome: 'unchanged'; readonly updateId: string }
   | { readonly outcome: 'duplicate' }
   | { readonly outcome: 'replay' }
   /** The lock pointed at a dispatch that is gone: the caller treats the message as new. */
@@ -49,6 +57,7 @@ export interface RecordUpdateInput {
   readonly dispatchId: string;
   readonly dispatch: DispatchReceived;
   readonly parseStatus: 'PARSED' | 'RAW';
+  readonly typeCarried: boolean;
   readonly contentHash: string;
   readonly channel: CadChannel;
   readonly receivedAt: number;
@@ -56,10 +65,11 @@ export interface RecordUpdateInput {
   readonly messageTimeText?: string;
   /** The department's time zone, for resolving that text (resolveCadMessageTime). */
   readonly timeZone: string;
-  readonly replayMarker?: Record<string, unknown> & { readonly pk: string; readonly sk: string };
+  readonly replayMarkers?: readonly ReplayMarkerItem[];
 }
 
 const NARRATIVE_SUMMARY_CHARS = 120;
+const MAX_WRITE_ATTEMPTS = 3;
 
 export function updateIdFor(contentHash: string): string {
   return createHash('sha256').update(`UPDATE|${contentHash}`).digest('hex').slice(0, 32);
@@ -75,13 +85,16 @@ export function diffDispatch(
   current: Record<string, unknown>,
   next: DispatchReceived,
   parseStatus: 'PARSED' | 'RAW',
+  typeCarried: boolean,
 ): CadFieldChange[] {
   // A RAW update carries only text: it never overwrites a structured address with the
   // "SEE DISPATCH TEXT" placeholder. Its text becomes the narrative.
   const candidates: [UpdatedField, string][] =
     parseStatus === 'PARSED'
       ? [
-          ['incidentType', next.incidentType],
+          ...(typeCarried || current.cadParseStatus === 'RAW'
+            ? [['incidentType', next.incidentType] as [UpdatedField, string]]
+            : []),
           ['address', next.address],
           ['crossStreets', next.crossStreets],
           ['unitsRequested', next.unitsRequested.join(', ')],
@@ -149,38 +162,35 @@ export async function recordCadUpdate(
   tableName: string,
   request: RecordUpdateInput,
 ): Promise<RecordUpdateResult> {
-  let input: ResolvedUpdateInput = request;
-  const pk = buildDeptScopedPk(input.deptId, 'DISPATCH', input.dispatchId);
-  const { Item: current } = await client.send(
-    new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
-  );
-  if (!current) return { outcome: 'missing' };
-  if (current.cadContentHash === input.contentHash) return { outcome: 'duplicate' };
-
-  // A message the CAD stamped EARLIER than the one last applied (a delayed email, a re-signed
-  // retry of the original) is history only: it never reverts newer fields and never pushes.
-  // A bare time is placed nearest THIS message's receipt (a bare 0003 after 2355 is the next
-  // day, chain review R3-M1; an update 13.5 h into a long incident is today, R3b-M1), then
-  // compared with the stored one; a time that does not resolve leaves the message unordered.
-  const appliedTime =
-    typeof current.cadMessageTime === 'number' ? current.cadMessageTime : undefined;
-  const messageTime = resolveCadMessageTime(input.messageTimeText, {
-    receivedAt: input.receivedAt,
-    timeZone: input.timeZone,
-  });
-  input = { ...input, messageTime };
-  const olderThanApplied =
-    input.messageTime !== undefined && appliedTime !== undefined && input.messageTime < appliedTime;
-  const result = await writeUpdate(client, tableName, pk, current, input, olderThanApplied);
-  if (result === 'raced' && !olderThanApplied) {
-    // A newer message was applied between the read and the write: record this one as history.
-    const reread = await client.send(
+  const pk = buildDeptScopedPk(request.deptId, 'DISPATCH', request.dispatchId);
+  const read = () =>
+    client.send(
       new GetCommand({ TableName: tableName, Key: { pk, sk: 'METADATA' }, ConsistentRead: true }),
     );
-    const again = await writeUpdate(client, tableName, pk, reread.Item ?? current, input, true);
-    return again === 'raced' ? { outcome: 'duplicate' } : again;
+  let { Item: current } = await read();
+  for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
+    if (!current) return { outcome: 'missing' };
+    if (current.cadContentHash === request.contentHash) return { outcome: 'duplicate' };
+
+    // A message the CAD stamped EARLIER than the one last applied (a delayed email, a re-signed
+    // retry of the original) is history only: it never reverts newer fields and never pushes.
+    // A bare time is placed nearest THIS message's receipt (a bare 0003 after 2355 is the next
+    // day, chain review R3-M1; an update 13.5 h into a long incident is today, R3b-M1), then
+    // compared with the stored one; a time that does not resolve leaves the message unordered.
+    const appliedTime =
+      typeof current.cadMessageTime === 'number' ? current.cadMessageTime : undefined;
+    const messageTime = resolveCadMessageTime(request.messageTimeText, {
+      receivedAt: request.receivedAt,
+      timeZone: request.timeZone,
+    });
+    const input: ResolvedUpdateInput = { ...request, messageTime };
+    const olderThanApplied =
+      messageTime !== undefined && appliedTime !== undefined && messageTime < appliedTime;
+    const result = await writeUpdate(client, tableName, pk, current, input, olderThanApplied);
+    if (result !== 'raced') return result;
+    ({ Item: current } = await read());
   }
-  return result === 'raced' ? { outcome: 'duplicate' } : result;
+  throw new Error('CAD update lost the write race repeatedly; retry');
 }
 
 async function writeUpdate(
@@ -191,7 +201,11 @@ async function writeUpdate(
   input: ResolvedUpdateInput,
   historyOnly: boolean,
 ): Promise<RecordUpdateResult | 'raced'> {
-  const changes = historyOnly ? [] : diffDispatch(current, input.dispatch, input.parseStatus);
+  const replayMarkers = input.replayMarkers ?? [];
+  const changes = historyOnly
+    ? []
+    : diffDispatch(current, input.dispatch, input.parseStatus, input.typeCarried);
+  const unchanged = !historyOnly && changes.length === 0;
   const updateId = updateIdFor(input.contentHash);
   const next = input.dispatch;
   const set: string[] = [
@@ -222,7 +236,16 @@ async function writeUpdate(
       values[':locality'] = next.locality;
     }
   }
+  const mergedText = (field: UpdatedField): string =>
+    changes.find((change) => change.field === field)?.to ?? asText(current[field]);
+  const revisionRead = typeof current.updateCount === 'number' ? current.updateCount : undefined;
   let condition = 'attribute_exists(pk)';
+  if (revisionRead === undefined) {
+    condition += ' AND attribute_not_exists(updateCount)';
+  } else {
+    condition += ' AND updateCount = :revisionRead';
+    values[':revisionRead'] = revisionRead;
+  }
   if (input.messageTime !== undefined) {
     set.push('cadMessageTime = :mt');
     values[':mt'] = input.messageTime;
@@ -246,8 +269,13 @@ async function writeUpdate(
             ingressChannel: input.channel,
             parseStatus: input.parseStatus,
             changes,
-            summary: historyOnly ? 'Older CAD message - not applied' : summarizeChanges(changes),
+            summary: historyOnly
+              ? 'Older CAD message - not applied'
+              : unchanged
+                ? 'No change'
+                : summarizeChanges(changes),
             applied: !historyOnly,
+            ...(unchanged ? { notifiedAt: input.receivedAt } : {}),
             ...(input.messageTime !== undefined ? { messageTime: input.messageTime } : {}),
           },
           ConditionExpression: 'attribute_not_exists(pk)',
@@ -269,20 +297,29 @@ async function writeUpdate(
       ...(historyOnly
         ? []
         : [
-            {
-              Put: {
-                TableName: tableName,
-                Item: {
-                  ...pendingNoticeKey(input.deptId, input.receivedAt, input.dispatchId, updateId),
-                  entityType: 'CAD_UPDATE_PENDING',
-                  deptId: input.deptId,
-                  dispatchId: input.dispatchId,
-                  updateId,
-                  receivedAt: input.receivedAt,
-                  ttl: input.receivedAt + PENDING_NOTICE_RETENTION_SECONDS,
-                },
-              },
-            },
+            ...(unchanged
+              ? []
+              : [
+                  {
+                    Put: {
+                      TableName: tableName,
+                      Item: {
+                        ...pendingNoticeKey(
+                          input.deptId,
+                          input.receivedAt,
+                          input.dispatchId,
+                          updateId,
+                        ),
+                        entityType: 'CAD_UPDATE_PENDING',
+                        deptId: input.deptId,
+                        dispatchId: input.dispatchId,
+                        updateId,
+                        receivedAt: input.receivedAt,
+                        ttl: input.receivedAt + PENDING_NOTICE_RETENTION_SECONDS,
+                      },
+                    },
+                  },
+                ]),
             {
               Update: {
                 TableName: tableName,
@@ -292,36 +329,64 @@ async function writeUpdate(
                 ExpressionAttributeValues: values,
               },
             },
+            ...(unchanged
+              ? []
+              : [
+                  {
+                    Put: {
+                      TableName: tableName,
+                      Item: buildBridgeOutboxRecord(
+                        input.deptId,
+                        'dispatch.alert.received',
+                        input.dispatchId,
+                        {
+                          deptId: input.deptId,
+                          dispatchId: input.dispatchId,
+                          incidentType: mergedText('incidentType'),
+                          address: mergedText('address'),
+                          crossStreets: mergedText('crossStreets'),
+                          narrative: mergedText('narrative'),
+                          dispatchedAt: current.dispatchedAt,
+                          revision: (revisionRead ?? 0) + 1,
+                          ...(input.parseStatus === 'RAW' && current.verifyRequired === true
+                            ? { verifyRequired: true }
+                            : {}),
+                        },
+                      ),
+                    },
+                  },
+                ]),
           ]),
-      ...(input.replayMarker
-        ? [
-            {
-              Put: {
-                TableName: tableName,
-                Item: input.replayMarker,
-                ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
-                ExpressionAttributeNames: { '#ttl': 'ttl' },
-                ExpressionAttributeValues: { ':replayNow': input.replayMarker.createdAt },
-              },
-            },
-          ]
-        : []),
+      ...replayMarkers.map((marker) => ({
+        Put: {
+          TableName: tableName,
+          Item: marker,
+          ConditionExpression: 'attribute_not_exists(pk) OR #ttl <= :replayNow',
+          ExpressionAttributeNames: { '#ttl': 'ttl' },
+          ExpressionAttributeValues: { ':replayNow': marker.createdAt },
+        },
+      })),
     ];
   try {
     await client.send(new TransactWriteCommand({ TransactItems: items }));
-    return historyOnly
-      ? { outcome: 'history', updateId }
+    if (historyOnly) return { outcome: 'history', updateId };
+    return unchanged
+      ? { outcome: 'unchanged', updateId }
       : { outcome: 'recorded', updateId, changes };
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
       const reasons = error.CancellationReasons ?? [];
       const failed = (index: number) => reasons[index]?.Code === 'ConditionalCheckFailed';
-      const markerIndex = items.length - 1;
-      if (input.replayMarker && failed(markerIndex)) return { outcome: 'replay' };
+      const firstMarkerIndex = items.length - replayMarkers.length;
+      if (
+        reasons.slice(firstMarkerIndex).some((reason) => reason.Code === 'ConditionalCheckFailed')
+      ) {
+        return { outcome: 'replay' };
+      }
       // UPDATE# or SEEN# exists: this content was accepted before.
       if (failed(0) || failed(1)) return { outcome: 'duplicate' };
       // Only the METADATA condition failed: a newer message was applied meanwhile.
-      if (!historyOnly && failed(3)) return 'raced';
+      if (!historyOnly && failed(items.findIndex((item) => item.Update))) return 'raced';
     }
     throw error;
   }

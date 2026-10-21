@@ -1,5 +1,10 @@
 import type { VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
-import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import {
+  GetCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+  type TransactWriteCommandInput,
+} from '@aws-sdk/lib-dynamodb';
 import {
   extractTraceId,
   notFoundProblem,
@@ -18,10 +23,12 @@ import {
   LADDER_CONTROL_METRIC_NAMESPACE,
   TONE_LADDER_ACTIVE,
   TONE_LADDER_COMPLETED,
+  TEST_DISPATCH_DETAIL,
   TONE_LADDER_HALTED,
   conflictProblem,
   dataUnavailableProblem,
   getDispatchMetadata,
+  isTestDispatch,
   jsonResponse,
   parseDispatchId,
   readLadderState,
@@ -52,6 +59,27 @@ const MAX_ATTEMPTS = 3;
 type HaltAttempt =
   { readonly kind: 'halted'; readonly ladder: LadderState } | { readonly kind: 'retry' };
 
+async function findSuppressedTone(
+  ddb: DynamoDBDocumentClient,
+  tableName: string,
+  pk: string,
+  ladder: LadderState,
+): Promise<number | undefined> {
+  for (let tone = ladder.currentToneSequence + 1; tone <= FINAL_TONE_SEQUENCE; tone += 1) {
+    const guard = await ddb.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { pk, sk: `TONE#${tone}` },
+        ConsistentRead: true,
+      }),
+    );
+    if (!guard.Item) {
+      return tone;
+    }
+  }
+  return undefined;
+}
+
 async function attemptHalt(
   ddb: DynamoDBDocumentClient,
   tableName: string,
@@ -62,7 +90,37 @@ async function attemptHalt(
 ): Promise<HaltAttempt> {
   const pk = buildDeptScopedPk(deptId, 'DISPATCH', dispatchId);
   const haltedAt = Math.floor(Date.now() / 1000);
-  const suppressedTone = ladder.currentToneSequence + 1;
+  const suppressedTone = await findSuppressedTone(ddb, tableName, pk, ladder);
+  const suppressionAudit: NonNullable<TransactWriteCommandInput['TransactItems']> =
+    suppressedTone === undefined
+      ? []
+      : [
+          {
+            ConditionCheck: {
+              TableName: tableName,
+              Key: { pk, sk: `TONE#${suppressedTone}` },
+              ConditionExpression: 'attribute_not_exists(pk)',
+            },
+          },
+          {
+            Put: {
+              TableName: tableName,
+              Item: {
+                pk,
+                // Suffixed with the outcome: an unconditional put keyed on the second alone
+                // overwrote the Tone Evaluator's audit row for the same tone and second.
+                sk: `TONE#${suppressedTone}#${haltedAt}#SKIPPED_MANUALLY_HALTED`,
+                entityType: 'TONE_EVENT',
+                dispatchId,
+                deptId,
+                toneSequence: suppressedTone,
+                evaluatedAt: haltedAt,
+                outcome: 'SKIPPED_MANUALLY_HALTED',
+                triggeredBy: memberId,
+              },
+            },
+          },
+        ];
   try {
     await ddb.send(
       new TransactWriteCommand({
@@ -87,24 +145,7 @@ async function attemptHalt(
               },
             },
           },
-          {
-            Put: {
-              TableName: tableName,
-              Item: {
-                pk,
-                // Suffixed with the outcome: an unconditional put keyed on the second alone
-                // overwrote the Tone Evaluator's audit row for the same tone and second.
-                sk: `TONE#${suppressedTone}#${haltedAt}#SKIPPED_MANUALLY_HALTED`,
-                entityType: 'TONE_EVENT',
-                dispatchId,
-                deptId,
-                toneSequence: suppressedTone,
-                evaluatedAt: haltedAt,
-                outcome: 'SKIPPED_MANUALLY_HALTED',
-                triggeredBy: memberId,
-              },
-            },
-          },
+          ...suppressionAudit,
         ],
       }),
     );
@@ -146,6 +187,9 @@ async function halt(
       const metadata = await getDispatchMetadata(ddb, tableName, deptId, dispatchId);
       if (!metadata) {
         return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
+      }
+      if (isTestDispatch(metadata)) {
+        return conflictProblem(traceId, TEST_DISPATCH_DETAIL);
       }
       const ladder = readLadderState(metadata);
       if (ladder.status === TONE_LADDER_HALTED) {

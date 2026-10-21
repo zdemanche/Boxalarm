@@ -104,6 +104,7 @@ export const handler = async (payload: unknown): Promise<{ outcome: EscalationOu
 
   if (!roster) {
     logInfo('alerting.escalation.skipped_not_found', { correlationId });
+    emitOutcomeMetric(METRIC_NAMESPACE, 'EscalationSkipped', 'NotFound');
     return { outcome: 'SKIPPED_NOT_FOUND' };
   }
 

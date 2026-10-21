@@ -92,13 +92,19 @@ describe('resignDefectPhotoUploadUrl', () => {
     const presign = vi.fn().mockResolvedValue('https://signed');
 
     await expect(
-      resignDefectPhotoUploadUrl(config, deptId, 'OTHER/defect/D-1/p.jpg', presign),
+      resignDefectPhotoUploadUrl(config, deptId, 'D-1', 'OTHER/defect/D-1/p.jpg', presign),
     ).rejects.toThrow(TypeError);
     await expect(
-      resignDefectPhotoUploadUrl(config, deptId, 'NICHOLS/defect/../CERTIFICATION/x', presign),
+      resignDefectPhotoUploadUrl(
+        config,
+        deptId,
+        'D-1',
+        'NICHOLS/defect/../CERTIFICATION/x',
+        presign,
+      ),
     ).rejects.toThrow(TypeError);
     await expect(
-      resignDefectPhotoUploadUrl(config, deptId, 'NICHOLS/defect/D-1/p.jpg', presign),
+      resignDefectPhotoUploadUrl(config, deptId, 'D-1', 'NICHOLS/defect/D-1/p.jpg', presign),
     ).resolves.toEqual({ uploadUrl: 'https://signed', contentType: 'image/jpeg' });
     expect(presign).toHaveBeenCalledWith(
       'boxalarm-dev-platform-assets',

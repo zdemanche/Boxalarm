@@ -59,4 +59,29 @@ describe('projection batch handler', () => {
     );
     expect(result.batchItemFailures).toEqual([]);
   });
+
+  it('acknowledges a stale event without failing the batch', async () => {
+    const { TransactionCanceledException } = await import('@aws-sdk/client-dynamodb');
+    const send = vi.fn().mockRejectedValue(
+      new TransactionCanceledException({
+        message: 'cancelled',
+        $metadata: {},
+        CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+      }),
+    );
+    const client = { send } as unknown as DynamoDBDocumentClient;
+    const result = await handleProjectionBatch(
+      sqs(
+        JSON.stringify({
+          eventId: 'evt-1',
+          eventTime: '2026-03-01T12:00:00.000Z',
+          eventType: 'personnel.availability.changed',
+          payload: { deptId: 'NICHOLS', memberId: 'm-1', availabilityState: 'MARKED_OFF' },
+        }),
+      ),
+      client,
+      'platform',
+    );
+    expect(result.batchItemFailures).toEqual([]);
+  });
 });

@@ -41,6 +41,9 @@ describe('publishDueEvent (AC2)', () => {
     expect(putCommand).toBeInstanceOf(PutCommand);
     expect(putCommand.input.Item?.pk).toBe('DEPT#NICHOLS#PPE_EXPIRY_FLAG#2026-09-14');
     expect(putCommand.input.Item?.sk).toBe('PPE#MBR-0034#TURNOUT-COAT');
+    expect(putCommand.input.Item?.ttl).toBe(
+      Math.floor(baseParams.now.getTime() / 1000) + 7 * 86400,
+    );
 
     const updateCommand = ddbSend.mock.calls[1]?.[0] as UpdateCommand;
     expect(updateCommand).toBeInstanceOf(UpdateCommand);

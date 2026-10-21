@@ -8,8 +8,8 @@ import {
   formatDate,
   formatDuration,
   formatPercent,
+  dayBounds,
   isoDateDaysAgo,
-  isoDateToEpochSeconds,
   todayIsoDate,
 } from './format';
 import { Metric, QueryState, ReportToolbar, useDateRange } from './ReportingPage';
@@ -35,8 +35,8 @@ export function CutoverPanel() {
   const queryClient = useQueryClient();
   const canDecide = canRecordCutoverDecision(auth.roles);
   const range = useDateRange(isoDateDaysAgo(30), todayIsoDate());
-  const from = isoDateToEpochSeconds(range.from);
-  const to = isoDateToEpochSeconds(range.to) + 86_399;
+  const from = dayBounds(range.from).from;
+  const to = dayBounds(range.to).to;
 
   const query = useQuery({
     queryKey: ['reporting', 'cutover-decision', from, to],

@@ -65,6 +65,12 @@ function nerisStatus(raw: string): 'PENDING' | 'FAILED' | undefined {
   return undefined;
 }
 
+function addDays(isoDate: string, days: number): string {
+  return new Date(Date.parse(`${isoDate}T00:00:00.000Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 export function assembleDashboard(
   items: readonly Record<string, unknown>[],
   nowMs: number,
@@ -76,8 +82,12 @@ export function assembleDashboard(
   const outOfServiceApparatus: DashboardOos[] = [];
   const certifications: DashboardCert[] = [];
   const submissions: DashboardNerisSubmission[] = [];
+  const today = new Date(nowMs).toISOString().slice(0, 10);
 
   for (const item of items) {
+    if (item.removed === true) {
+      continue;
+    }
     const sk = text(item, 'sk');
     if (sk === 'META') {
       const updatedAt = epochMs(item.updatedAt);
@@ -104,10 +114,15 @@ export function assembleDashboard(
       continue;
     }
     if (sk.startsWith('CERT#')) {
+      const expiryDate = text(item, 'expiryDate');
+      const leadDays = typeof item.leadDays === 'number' ? item.leadDays : undefined;
+      if (expiryDate < today || (leadDays !== undefined && expiryDate > addDays(today, leadDays))) {
+        continue;
+      }
       certifications.push({
         memberId: text(item, 'memberId'),
         certId: text(item, 'certId'),
-        expiryDate: text(item, 'expiryDate'),
+        expiryDate,
       });
       continue;
     }
@@ -125,6 +140,10 @@ export function assembleDashboard(
       continue;
     }
     if (sk.startsWith('COVERAGE#')) {
+      const endAtMs = epochMs(item.endAt);
+      if (endAtMs !== undefined && endAtMs <= nowMs) {
+        continue;
+      }
       gaps.push({ shiftId: text(item, 'shiftId'), gapReason: text(item, 'gapReason') });
     }
   }

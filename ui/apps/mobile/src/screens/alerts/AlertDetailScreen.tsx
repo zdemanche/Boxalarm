@@ -40,6 +40,7 @@ import {
   Notice,
   noticeText,
   rowDivider,
+  useCanAssignRiding,
 } from './alertsUi';
 
 // a11y-spec §1.11 alert-path targets: the primary answer is full width x 88, the others 72, with
@@ -204,6 +205,9 @@ export function AlertDetailScreen() {
     retry,
   } = useAlertDetail(repository, dispatchId, payload);
   const auth = useOptionalAuth();
+  const canAssignRiding = useCanAssignRiding();
+  const navigationRef = useRef(navigation);
+  navigationRef.current = navigation;
   const { isOnline } = useOptionalConnectivity();
   const response = useAlertResponse(repository, dispatchId, auth?.memberId ?? null, isOnline);
   const [narrativeExpanded, setNarrativeExpanded] = useState(false);
@@ -235,6 +239,7 @@ export function AlertDetailScreen() {
   useEffect(() => {
     if (!answerSent) return undefined;
     const release = () => {
+      if (navigationRef.current.isFocused?.() === false) return;
       releasedRef.current = true;
       setAlertShowsOverLockScreen(false);
     };
@@ -259,6 +264,7 @@ export function AlertDetailScreen() {
     let cancelled = false;
     const onFocus = () => {
       if (!releasedRef.current) setAlertShowsOverLockScreen(true);
+      touchedRef.current?.();
       if (AppState.currentState !== 'active') return;
       void isDeviceLocked().then((locked) => {
         if (!cancelled && locked === false) silence();
@@ -305,7 +311,11 @@ export function AlertDetailScreen() {
   // than the member could be holding it) needs a confirm. ETA changes do not.
   const changeAnswer = (answer: ResponseAnswer) => {
     const current = response.answer;
-    if (!answerSentRef.current || !current || current.ackStatus === answer) {
+    if (current?.ackStatus === answer) {
+      respond(answer, current.eta);
+      return;
+    }
+    if (!answerSentRef.current || !current) {
       respond(answer);
       return;
     }
@@ -698,6 +708,12 @@ export function AlertDetailScreen() {
           label="View roster"
           onPress={() => navigation.navigate('Roster', { dispatchId })}
         />
+        {canAssignRiding ? (
+          <AlertAction
+            label="Riding assignments"
+            onPress={() => navigation.navigate('RidingBoard', { dispatchId })}
+          />
+        ) : null}
       </View>
     </CanvasScrollView>
   );

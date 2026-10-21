@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Decision, type VerifiedPermissionsClient } from '@aws-sdk/client-verifiedpermissions';
-import { TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import {
+  PutCommand,
+  TransactWriteCommand,
+  type DynamoDBDocumentClient,
+} from '@aws-sdk/lib-dynamodb';
 import type { CedarPrincipalContext, GuardEvent } from '@boxalarm/authz';
 import type { ApparatusRepository } from './apparatusRepository.js';
 
@@ -77,6 +82,7 @@ function fakeDynamoClient(putError?: Error): DynamoDBDocumentClient {
 }
 
 const NOW = () => '2026-09-14';
+const LOGGED_AT = () => '2026-09-14T14:00:00.000Z';
 
 function findTransactItems(
   client: DynamoDBDocumentClient,
@@ -225,7 +231,122 @@ describe('postTestRecord handler', () => {
     expect(result).toMatchObject({ statusCode: 201 });
     const putItem = findPutItem(dynamoClient);
     expect(putItem.testDate).toBe('2026-09-14');
-    expect(putItem.sk).toBe('TEST#HOSE#2026-09-14');
+    expect(putItem.sk).toMatch(/^TEST#HOSE#2026-09-14#\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('keeps two same-day submissions of one test type as separate append-only rows', async () => {
+    const dynamoClient = fakeDynamoClient();
+    const createHandler = await importHandler();
+    const timestamps = ['2026-09-14T14:00:00.000Z', '2026-09-14T16:00:00.000Z'];
+    const handler = createHandler({
+      client: dynamoClient,
+      apparatusRepository: fakeApparatusRepository('APP-ENGINE-2'),
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: NOW,
+      loggedAt: () => timestamps.shift() as string,
+    });
+    await handler(buildEvent(VALID_BODY, 'ENGINE-2'));
+    await handler(buildEvent(VALID_BODY, 'ENGINE-2'));
+
+    const sorts = (dynamoClient.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: unknown[]) =>
+        (
+          (call[0] as TransactWriteCommand).input.TransactItems?.[0]?.Put?.Item as {
+            sk: string;
+          }
+        ).sk,
+    );
+    expect(new Set(sorts).size).toBe(2);
+    const record = findTransactItems(dynamoClient)[0]?.Put as {
+      ConditionExpression?: string;
+    };
+    expect(record.ConditionExpression).toBe('attribute_not_exists(sk)');
+  });
+
+  it('writes the due item only when it is not newer than this test date', async () => {
+    const dynamoClient = fakeDynamoClient();
+    const createHandler = await importHandler();
+    const handler = createHandler({
+      client: dynamoClient,
+      apparatusRepository: fakeApparatusRepository('APP-ENGINE-2'),
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: NOW,
+      loggedAt: LOGGED_AT,
+    });
+    await handler(buildEvent(VALID_BODY, 'ENGINE-2'));
+
+    const duePut = findTransactItems(dynamoClient)[1]?.Put as unknown as {
+      ConditionExpression: string;
+      ExpressionAttributeValues: Record<string, unknown>;
+    };
+    expect(duePut.ConditionExpression).toBe(
+      'attribute_not_exists(testDate) OR testDate <= :testDate',
+    );
+    expect(duePut.ExpressionAttributeValues).toEqual({ ':testDate': '2026-09-14' });
+    expect(findDueItem(dynamoClient).testDate).toBe('2026-09-14');
+  });
+
+  it('still records an older (backdated) test when a newer one owns the due item', async () => {
+    const send = vi.fn((command: unknown) => {
+      if (command instanceof TransactWriteCommand) {
+        return Promise.reject(
+          new TransactionCanceledException({
+            message: 'cancelled',
+            $metadata: {},
+            CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+          }),
+        );
+      }
+      return Promise.resolve({});
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const createHandler = await importHandler();
+    const handler = createHandler({
+      client: { send } as unknown as DynamoDBDocumentClient,
+      apparatusRepository: fakeApparatusRepository('APP-ENGINE-2'),
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: NOW,
+      loggedAt: LOGGED_AT,
+    });
+
+    const result = await handler(buildEvent(VALID_BODY, 'ENGINE-2'));
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    const recordPut = send.mock.calls.find((call) => call[0] instanceof PutCommand)?.[0] as
+      PutCommand | undefined;
+    expect(recordPut?.input.Item?.entityType).toBe('APPARATUS_TEST_RECORD');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('due_not_superseded'));
+    warnSpy.mockRestore();
+  });
+
+  it('logs and emits TestRecordLogFailed when the backdated fallback write also fails', async () => {
+    const send = vi.fn((command: unknown) => {
+      if (command instanceof TransactWriteCommand) {
+        return Promise.reject(
+          new TransactionCanceledException({
+            message: 'cancelled',
+            $metadata: {},
+            CancellationReasons: [{ Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+          }),
+        );
+      }
+      return Promise.reject(new Error('fallback throttled'));
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const createHandler = await importHandler();
+    const handler = createHandler({
+      client: { send } as unknown as DynamoDBDocumentClient,
+      apparatusRepository: fakeApparatusRepository('APP-ENGINE-2'),
+      authzClient: fakeAuthzClient('ALLOW'),
+      now: NOW,
+      loggedAt: LOGGED_AT,
+    });
+
+    await expect(handler(buildEvent(VALID_BODY, 'ENGINE-2'))).rejects.toThrow('fallback throttled');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('apparatusTest.put_failed'));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('TestRecordLogFailed'));
   });
 
   it('propagates (does not swallow) a PutItem failure and emits TestRecordLogFailed', async () => {

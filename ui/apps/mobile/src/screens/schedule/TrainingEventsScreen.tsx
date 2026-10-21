@@ -1,8 +1,9 @@
 import { spacing, targetSize, typeScale } from '@boxalarm/design-tokens';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Config from 'react-native-config';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { useOptionalAuth } from '../../auth/AuthContext';
+import { ApiError } from '../../lib/apiClient';
 import { Card, Screen, StatusChip, useTheme } from '../../components/ui';
 import { getTrainingEvents, signUpForEvent } from '../../features/training/api';
 import type { TrainingEvent } from '../../features/training/types';
@@ -20,6 +21,9 @@ export function TrainingEventsScreen() {
   const apiBaseUrl = Config.API_BASE_URL;
   const [events, setEvents] = useState<TrainingEvent[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [signUpError, setSignUpError] = useState<string | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const inFlight = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,9 +44,30 @@ export function TrainingEventsScreen() {
   }, [auth, apiBaseUrl]);
 
   const onSignUp = async (eventId: string) => {
-    if (!auth || !apiBaseUrl) return;
-    await signUpForEvent(auth, apiBaseUrl, eventId);
-    setEvents((prev) => prev.map((e) => (e.eventId === eventId ? { ...e, signedUp: true } : e)));
+    if (!auth || !apiBaseUrl || inFlight.current) return;
+    const markSignedUp = () =>
+      setEvents((prev) => prev.map((e) => (e.eventId === eventId ? { ...e, signedUp: true } : e)));
+    setSignUpError(null);
+    inFlight.current = true;
+    setPendingId(eventId);
+    try {
+      await signUpForEvent(auth, apiBaseUrl, eventId);
+      markSignedUp();
+    } catch (error) {
+      const status = error instanceof ApiError ? error.problem.status : undefined;
+      if (status === 409) {
+        markSignedUp();
+      } else {
+        setSignUpError(
+          status === 422
+            ? 'Sign-up is closed: this event has started.'
+            : 'Could not sign you up. Check your connection and try again.',
+        );
+      }
+    } finally {
+      inFlight.current = false;
+      setPendingId(null);
+    }
   };
 
   return (
@@ -57,6 +82,16 @@ export function TrainingEventsScreen() {
           </Text>
         </Card>
       ) : null}
+      {signUpError ? (
+        <Card>
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.status.danger, fontSize: typeScale.body.size }}
+          >
+            {signUpError}
+          </Text>
+        </Card>
+      ) : null}
       <Card>
         {events.length === 0 ? (
           <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
@@ -64,45 +99,52 @@ export function TrainingEventsScreen() {
           </Text>
         ) : (
           <View>
-            {events.map((item, index) => (
-              <TouchableOpacity
-                key={item.eventId}
-                accessibilityRole="button"
-                disabled={item.signedUp}
-                onPress={() => void onSignUp(item.eventId)}
-                style={{
-                  minHeight: targetSize.field,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: spacing.md,
-                  paddingVertical: spacing.sm + spacing.xs,
-                  borderTopWidth: index === 0 ? 0 : 1,
-                  borderTopColor: theme.borderDecorative,
-                }}
-              >
-                <View style={{ flex: 1, gap: spacing.xs }}>
-                  <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
-                    {item.title}
-                  </Text>
-                  <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
-                    {formatEventTime(item.startAt)} · {item.category}
-                  </Text>
-                </View>
-                {item.signedUp ? (
-                  <StatusChip status="ok" label="Signed up" />
-                ) : (
-                  <Text
-                    style={{
-                      color: theme.accent,
-                      fontSize: typeScale.body.size,
-                      fontWeight: '700',
-                    }}
-                  >
-                    Sign up
-                  </Text>
-                )}
-              </TouchableOpacity>
-            ))}
+            {events.map((item, index) => {
+              const started = item.startAt <= Date.now();
+              return (
+                <TouchableOpacity
+                  key={item.eventId}
+                  accessibilityRole="button"
+                  disabled={item.signedUp || started || pendingId !== null}
+                  onPress={() => void onSignUp(item.eventId)}
+                  style={{
+                    minHeight: targetSize.field,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: spacing.md,
+                    paddingVertical: spacing.sm + spacing.xs,
+                    borderTopWidth: index === 0 ? 0 : 1,
+                    borderTopColor: theme.borderDecorative,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: spacing.xs }}>
+                    <Text style={{ color: theme.fg, fontSize: ROW_TITLE_SIZE, fontWeight: '600' }}>
+                      {item.title}
+                    </Text>
+                    <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                      {formatEventTime(item.startAt)} · {item.category}
+                    </Text>
+                  </View>
+                  {item.signedUp ? (
+                    <StatusChip status="ok" label="Signed up" />
+                  ) : started ? (
+                    <Text style={{ color: theme.fgMuted, fontSize: typeScale.body.size }}>
+                      Sign-up closed
+                    </Text>
+                  ) : (
+                    <Text
+                      style={{
+                        color: theme.accent,
+                        fontSize: typeScale.body.size,
+                        fontWeight: '700',
+                      }}
+                    >
+                      Sign up
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
       </Card>

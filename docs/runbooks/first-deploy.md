@@ -111,6 +111,8 @@ infrastructure/scripts/bootstrap-first-admin.sh dev --dept-id nichols-fd --email
 
 `--dept-id` must be the stack's `deptId` (`nichols-fd`). The script reads the deployed stack's department and refuses a mismatch before touching Cognito.
 
+If a run created the login but failed before assigning the role, run it again with the same arguments plus `--resume`. That works only for a login that has never signed in. The resuming login is not counted against the check that refuses a department that already has an ADMIN or CHIEF; a different login in either group still blocks the run.
+
 Then check that `DEPT#nichols-fd#ELIGIBILITY` / `MEMBER#<id>` exists in `boxalarm-dev-alerting-table`, with PUSH entries once the device registers and SMS/VOICE entries from the phone. Create the other members in the web app; each must install the app, sign in and register push.
 
 ## 8. Re-emit and backfill (all safe no-ops on an empty department)

@@ -1,7 +1,13 @@
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 import notifee from '@notifee/react-native';
+import * as kvStore from '../../sync/kvStore';
 import { cachedAlertPayload } from './alertPayload';
-import { CRITICAL_CHANNEL_ID, DEFAULT_CHANNEL_ID } from './pushChannel';
+import {
+  CRITICAL_CHANNEL_DND_ID,
+  CRITICAL_CHANNEL_ID,
+  DEFAULT_CHANNEL_ID,
+  resetCriticalChannelIdForTest,
+} from './pushChannel';
 import {
   displayPushNotification,
   handleBackgroundPushMessage,
@@ -105,6 +111,20 @@ test('a digest push displays on the default channel without a full-screen action
   expect(call.android.fullScreenAction).toBeUndefined();
 });
 
+test('a digest push carrying a notificationId posts under a stable id and alerts once', async () => {
+  Platform.OS = 'android';
+
+  await displayPushNotification({
+    category: 'digest',
+    title: 'Cert expiring',
+    notificationId: 'N-7',
+  });
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.id).toBe('digest:N-7');
+  expect(call.android.onlyAlertOnce).toBe(true);
+});
+
 test('a CAD update displays on the default channel: no alarm, no full-screen, no ring cap', async () => {
   Platform.OS = 'android';
 
@@ -158,7 +178,7 @@ test('background handler logs a failed dispatch display and posts a minimal crit
   expect(fallback.android.channelId).toBe(CRITICAL_CHANNEL_ID);
   expect(fallback.android.fullScreenAction).toBeUndefined();
   expect(fallback.title).toBe('Dispatch alert');
-  expect(fallback.data).toEqual({ dispatchId: 'DISP-1', category: 'dispatch' });
+  expect(fallback.data).toMatchObject({ dispatchId: 'DISP-1', category: 'dispatch' });
 });
 
 test('background handler does not post a critical fallback for a failed digest push', async () => {
@@ -237,4 +257,138 @@ test('silencing also cancels the pending cap', async () => {
   await silenceDispatchNotification('DISP-1');
 
   expect(cancelTrigger).toHaveBeenCalledWith('dispatch:DISP-1');
+});
+
+describe('the critical channel when creating the default channel fails (B2-218 / B2-223)', () => {
+  const nativeModules = NativeModules as { BoxalarmAlertReadiness?: unknown };
+
+  afterEach(() => {
+    delete nativeModules.BoxalarmAlertReadiness;
+    resetCriticalChannelIdForTest();
+    createChannel.mockReset();
+    jest.restoreAllMocks();
+  });
+
+  test('a page still posts on the -dnd channel, never the deleted -v2', async () => {
+    Platform.OS = 'android';
+    nativeModules.BoxalarmAlertReadiness = {
+      getReadiness: jest.fn(async () => ({ dndAccessGranted: true })),
+      createCriticalChannel: jest.fn(async () => true),
+      deleteChannel: jest.fn(async () => undefined),
+    };
+    createChannel.mockImplementation(async (channel: { id: string }) => {
+      if (channel.id === DEFAULT_CHANNEL_ID) throw new Error('binder');
+      return channel.id;
+    });
+
+    await displayPushNotification({ dispatchId: 'DISP-1', title: 'MVA', body: 'MVA — 1 Main St' });
+
+    expect(displayNotification.mock.calls[0][0].android.channelId).toBe(CRITICAL_CHANNEL_DND_ID);
+  });
+
+  test('when channel setup throws outright, the persisted id is used rather than the constant', async () => {
+    Platform.OS = 'android';
+    nativeModules.BoxalarmAlertReadiness = {
+      getReadiness: jest.fn(async () => ({ dndAccessGranted: true })),
+      createCriticalChannel: jest.fn(async () => true),
+      deleteChannel: jest.fn(async () => undefined),
+    };
+    await displayPushNotification({ dispatchId: 'DISP-0', title: 'MVA', body: 'MVA — 1 Main St' });
+    resetCriticalChannelIdForTest();
+    nativeModules.BoxalarmAlertReadiness = {
+      getReadiness: jest.fn(async () => {
+        throw new Error('binder');
+      }),
+      createCriticalChannel: jest.fn(async () => {
+        throw new Error('binder');
+      }),
+      deleteChannel: jest.fn(),
+    };
+    createChannel.mockRejectedValue(new Error('notifee down'));
+    displayNotification.mockClear();
+
+    await displayPushNotification({ dispatchId: 'DISP-1', title: 'MVA', body: 'MVA — 1 Main St' });
+
+    expect(displayNotification.mock.calls[0][0].android.channelId).toBe(CRITICAL_CHANNEL_DND_ID);
+  });
+
+  test('a failing persisted-id read as well still displays the page on the constant channel', async () => {
+    Platform.OS = 'android';
+    nativeModules.BoxalarmAlertReadiness = {
+      getReadiness: jest.fn(async () => {
+        throw new Error('binder');
+      }),
+      createCriticalChannel: jest.fn(async () => {
+        throw new Error('binder');
+      }),
+      deleteChannel: jest.fn(),
+    };
+    createChannel.mockRejectedValue(new Error('notifee down'));
+    jest.spyOn(kvStore, 'kvGet').mockRejectedValue(new Error('kv down'));
+
+    await displayPushNotification({ dispatchId: 'DISP-1', title: 'MVA', body: 'MVA — 1 Main St' });
+
+    expect(displayNotification.mock.calls[0][0].android.channelId).toBe(CRITICAL_CHANNEL_ID);
+  });
+});
+
+test('a CAD update carries the page fields so a tap opens the real address and incident type (B2-222)', async () => {
+  Platform.OS = 'android';
+  (notifee.createTriggerNotification as jest.Mock).mockClear();
+
+  await displayPushNotification(
+    {
+      category: 'dispatch_update',
+      dispatchId: 'DISP-1',
+      title: 'UPDATE — STRUCTURE FIRE',
+      body: 'UPDATE: Units: E1 — 12 Main St',
+      incidentType: 'STRUCTURE FIRE',
+      address: '12 Main St',
+      dispatchedAt: '1700000000',
+    },
+    2_000,
+  );
+
+  const call = displayNotification.mock.calls[0][0];
+  expect(call.data).toEqual({
+    dispatchId: 'DISP-1',
+    category: 'dispatch_update',
+    incidentType: 'STRUCTURE FIRE',
+    address: '12 Main St',
+    dispatchedAt: '1700000000',
+    receivedAt: '2000',
+  });
+  expect(call.id).toBeUndefined();
+  expect(call.android.actions).toBeUndefined();
+  expect(notifee.createTriggerNotification as jest.Mock).not.toHaveBeenCalled();
+});
+
+test('the fallback page carries the page fields too (B2-222)', async () => {
+  Platform.OS = 'android';
+  displayNotification.mockRejectedValueOnce(new Error('first display failed'));
+
+  await handleBackgroundPushMessage({
+    dispatchId: 'DISP-F',
+    title: 'MVA',
+    body: 'MVA — 1 Main St',
+  });
+
+  expect(displayNotification.mock.calls[1][0].data).toMatchObject({
+    dispatchId: 'DISP-F',
+    category: 'dispatch',
+    incidentType: 'MVA',
+    address: '1 Main St',
+  });
+});
+
+test('the background fallback still posts when channel setup throws there too (B2-223)', async () => {
+  Platform.OS = 'android';
+  displayNotification.mockRejectedValueOnce(new Error('full-screen intent not permitted'));
+  createChannel.mockRejectedValue(new Error('channel setup failed'));
+
+  await handleBackgroundPushMessage({ dispatchId: 'DISP-1', title: 'Structure fire' });
+
+  expect(displayNotification).toHaveBeenCalledTimes(2);
+  expect(displayNotification.mock.calls[1][0].android.channelId).toBe(CRITICAL_CHANNEL_ID);
+  createChannel.mockReset().mockResolvedValue(undefined);
 });

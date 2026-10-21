@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient,
@@ -53,7 +52,7 @@ export class OccupancyNotFoundError extends Error {
 
 export class PrePlanConflictError extends Error {
   constructor(occupancyId: string) {
-    super(`A pre-plan for occupancy ${occupancyId} was created concurrently; retry the request`);
+    super(`A pre-plan for occupancy ${occupancyId} was changed concurrently; retry the request`);
     this.name = 'PrePlanConflictError';
   }
 }
@@ -63,6 +62,7 @@ export async function getPrePlan(
   tableName: string,
   deptId: VerifiedDeptId,
   occupancyId: string,
+  consistentRead = false,
 ): Promise<PrePlanItem | undefined> {
   try {
     const output = await doc.send(
@@ -74,6 +74,7 @@ export async function getPrePlan(
           ':skPrefix': 'PREPLAN#',
         },
         Limit: 1,
+        ConsistentRead: consistentRead,
       }),
     );
     return output.Items?.[0] as PrePlanItem | undefined;
@@ -177,13 +178,13 @@ export async function putPrePlan(
   occupancyId: string,
   input: PrePlanInput,
 ): Promise<PrePlanItem> {
-  const existing = await getPrePlan(doc, tableName, deptId, occupancyId);
+  const existing = await getPrePlan(doc, tableName, deptId, occupancyId, true);
   // Occupancy address and coordinates are immutable after create (UpdateOccupancyInput
   // carries only contacts/hazards), so reading them here cannot race a move, and a pre-plan
   // event is the only one the alerting copy needs to locate this occupancy.
   const occupancy = await getOccupancyContext(doc, tableName, deptId, occupancyId);
   const isCreate = existing === undefined;
-  const prePlanId = existing?.prePlanId ?? randomUUID();
+  const prePlanId = existing?.prePlanId ?? occupancyId;
   const item: PrePlanItem = {
     pk: buildDeptScopedPk(deptId, 'OCCUPANCY', occupancyId),
     sk: `PREPLAN#${prePlanId}`,
@@ -223,7 +224,12 @@ export async function putPrePlan(
             Put: {
               TableName: tableName,
               Item: item,
-              ...(isCreate ? { ConditionExpression: 'attribute_not_exists(sk)' } : {}),
+              ...(isCreate
+                ? { ConditionExpression: 'attribute_not_exists(sk)' }
+                : {
+                    ConditionExpression: 'updatedAt = :readUpdatedAt',
+                    ExpressionAttributeValues: { ':readUpdatedAt': existing.updatedAt },
+                  }),
             },
           },
           { Put: { TableName: tableName, Item: outboxRecord } },
@@ -245,7 +251,7 @@ export async function putPrePlan(
     if (cancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') {
       throw new OccupancyNotFoundError(occupancyId);
     }
-    if (isCreate && cancellationReasons?.[1]?.Code === 'ConditionalCheckFailed') {
+    if (cancellationReasons?.[1]?.Code === 'ConditionalCheckFailed') {
       throw new PrePlanConflictError(occupancyId);
     }
     throw new PrePlanDependencyError(error);

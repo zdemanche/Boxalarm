@@ -230,20 +230,10 @@ function responseTimes(fromSeconds: number, toSeconds: number): ResponseTimeAnal
   };
 }
 
-/** The two Trumbull incident types a grant reviewer cares about most are already labelled. */
 function incidentVolume(fromSeconds: number, toSeconds: number) {
-  const counts = new Map<string, number>();
-  const inRange = incidentsBetween(fromSeconds, toSeconds);
-  for (const incident of inRange) {
-    const type = incident.incidentType ?? 'Unclassified';
-    counts.set(type, (counts.get(type) ?? 0) + 1);
-  }
   return {
     available: true as const,
-    total: inRange.length,
-    byType: [...counts.entries()]
-      .map(([incidentType, count]) => ({ incidentType, count }))
-      .sort((a, b) => b.count - a.count || a.incidentType.localeCompare(b.incidentType)),
+    totalIncidents: incidentsBetween(fromSeconds, toSeconds).length,
   };
 }
 
@@ -452,9 +442,13 @@ function grantsReport(periodStart: number, periodEnd: number): GrantsReport {
   const records = OUT_OF_SERVICE.map((event) => ({
     unitId: event.unitId,
     reason: event.reason,
-    startAt: now - event.startDaysAgo * DAY_MS,
-    endAt: event.endDaysAgo === null ? null : now - event.endDaysAgo * DAY_MS,
-  })).filter((record) => record.startAt <= periodEnd && (record.endAt ?? now) >= periodStart);
+    startAt: Math.floor((now - event.startDaysAgo * DAY_MS) / 1000),
+    endAt: event.endDaysAgo === null ? null : Math.floor((now - event.endDaysAgo * DAY_MS) / 1000),
+  })).filter(
+    (record) =>
+      record.startAt * 1000 <= periodEnd &&
+      (record.endAt === null ? now : record.endAt * 1000) >= periodStart,
+  );
   return {
     periodStart,
     periodEnd,

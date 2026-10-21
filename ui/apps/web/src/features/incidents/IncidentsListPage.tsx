@@ -124,6 +124,7 @@ function RecentDispatchesToReport({
     data: { pages: RecentDispatchPage[] } | undefined;
     hasNextPage: boolean;
     isFetchingNextPage: boolean;
+    isFetchNextPageError: boolean;
     fetchNextPage: () => unknown;
   };
   canStart: boolean;
@@ -132,7 +133,7 @@ function RecentDispatchesToReport({
   fallback: ReactNode;
 }) {
   if (query.isLoading) return <p className={styles.muted}>Loading recent dispatches…</p>;
-  if (query.error || !query.data) {
+  if (!query.data) {
     return (
       <>
         <p role="status" className={styles.muted}>
@@ -178,6 +179,11 @@ function RecentDispatchesToReport({
       ) : olderPages.length > 0 && !query.hasNextPage ? (
         <p className={styles.muted}>No older dispatches.</p>
       ) : null}
+      {query.isFetchNextPageError ? (
+        <p role="alert" className={styles.muted}>
+          Older dispatches couldn&rsquo;t load. Try again.
+        </p>
+      ) : null}
       {query.hasNextPage ? (
         <div className={styles.loadOlder}>
           <Button
@@ -194,8 +200,15 @@ function RecentDispatchesToReport({
   );
 }
 
-function StatusCell({ status }: { status: IncidentStatus }) {
-  return <StatusChip status={STATUS_ROLE[status]}>{STATUS_LABEL[status]}</StatusChip>;
+function StatusCell({ incident }: { incident: Incident }) {
+  return (
+    <>
+      <StatusChip status={STATUS_ROLE[incident.status]}>{STATUS_LABEL[incident.status]}</StatusChip>
+      {incident.submissionStatus === 'FAILED' ? (
+        <StatusChip status="danger">NERIS submission failed</StatusChip>
+      ) : null}
+    </>
+  );
 }
 
 export function IncidentsListPage() {
@@ -209,6 +222,7 @@ export function IncidentsListPage() {
   const now = Math.floor(Date.now() / 1000);
   const [fromDate, setFromDate] = useState(epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400));
   const [toDate, setToDate] = useState(epochToDateInput(now));
+  const defaultToDate = useRef(toDate);
   const [selectedStatuses, setSelectedStatuses] = useState<IncidentStatus[]>([]);
   const [dispatchId, setDispatchId] = useState('');
   const errorRef = useRef<HTMLDivElement>(null);
@@ -218,7 +232,10 @@ export function IncidentsListPage() {
     queryFn: () =>
       searchIncidents(auth, {
         fromAlarmAt: dateInputToEpoch(fromDate, false),
-        toAlarmAt: dateInputToEpoch(toDate, true),
+        toAlarmAt:
+          toDate === defaultToDate.current
+            ? Math.max(dateInputToEpoch(toDate, true), Math.floor(Date.now() / 1000))
+            : dateInputToEpoch(toDate, true),
       }),
   });
 
@@ -237,8 +254,14 @@ export function IncidentsListPage() {
       createIncidentFromDispatch(auth, { dispatchId: targetDispatchId }),
     onSuccess: (created) => {
       queryClient.setQueryData(['incident', created.incidentId], created);
+      void queryClient.invalidateQueries({ queryKey: ['incidents'] });
       setDispatchId('');
       navigate(`/incidents/${created.incidentId}`);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.problem.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['incidents'] });
+      }
     },
   });
 
@@ -256,10 +279,16 @@ export function IncidentsListPage() {
       ? ranged
       : ranged.filter((incident) => selectedStatuses.includes(incident.status));
   const attention = ranged.filter(
-    (incident) => incident.status === 'DRAFT' || incident.status === 'REJECTED',
+    (incident) =>
+      incident.status === 'DRAFT' ||
+      incident.status === 'REJECTED' ||
+      incident.submissionStatus === 'FAILED',
   );
   const draftCount = attention.filter((incident) => incident.status === 'DRAFT').length;
   const rejectedCount = attention.filter((incident) => incident.status === 'REJECTED').length;
+  const failedCount = attention.filter(
+    (incident) => incident.status !== 'REJECTED' && incident.submissionStatus === 'FAILED',
+  ).length;
   const filtersActive =
     selectedStatuses.length > 0 ||
     fromDate !== epochToDateInput(now - DEFAULT_RANGE_DAYS * 86400) ||
@@ -299,7 +328,7 @@ export function IncidentsListPage() {
       key: 'status',
       header: 'Status',
       sortValue: (incident) => incident.status,
-      render: (incident) => <StatusCell status={incident.status} />,
+      render: (incident) => <StatusCell incident={incident} />,
     },
   ];
 
@@ -327,6 +356,7 @@ export function IncidentsListPage() {
     const nextNow = Math.floor(Date.now() / 1000);
     setFromDate(epochToDateInput(nextNow - DEFAULT_RANGE_DAYS * 86400));
     setToDate(epochToDateInput(nextNow));
+    defaultToDate.current = epochToDateInput(nextNow);
     setSelectedStatuses([]);
   }
 
@@ -377,7 +407,9 @@ export function IncidentsListPage() {
       />
       {createError ? (
         <div ref={errorRef} tabIndex={-1} role="alert" className={styles.createError}>
-          <p className={styles.createErrorTitle}>{createError.title}</p>
+          <p className={styles.createErrorTitle}>
+            {createError.title || 'Unable to start the report.'}
+          </p>
           {createError.detail ? <p>{createError.detail}</p> : null}
         </div>
       ) : null}
@@ -386,12 +418,14 @@ export function IncidentsListPage() {
 
   const attentionCard = loadError ? null : (
     <Card title="Needs attention">
-      <p className={styles.summary}>
-        {attention.length === 0
-          ? 'Nothing needs attention.'
-          : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected.`}
+      <p className={styles.summary} aria-busy={listQuery.data ? undefined : true}>
+        {!listQuery.data
+          ? 'Checking reports…'
+          : attention.length === 0
+            ? 'Nothing needs attention.'
+            : `${attention.length} incidents need attention: ${draftCount} drafts, ${rejectedCount} rejected, ${failedCount} failed to send.`}
       </p>
-      {attention.length > 0 ? (
+      {listQuery.data && attention.length > 0 ? (
         <ul className={styles.rows}>
           {attention.map((incident) => (
             <li key={incident.incidentId} className={styles.attentionRow}>
@@ -399,7 +433,7 @@ export function IncidentsListPage() {
                 <Link to={`/incidents/${incident.incidentId}`} className={styles.mono}>
                   {incident.dispatchNumber}
                 </Link>
-                <StatusCell status={incident.status} />
+                <StatusCell incident={incident} />
               </span>
               <span className={styles.rowMeta}>
                 {incident.incidentType ?? 'Unclassified'} · {incident.address ?? '—'} ·{' '}
@@ -511,7 +545,7 @@ export function IncidentsListPage() {
                         {incident.address ?? '—'} · {formatDate(incident.alarmAt)}
                       </span>
                     </span>
-                    <StatusCell status={incident.status} />
+                    <StatusCell incident={incident} />
                   </Link>
                 </li>
               ))}

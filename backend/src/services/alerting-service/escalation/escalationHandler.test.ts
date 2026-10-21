@@ -268,6 +268,7 @@ describe('escalationHandler', () => {
   });
 
   it('a roster row absent (fan-out gap) is skipped without throwing', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const fakeDdb = createFakeDdb([]);
     const { createDynamoClient } = await import('../eligibility/dynamoClient.js');
     vi.mocked(createDynamoClient).mockReturnValue({
@@ -278,6 +279,12 @@ describe('escalationHandler', () => {
     const result = await handler(BASE_PAYLOAD);
 
     expect(result).toEqual({ outcome: 'SKIPPED_NOT_FOUND' });
+    expect(
+      logSpy.mock.calls.some(
+        ([line]) => String(line).includes('EscalationSkipped') && String(line).includes('NotFound'),
+      ),
+    ).toBe(true);
+    logSpy.mockRestore();
   });
 
   it('an already-escalated member (conditional put collision) returns SKIPPED_ALREADY_ESCALATED, not a throw', async () => {

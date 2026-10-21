@@ -73,6 +73,8 @@ function logPublishError(
   );
 }
 
+const MARKER_TTL_SECONDS = 7 * 86400;
+
 export async function publishDueEvent(
   ddb: DynamoDBDocumentClient,
   eb: EventBridgeClient,
@@ -97,6 +99,7 @@ export async function publishDueEvent(
           entityType: 'APPARATUS_TEST_DUE_FLAG',
           flaggedAt: params.now.toISOString(),
           eventId,
+          ttl: Math.floor(params.now.getTime() / 1000) + MARKER_TTL_SECONDS,
         },
         ConditionExpression: 'attribute_not_exists(pk) OR attribute_not_exists(publishedAt)',
       }),

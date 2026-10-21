@@ -2,7 +2,12 @@ import { GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { buildDeptScopedPk, type VerifiedDeptId } from '@boxalarm/dept-scope';
 import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from '../dispatches/logger.js';
-import { localityKey, type NormalizedAddress } from './addressKey.js';
+import {
+  canonicalState,
+  localityKey,
+  parseTownChoice,
+  type NormalizedAddress,
+} from './addressKey.js';
 import { CT_TOWNS } from './knownLocalities.js';
 
 /**
@@ -56,17 +61,21 @@ export function parseHomeLocality(raw: unknown): HomeLocality | undefined {
   const value = raw as Record<string, unknown>;
   const strings = (list: unknown): string[] =>
     Array.isArray(list) ? list.filter((item): item is string => typeof item === 'string') : [];
-  const names = strings(value.towns)
-    .map((name) => name.trim())
-    .filter((name) => localityKey(name).length > 0);
-  const towns = names.map(localityKey);
+  const configured = strings(value.towns)
+    .map((name) => ({ name: name.trim(), town: parseTownChoice(name).town }))
+    .filter(({ town }) => town !== null);
+  const names = configured.map(({ name }) => name);
+  const towns = configured.map(({ town }) => town as string);
   const zips = strings(value.zips).filter((zip) => /^\d{5}$/.test(zip));
   if (towns.length === 0 && zips.length === 0) return undefined;
+  const rawState = typeof value.state === 'string' ? value.state.trim() : '';
+  const state = rawState ? canonicalState(rawState) : null;
+  if (rawState && !state) return undefined;
   return {
     names,
     towns: new Set(towns),
     zips: new Set(zips),
-    state: typeof value.state === 'string' ? value.state.trim().toUpperCase() || null : null,
+    state,
   };
 }
 

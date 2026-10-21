@@ -24,13 +24,13 @@ export interface LosapArgs {
 
 /**
  * E2-S4-INFRA #206: configurable LOSAP point rules and running totals.
- * getMemberLosap/yearEndReport are read-only; updateRules and yearEndReport gate on
- * requireAdminRole in-handler (not Cedar) so neither needs the policy store env var.
+ * getMemberLosap is read-only; updateRules gates on requireAdminRole in-handler
+ * (not Cedar) so it needs no policy store env var. The department year-end report lives in
+ * reporting-service.
  */
 export class Losap extends pulumi.ComponentResource {
   public readonly getMemberTotalLambda: ServiceLambda;
   public readonly updateRulesLambda: ServiceLambda;
-  public readonly yearEndReportLambda: ServiceLambda;
   public readonly accrualConsumer: ServiceLambda;
   public readonly accrualQueueConsumer: QueueConsumer;
 
@@ -39,22 +39,14 @@ export class Losap extends pulumi.ComponentResource {
     super("boxalarm:personnel:Losap", name, {}, opts);
     const { env } = args;
 
-    // getMemberLosap.ts: getMemberLosapTotal is a base-table Query only.
+    // getMemberLosap.ts: getMemberLosapTotal is a base-table Query; getLosapYear reads the
+    // department time zone from DEPT#{deptId}/CONFIG#NERIS with a GetItem.
     const memberTotalStatement = pulumi.output(args.platformTableArn).apply((arn) => [
       {
         Sid: "LosapMemberTotalAccess" as const,
         Effect: "Allow" as const,
-        Action: ["dynamodb:Query"],
+        Action: ["dynamodb:GetItem", "dynamodb:Query"],
         Resource: [arn],
-      },
-    ]);
-    // yearEndReport.ts: listMembers (GSI3) + getYearEndReport (base-table Query).
-    const yearEndStatement = pulumi.output(args.platformTableArn).apply((arn) => [
-      {
-        Sid: "LosapYearEndAccess" as const,
-        Effect: "Allow" as const,
-        Action: ["dynamodb:Query"],
-        Resource: [arn, `${arn}/index/GSI3`],
       },
     ]);
     const writeStatement = pulumi.output(args.platformTableArn).apply((arn) => [
@@ -119,29 +111,6 @@ export class Losap extends pulumi.ComponentResource {
       { parent: this },
     );
 
-    this.yearEndReportLambda = new ServiceLambda(
-      `${name}-year-end-report`,
-      {
-        env,
-        serviceName: "personnel-service",
-        functionName: `boxalarm-${env}-personnel-losap-year-end-report`,
-        handler: LAMBDA_HANDLER,
-        code: lambdaCode("personnel-service", "losap-year-end-report"),
-        logGroup: args.logGroup,
-        environment: {
-          PERSONNEL_TABLE_NAME: args.platformTableName,
-          PLATFORM_SERVICE_TABLE_NAME: args.platformTableName,
-        },
-        additionalPolicyStatements: yearEndStatement,
-      },
-      { parent: this },
-    );
-    args.httpApi.route(
-      `${name}-year-end-report-route`,
-      { routeKey: "GET /api/v1/personnel/losap/year-end", lambda: this.yearEndReportLambda },
-      { parent: this },
-    );
-
     // #206: personnel.attendance.recorded -> boxalarm-{env}-losap-accrual-queue (+DLQ,
     // depth alarm) -> an idempotent EVENT_DEDUP record. The points award itself stays
     // inline on the attendance write path (attendance/handler.ts,
@@ -194,7 +163,6 @@ export class Losap extends pulumi.ComponentResource {
     this.registerOutputs({
       getMemberTotalLambda: this.getMemberTotalLambda,
       updateRulesLambda: this.updateRulesLambda,
-      yearEndReportLambda: this.yearEndReportLambda,
       accrualConsumer: this.accrualConsumer,
     });
   }

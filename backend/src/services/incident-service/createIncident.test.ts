@@ -357,6 +357,114 @@ describe('createIncident handler', () => {
     vi.doUnmock('./schemaVersion/repository.js');
   });
 
+  it('leaves the address unset when the dispatch is an unparsed RAW copy', async () => {
+    const createIncident = vi
+      .fn()
+      .mockImplementation((_deptId: string, input: CreateIncidentInput) =>
+        Promise.resolve({
+          incidentId: input.incidentId,
+          deptId: 'NICHOLS',
+          status: 'DRAFT',
+          ...input,
+        }),
+      );
+    vi.doMock('./repository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./repository.js')>();
+      return {
+        ...actual,
+        getIncidentRepository: () => ({ createIncident }),
+        getDocumentClient: () => ({}),
+        getTableName: () => 'boxalarm-dev-incident',
+      };
+    });
+    vi.doMock('./dispatchProjection.js', () => ({
+      getDispatchAlertCopy: vi.fn().mockResolvedValue({
+        dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+        deptId: 'NICHOLS',
+        incidentType: 'STRUCTURE_FIRE',
+        address: 'SEE DISPATCH TEXT',
+        crossStreets: 'Elm & 1st',
+        narrative: 'Smoke showing',
+        dispatchedAt: 1_798_000_000,
+        verifyRequired: true,
+      }),
+      queryIncidentResponseUnits: vi.fn().mockResolvedValue([]),
+      queryRosterCopy: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('./schemaVersion/repository.js', () => ({
+      createSchemaVersionRepository: () => ({
+        getActiveSchemaVersion: vi.fn().mockResolvedValue({ version: '2026.2' }),
+      }),
+    }));
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234' }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    const [, input] = createIncident.mock.calls[0] as [string, CreateIncidentInput];
+    expect(input.address).toBeUndefined();
+    expect(input.corePayload).not.toHaveProperty('address');
+    vi.doUnmock('./dispatchProjection.js');
+    vi.doUnmock('./schemaVersion/repository.js');
+  });
+
+  it('returns 201 with empty enrichment when the unit lookup fails after the incident was created', async () => {
+    const createIncident = vi
+      .fn()
+      .mockImplementation((_deptId: string, input: CreateIncidentInput) =>
+        Promise.resolve({
+          incidentId: input.incidentId,
+          deptId: 'NICHOLS',
+          status: 'DRAFT',
+          ...input,
+        }),
+      );
+    vi.doMock('./repository.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('./repository.js')>();
+      return {
+        ...actual,
+        getIncidentRepository: () => ({ createIncident }),
+        getDocumentClient: () => ({}),
+        getTableName: () => 'boxalarm-dev-incident',
+      };
+    });
+    vi.doMock('./dispatchProjection.js', () => ({
+      getDispatchAlertCopy: vi.fn().mockResolvedValue({
+        dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+        deptId: 'NICHOLS',
+        incidentType: 'STRUCTURE_FIRE',
+        address: '123 Main St',
+        crossStreets: 'Elm & 1st',
+        narrative: 'Smoke showing',
+        dispatchedAt: 1_798_000_000,
+      }),
+      queryIncidentResponseUnits: vi.fn().mockRejectedValue(new Error('throttled')),
+      queryRosterCopy: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('./schemaVersion/repository.js', () => ({
+      createSchemaVersionRepository: () => ({
+        getActiveSchemaVersion: vi.fn().mockResolvedValue({ version: '2026.2' }),
+      }),
+    }));
+    const { handler } = await import('./createIncident.js');
+
+    const result = await handler(
+      buildEvent(ADMIN_AUTH, { dispatchId: 'NICHOLS-MANUAL-1798000000-abcd1234' }),
+    );
+
+    expect(result).toMatchObject({ statusCode: 201 });
+    const body = JSON.parse((result as { body: string }).body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      incidentId: 'NICHOLS-MANUAL-1798000000-abcd1234',
+      respondingUnits: [],
+      respondingMembers: [],
+    });
+    vi.doUnmock('./dispatchProjection.js');
+    vi.doUnmock('./schemaVersion/repository.js');
+  });
+
   it('returns 404 when no dispatch exists for the given dispatchId (E6-S2 AC3)', async () => {
     vi.doMock('./dispatchProjection.js', () => ({
       getDispatchAlertCopy: vi.fn().mockResolvedValue(undefined),

@@ -43,11 +43,11 @@ export function createAlertingSamplingRule(env: string): aws.xray.SamplingRule {
     resourceArn: "*",
     serviceType: "*",
     // X-Ray matches serviceName against the segment name, which for a Lambda is the
-    // function name (boxalarm-{env}-alerting-service-{route} under Lambda-per-route).
+    // function name (boxalarm-{env}-alerting-{route} under Lambda-per-route).
     // The wildcard is required, but for Lambda the initial sampling decision is made
     // by the Lambda service, so this custom rule does not govern every segment it
     // emits — 100% is not guaranteed until verified against real functions.
-    serviceName: `boxalarm-${env}-alerting-service-*`,
+    serviceName: `boxalarm-${env}-alerting-*`,
     host: "*",
     httpMethod: "*",
     urlPath: "*",

@@ -4,7 +4,6 @@ import {
   DEMO_INTERIOR_MEMBER_IDS,
   DEMO_MEMBER_BY_ID,
   DEMO_RESPONDING_MEMBER_IDS,
-  demoMemberName,
 } from '../../lib/demoRoster';
 import type {
   ActiveDispatchList,
@@ -132,6 +131,8 @@ interface DeliveryFault {
   smsFailure?: string;
   /** Push accepted by the provider but the device never confirmed (app killed, no network). */
   pushUnconfirmed?: boolean;
+  /** The page was never published (the claim was written, the publish did not happen). */
+  pushNotSent?: boolean;
 }
 
 interface DispatchSeed {
@@ -156,7 +157,6 @@ function rosterFor(seed: Pick<DispatchSeed, 'reactions' | 'dispatchedAt'>): Rost
       reaction.etaMinutes !== undefined ? seed.dispatchedAt + reaction.etaMinutes * MINUTE : null;
     return {
       memberId,
-      name: demoMemberName(memberId),
       ackStatus: reaction.ackStatus,
       eta,
       assignedApparatusId: reaction.assignedApparatusId ?? null,
@@ -187,7 +187,7 @@ function receiptsFor(
       const push: DeliveryReceipt = fault.pushFailure
         ? {
             memberId,
-            channel: 'PUSH',
+            channel: 'push',
             toneSequence: tone,
             status: 'FAILED',
             sentAt,
@@ -195,34 +195,44 @@ function receiptsFor(
             openedAt: null,
             failureReason: fault.pushFailure,
           }
-        : fault.pushUnconfirmed
+        : fault.pushNotSent
           ? {
               memberId,
-              channel: 'PUSH',
+              channel: 'push',
               toneSequence: tone,
-              status: 'SENT_UNCONFIRMED',
-              sentAt,
+              status: 'NOT_SENT',
               deliveredAt: null,
               openedAt: null,
               failureReason: null,
             }
-          : {
-              memberId,
-              channel: 'PUSH',
-              toneSequence: tone,
-              status: openedAt ? 'OPENED' : 'DELIVERED',
-              sentAt,
-              deliveredAt: sentAt + 2 + (index % 3),
-              openedAt,
-              failureReason: null,
-            };
+          : fault.pushUnconfirmed
+            ? {
+                memberId,
+                channel: 'push',
+                toneSequence: tone,
+                status: 'SENT_UNCONFIRMED',
+                sentAt,
+                deliveredAt: null,
+                openedAt: null,
+                failureReason: null,
+              }
+            : {
+                memberId,
+                channel: 'push',
+                toneSequence: tone,
+                status: openedAt ? 'OPENED' : 'DELIVERED',
+                sentAt,
+                deliveredAt: sentAt + 2 + (index % 3),
+                openedAt,
+                failureReason: null,
+              };
       receipts.push(push);
 
       receipts.push(
         fault.smsFailure
           ? {
               memberId,
-              channel: 'SMS',
+              channel: 'sms',
               toneSequence: tone,
               status: 'FAILED',
               sentAt: sentAt + 1,
@@ -232,7 +242,7 @@ function receiptsFor(
             }
           : {
               memberId,
-              channel: 'SMS',
+              channel: 'sms',
               toneSequence: tone,
               status: 'DELIVERED',
               sentAt: sentAt + 1,
@@ -247,7 +257,7 @@ function receiptsFor(
         // through to voicemail, which the provider reports as sent but unconfirmed.
         receipts.push({
           memberId,
-          channel: 'VOICE',
+          channel: 'voice',
           toneSequence: tone,
           status: answeredThisTone ? 'DELIVERED' : 'SENT_UNCONFIRMED',
           sentAt: sentAt + 3,
@@ -269,32 +279,38 @@ const DRIVER: RidingSeatPosition = {
   code: 'DRIVER',
   label: 'Driver/Operator',
   requiredQual: 'DRIVER_OPERATOR',
+  version: 0,
 };
-const OFFICER: RidingSeatPosition = { code: 'OFF', label: 'Officer', requiredQual: 'OFFICER' };
+const OFFICER: RidingSeatPosition = {
+  code: 'OFF',
+  label: 'Officer',
+  requiredQual: 'OFFICER',
+  version: 0,
+};
 
 const POSITIONS_BY_TYPE: Record<string, RidingSeatPosition[]> = {
   Engine: [
     OFFICER,
     DRIVER,
-    { code: 'NOZZLE', label: 'Nozzle', requiredQual: 'FF1' },
-    { code: 'BACKUP', label: 'Backup', requiredQual: 'FF1' },
-    { code: 'HYDRANT', label: 'Hydrant' },
+    { code: 'NOZZLE', label: 'Nozzle', requiredQual: 'FF1', version: 0 },
+    { code: 'BACKUP', label: 'Backup', requiredQual: 'FF1', version: 0 },
+    { code: 'HYDRANT', label: 'Hydrant', version: 0 },
   ],
   Ladder: [
     OFFICER,
     DRIVER,
-    { code: 'OV', label: 'Outside vent', requiredQual: 'FF2' },
-    { code: 'IRONS', label: 'Irons', requiredQual: 'FF1' },
+    { code: 'OV', label: 'Outside vent', requiredQual: 'FF2', version: 0 },
+    { code: 'IRONS', label: 'Irons', requiredQual: 'FF1', version: 0 },
   ],
   Rescue: [
     OFFICER,
     DRIVER,
-    { code: 'FF1', label: 'Firefighter (search)', requiredQual: 'FF1' },
-    { code: 'FF2', label: 'Firefighter (tools)', requiredQual: 'FF1' },
+    { code: 'FF1', label: 'Firefighter (search)', requiredQual: 'FF1', version: 0 },
+    { code: 'FF2', label: 'Firefighter (tools)', requiredQual: 'FF1', version: 0 },
   ],
-  Squad: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1' }],
-  Utility: [DRIVER, { code: 'FF1', label: 'Firefighter' }],
-  Brush: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1' }],
+  Squad: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1', version: 0 }],
+  Utility: [DRIVER, { code: 'FF1', label: 'Firefighter', version: 0 }],
+  Brush: [DRIVER, { code: 'FF1', label: 'Firefighter', requiredQual: 'FF1', version: 0 }],
 };
 
 function clonePositions(type: string): RidingSeatPosition[] {
@@ -320,6 +336,7 @@ function ridingBoardFor(
     for (const position of positions) {
       const memberId = assigned[position.code];
       if (!memberId) continue;
+      position.version = 1;
       position.assignment = {
         memberId,
         version: 1,
@@ -450,6 +467,7 @@ const SEEDS: Record<string, DispatchSeed> = {
       'm-27': { pushFailure: 'APNs: BadDeviceToken (app reinstalled, token not refreshed)' },
       'm-8': { pushUnconfirmed: true },
       'm-28': { pushUnconfirmed: true },
+      'm-11': { pushNotSent: true },
     },
     seats: {
       'Engine 301': { OFF: 'm-9', DRIVER: 'm-12', NOZZLE: 'm-15', BACKUP: 'm-16' },
@@ -746,7 +764,11 @@ const CANARY_RUNS: readonly CanaryRun[] = Array.from({ length: CANARY_RUN_COUNT 
       ranAt,
       result: 'FAIL',
       latencyMs: 7420,
-      channelResults: { push: 'PASS', sms: 'FAIL', voice: 'PASS' },
+      channelResults: {
+        PUSH: { ok: true, ms: 640 },
+        SMS: { ok: false, ms: 7420, reason: 'provider timeout' },
+        VOICE: { ok: true, ms: 1180 },
+      },
     };
   }
   const latencyMs =
@@ -755,7 +777,11 @@ const CANARY_RUNS: readonly CanaryRun[] = Array.from({ length: CANARY_RUN_COUNT 
     ranAt,
     result: 'PASS',
     latencyMs: Math.round(latencyMs),
-    channelResults: { push: 'PASS', sms: 'PASS', voice: 'PASS' },
+    channelResults: {
+      PUSH: { ok: true, ms: 640 },
+      SMS: { ok: true, ms: 900 },
+      VOICE: { ok: true, ms: 1180 },
+    },
   };
 });
 
@@ -817,7 +843,7 @@ function demoLadderControl(
       ...(RECEIPTS.get(dispatchId) ?? []),
       ...roster.map((entry) => ({
         memberId: entry.memberId,
-        channel: 'PUSH',
+        channel: 'push',
         toneSequence,
         status: 'SENT' as const,
         sentAt: now,
@@ -909,13 +935,13 @@ function demoLadderControl(
 function diagnosticsTimeline(dispatchId: string, memberId: string): DiagnosticsTimelineEntry[] {
   const receipts = (RECEIPTS.get(dispatchId) ?? []).filter((r) => r.memberId === memberId);
   const entries: { at: number; entry: DiagnosticsTimelineEntry }[] = receipts.map((r) => ({
-    at: r.sentAt,
+    at: r.sentAt ?? 0,
     entry: {
       entityType: 'DELIVERY_RECEIPT',
       channel: r.channel,
       toneSequence: r.toneSequence,
       status: r.status,
-      sentAt: r.sentAt,
+      ...(r.sentAt !== undefined ? { sentAt: r.sentAt } : {}),
       deliveredAt: r.deliveredAt,
       openedAt: r.openedAt,
       failureReason: r.failureReason,
@@ -1117,12 +1143,13 @@ export function demoAlertsRequest(
     const position = unit?.positions.find((p) => p.code === body.positionCode);
     if (position) {
       const memberId = body.memberId;
+      position.version = (body.expectedVersion as number) + 1;
       position.assignment =
         memberId === null || memberId === undefined
           ? undefined
           : {
               memberId: memberId as string,
-              version: ((body.expectedVersion as number) ?? 0) + 1,
+              version: position.version,
               assignedAt: Math.floor(Date.now() / 1000),
               assignedBy: 'demo',
               qualStatus: seatQualStatus(memberId as string, position),

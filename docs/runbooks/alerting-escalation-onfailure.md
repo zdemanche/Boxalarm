@@ -26,7 +26,10 @@ From `infrastructure/`, with credentials for the stack's account:
 ```sh
 scripts/redrive-escalation-onfailure.sh <env> --dry-run   # list what would be re-invoked
 scripts/redrive-escalation-onfailure.sh <env>             # re-invoke and delete
+scripts/redrive-escalation-onfailure.sh <env> --schedule-dlq [--dry-run]   # drain the Scheduler DLQ instead
 ```
+
+`--schedule-dlq` drains `boxalarm-<env>-alerting-schedule-dlq`, where EventBridge Scheduler parks a schedule whose target it could not invoke. Those messages hold the target input as the body and the function ARN in the `TARGET_ARN` attribute. The same rules apply: fix the cause first, and check the dispatch is still live before redriving a voice escalation.
 
 What the script does and guarantees:
 

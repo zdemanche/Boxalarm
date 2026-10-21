@@ -16,6 +16,8 @@ import { emitOutcomeMetric } from '@boxalarm/metrics';
 import { logError } from './logger.js';
 import { createManualDispatch } from './repository.js';
 
+const MANUAL_REFERENCE_WINDOW_SECONDS = 10 * 60;
+
 interface DispatchAuthorizerContext {
   readonly sub: string;
   readonly deptId: string;
@@ -153,11 +155,13 @@ export const handler: Handler<DispatchEvent, APIGatewayProxyStructuredResultV2> 
   );
 
   try {
+    const dispatchedAt = Math.floor(Date.now() / 1000);
     const result = await createManualDispatch(getDynamoClient(), dynamoConfig.tableName, {
       deptId,
       dispatch: normalized.value,
       idempotencyKey,
-      dispatchedAt: Math.floor(Date.now() / 1000),
+      dispatchedAt,
+      lockExpiresAt: dispatchedAt + MANUAL_REFERENCE_WINDOW_SECONDS,
     });
 
     // 'replay' cannot occur here (no replay marker is passed); it is handled as a duplicate.

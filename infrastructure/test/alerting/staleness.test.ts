@@ -27,6 +27,11 @@ async function build() {
     pageTopicArn: PAGE_TOPIC_ARN,
     logGroup: new ServiceLogGroup("alerting-lg", { env: "dev", serviceName: "alerting-service" }),
     permissionsBoundaryArn: BOUNDARY_ARN,
+    eligibilityFeedQueueNames: {
+      "member-updated": "boxalarm-dev-alerting-member-updated-queue",
+      "availability-snapshot": "boxalarm-dev-availability-snapshot-queue",
+      "eligibility-changed": "boxalarm-dev-eligibility-changed-snapshot-queue",
+    },
   });
   await settle();
   return staleness;
@@ -41,11 +46,30 @@ describe("EligibilityStaleness", { timeout: 30_000 }, () => {
     expect(role?.inputs.permissionsBoundary).toBe(BOUNDARY_ARN);
   });
 
-  it("#232: pages on SnapshotStale now that the metric measures department-wide propagation lag", async () => {
+  it("keeps SnapshotStale dashboard-only: a quiet department must not page", async () => {
     await build();
     const alarm = alarmByName("boxalarm-dev-alerting-eligibility-snapshot-stale");
     expect(alarm.inputs.namespace).toBe("Boxalarm/AlertingEligibility");
-    expect(alarm.inputs.alarmActions).toEqual([PAGE_TOPIC_ARN]);
+    expect(alarm.inputs.alarmActions).toBeUndefined();
+  });
+
+  it.each([
+    ["member-updated", "boxalarm-dev-alerting-member-updated-queue"],
+    ["availability-snapshot", "boxalarm-dev-availability-snapshot-queue"],
+    ["eligibility-changed", "boxalarm-dev-eligibility-changed-snapshot-queue"],
+  ])("pages on the age of the oldest message in the %s queue", async (feed, queueName) => {
+    await build();
+    const alarm = alarmByName(`boxalarm-dev-alerting-eligibility-${feed}-queue-age`).inputs;
+    expect(alarm.namespace).toBe("AWS/SQS");
+    expect(alarm.metricName).toBe("ApproximateAgeOfOldestMessage");
+    expect(alarm.dimensions).toEqual({ QueueName: queueName });
+    expect(alarm.statistic).toBe("Maximum");
+    expect(alarm.period).toBe(60);
+    expect(alarm.evaluationPeriods).toBeGreaterThanOrEqual(2);
+    expect(alarm.threshold).toBeGreaterThanOrEqual(120);
+    expect(alarm.threshold).toBeLessThanOrEqual(300);
+    expect(alarm.treatMissingData).toBe("notBreaching");
+    expect(alarm.alarmActions).toEqual([PAGE_TOPIC_ARN]);
   });
 
   it("pages on the staleness Lambda's own Errors (the stale alarm goes silent if it throws)", async () => {

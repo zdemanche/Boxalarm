@@ -6,9 +6,10 @@ import {
   PutCommand,
   type DynamoDBDocumentClient,
 } from '@aws-sdk/lib-dynamodb';
+import { marshall } from '@aws-sdk/util-dynamodb';
 import { buildDeptScopedPk, toVerifiedDeptId } from '@boxalarm/dept-scope';
 import { DEFAULT_RETENTION_YEARS } from './configRepository.js';
-import { SECONDS_PER_YEAR, runDisposal } from './disposal.js';
+import { isPastRetention, retentionCutoffEpochSeconds, runDisposal } from './disposal.js';
 
 const DEPT_ID = toVerifiedDeptId({ deptId: 'NICHOLS' });
 const OTHER_DEPT = toVerifiedDeptId({ deptId: 'TRUMBULL' });
@@ -73,7 +74,7 @@ describe('runDisposal hard-delete (AC2)', () => {
     const retentionYears = 5;
     // Age is derived from endAt (the record closed and is disposable); startAt is simply
     // earlier still (when the apparatus WENT out of service).
-    const tooOldEndAt = nowEpoch - retentionYears * SECONDS_PER_YEAR - 1;
+    const tooOldEndAt = retentionCutoffEpochSeconds(nowEpoch, retentionYears) - 1;
     const tooOldStartAt = tooOldEndAt - 86_400;
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-1');
     const oosSk = `OOS#${tooOldStartAt}`;
@@ -149,7 +150,7 @@ describe('runDisposal hard-delete (AC2)', () => {
   it('uses stored retentionYears from CONFIG#RETENTION rather than a hardcoded constant', async () => {
     const nowEpoch = 1_800_000_000;
     // 6 years old — past a 5-year config, but inside the 7-year default
-    const age = nowEpoch - 6 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 6);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-3');
     const oosSk = `OOS#${age}`;
 
@@ -190,7 +191,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('refuses when caller spoofs OUT_OF_SERVICE_RECORD over a stored life-safety item', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const receiptPk = buildDeptScopedPk(DEPT_ID, 'ALERT', 'RCPT-1');
     const receiptSk = 'RECEIPT#1';
 
@@ -221,7 +222,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('refuses cross-dept pk and never deletes the foreign item', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const foreignPk = buildDeptScopedPk(OTHER_DEPT, 'APPARATUS', 'APP-X');
     const foreignSk = `OOS#${age}`;
 
@@ -281,7 +282,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('reads with ConsistentRead: true before authorizing a destructive delete', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-CR');
     const oosSk = `OOS#${age}`;
     const { client, send } = createMemoryDocClient({
@@ -316,7 +317,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('ties the DeleteCommand to the entityType just validated via ConditionExpression', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-COND');
     const oosSk = `OOS#${age}`;
     const { client, send } = createMemoryDocClient({
@@ -348,7 +349,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('refuses (not aborts) a candidate whose DeleteCommand loses a concurrent-write race', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const racedPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-RACE');
     const racedSk = `OOS#${age}`;
     const okPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-OK');
@@ -398,7 +399,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('never disposes an open OUT_OF_SERVICE_RECORD (no endAt), however old startAt is', async () => {
     const nowEpoch = 1_800_000_000;
-    const veryOldStartAt = nowEpoch - 30 * SECONDS_PER_YEAR;
+    const veryOldStartAt = retentionCutoffEpochSeconds(nowEpoch, 30);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-OPEN');
     const oosSk = `OOS#${veryOldStartAt}`;
 
@@ -431,7 +432,7 @@ describe('runDisposal hard-delete (AC2)', () => {
     const nowEpoch = 1_800_000_000;
     const retentionYears = 5;
     // Went out of service long ago (way past retention by startAt)...
-    const veryOldStartAt = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const veryOldStartAt = retentionCutoffEpochSeconds(nowEpoch, 20);
     // ...but returned to service recently — the closed record is NOT past retention.
     const recentEndAt = nowEpoch - 100;
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-ENDAT');
@@ -470,7 +471,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('refuses an entityType outside every known disposal/life-safety classification', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const pk = buildDeptScopedPk(DEPT_ID, 'WHATEVER', 'X-1');
     const sk = 'ITEM#1';
     const { client } = createMemoryDocClient({
@@ -497,7 +498,7 @@ describe('runDisposal hard-delete (AC2)', () => {
 
   it('records disposed locators on the AUDIT_LOG_ENTRY, not just aggregate counts', async () => {
     const nowEpoch = 1_800_000_000;
-    const age = nowEpoch - 20 * SECONDS_PER_YEAR;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
     const oosPk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-AUDIT');
     const oosSk = `OOS#${age}`;
     const { client, puts } = createMemoryDocClient({
@@ -519,8 +520,174 @@ describe('runDisposal hard-delete (AC2)', () => {
       candidates: [{ pk: oosPk, sk: oosSk }],
     });
 
-    const audit = puts.find((item) => item.entityType === 'AUDIT_LOG_ENTRY') as
+    const audit = puts.find((item) => item.mutatedEntityType === 'RETENTION_DISPOSAL') as
       { changedFields: { disposedLocators: { new: readonly string[] } } } | undefined;
     expect(audit?.changedFields.disposedLocators.new).toEqual([`${oosPk}#${oosSk}`]);
+  });
+});
+
+describe('isPastRetention calendar years', () => {
+  const sevenYears = (iso: string) => Date.parse(iso) / 1000;
+  const endAt = sevenYears('2019-10-14T12:00:00Z');
+
+  it('keeps a record one day before the 7-year anniversary (365-day math would dispose it)', () => {
+    expect(isPastRetention(endAt, 7, sevenYears('2026-10-13T12:00:00Z'))).toBe(false);
+  });
+
+  it('keeps a record exactly on the anniversary and disposes one second after', () => {
+    expect(isPastRetention(endAt, 7, sevenYears('2026-10-14T12:00:00Z'))).toBe(false);
+    expect(isPastRetention(endAt, 7, sevenYears('2026-10-14T12:00:01Z'))).toBe(true);
+  });
+
+  it('spans leap days: a 4-year window from 2020-03-01 is not over until 2024-03-01T00:00:00Z', () => {
+    const leapEndAt = sevenYears('2020-03-01T00:00:00Z');
+    expect(isPastRetention(leapEndAt, 4, sevenYears('2024-03-01T00:00:00Z'))).toBe(false);
+    expect(isPastRetention(leapEndAt, 4, sevenYears('2024-03-01T00:00:01Z'))).toBe(true);
+  });
+});
+
+describe('runDisposal audit-before-destroy', () => {
+  beforeEach(() => {
+    process.env.PLATFORM_TABLE_NAME = 'platform-service';
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  function oosSeed() {
+    const nowEpoch = 1_800_000_000;
+    const age = retentionCutoffEpochSeconds(nowEpoch, 20);
+    const pk = buildDeptScopedPk(DEPT_ID, 'APPARATUS', 'APP-STARTED');
+    const sk = `OOS#${age}`;
+    return {
+      nowEpoch,
+      pk,
+      sk,
+      seed: {
+        [keyOf(pk, sk)]: {
+          pk,
+          sk,
+          entityType: 'OUT_OF_SERVICE_RECORD',
+          startAt: age,
+          endAt: age,
+        },
+      },
+    };
+  }
+
+  it('emits DisposalInvoked even when the retention config read fails', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const docClient = {
+      send: vi.fn().mockRejectedValue(new Error('config read failed')),
+    } as unknown as DynamoDBDocumentClient;
+
+    await expect(
+      runDisposal({
+        docClient,
+        deptId: DEPT_ID,
+        actorId: 'MBR-CHIEF',
+        traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+        nowEpochSeconds: 1_800_000_000,
+        candidates: [],
+      }),
+    ).rejects.toThrow('config read failed');
+
+    expect(log.mock.calls.some(([line]) => String(line).includes('DisposalInvoked'))).toBe(true);
+  });
+
+  it('writes a STARTED audit entry before the first delete', async () => {
+    const { nowEpoch, pk, sk, seed } = oosSeed();
+    const { client, send } = createMemoryDocClient(seed);
+
+    await runDisposal({
+      docClient: client,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-started',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk, sk }],
+    });
+
+    const commands = send.mock.calls.map(([command]) => command);
+    const startedIndex = commands.findIndex(
+      (command) =>
+        command instanceof PutCommand &&
+        command.input.Item?.mutatedEntityType === 'RETENTION_DISPOSAL_STARTED',
+    );
+    const deleteIndex = commands.findIndex((command) => command instanceof DeleteCommand);
+    expect(startedIndex).toBeGreaterThanOrEqual(0);
+    expect(startedIndex).toBeLessThan(deleteIndex);
+  });
+
+  it('writes STARTED and final audit items the DocumentClient can marshall without removeUndefinedValues', async () => {
+    const { nowEpoch, pk, sk, seed } = oosSeed();
+    const { client, puts } = createMemoryDocClient(seed);
+
+    await runDisposal({
+      docClient: client,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-marshall',
+      nowEpochSeconds: nowEpoch,
+      candidates: [{ pk, sk }],
+    });
+
+    const audits = puts.filter((item) => item.entityType === 'AUDIT_LOG_ENTRY');
+    expect(audits.map((item) => item.mutatedEntityType)).toEqual([
+      'RETENTION_DISPOSAL_STARTED',
+      'RETENTION_DISPOSAL',
+    ]);
+    for (const audit of audits) {
+      expect(() => marshall(audit)).not.toThrow();
+    }
+    const started = audits[0] as { changedFields: Record<string, { old: unknown; new: unknown }> };
+    expect(started.changedFields.candidateCount).toEqual({ old: null, new: 1 });
+  });
+
+  it('destroys nothing when the STARTED audit entry cannot be written', async () => {
+    const { nowEpoch, pk, sk, seed } = oosSeed();
+    const { client, store, send } = createMemoryDocClient(seed);
+    send
+      .mockImplementationOnce(() => ({}))
+      .mockImplementationOnce(() => {
+        throw new Error('throttled');
+      });
+
+    await expect(
+      runDisposal({
+        docClient: client,
+        deptId: DEPT_ID,
+        actorId: 'MBR-CHIEF',
+        traceId: 'trace-1',
+        nowEpochSeconds: nowEpoch,
+        candidates: [{ pk, sk }],
+      }),
+    ).rejects.toThrow('throttled');
+    expect(store.has(keyOf(pk, sk))).toBe(true);
+  });
+
+  it('records every candidate locator in the STARTED entry beyond the final-audit cap', async () => {
+    const { nowEpoch, pk } = oosSeed();
+    const { client, send } = createMemoryDocClient({});
+    const candidates = Array.from({ length: 300 }, (_, index) => ({ pk, sk: `OOS#${index}` }));
+
+    await runDisposal({
+      docClient: client,
+      deptId: DEPT_ID,
+      actorId: 'MBR-CHIEF',
+      traceId: 'trace-many',
+      nowEpochSeconds: nowEpoch,
+      candidates,
+    });
+
+    const started = send.mock.calls
+      .map(([command]) => command)
+      .find(
+        (command) =>
+          command instanceof PutCommand &&
+          command.input.Item?.mutatedEntityType === 'RETENTION_DISPOSAL_STARTED',
+      ) as PutCommand;
+    const after = (started.input.Item as { changedFields: Record<string, { new: unknown }> })
+      .changedFields;
+    expect(after.candidates?.new).toEqual(candidates.map((c) => `${c.pk}#${c.sk}`));
   });
 });

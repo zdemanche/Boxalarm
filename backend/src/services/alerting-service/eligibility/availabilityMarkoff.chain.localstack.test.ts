@@ -143,18 +143,20 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
         );
       }
       for (const entry of published.slice(before)) {
-        await consume({
-          Records: [
-            {
-              messageId: `m-${sequence}-${entry.Detail.length}`,
-              body: JSON.stringify({
-                'detail-type': entry.DetailType,
-                source: entry.Source,
-                detail: JSON.parse(entry.Detail) as unknown,
-              }),
-            },
-          ],
-        } as unknown as SQSEvent);
+        expect(
+          await consume({
+            Records: [
+              {
+                messageId: `m-${sequence}-${entry.Detail.length}`,
+                body: JSON.stringify({
+                  'detail-type': entry.DetailType,
+                  source: entry.Source,
+                  detail: JSON.parse(entry.Detail) as unknown,
+                }),
+              },
+            ],
+          } as unknown as SQSEvent),
+        ).toEqual({ batchItemFailures: [] });
       }
     }
     const snapshotState = async (): Promise<unknown> =>
@@ -244,18 +246,20 @@ describe('availability mark-off → outbox drain → alerting snapshot (LocalSta
     });
 
     const { handler: consume } = await import('./consumer.js');
-    await consume({
-      Records: [
-        {
-          messageId: 'msg-1',
-          body: JSON.stringify({
-            'detail-type': published[0]!.DetailType,
-            source: published[0]!.Source,
-            detail: JSON.parse(published[0]!.Detail) as unknown,
-          }),
-        },
-      ],
-    } as unknown as SQSEvent);
+    expect(
+      await consume({
+        Records: [
+          {
+            messageId: 'msg-1',
+            body: JSON.stringify({
+              'detail-type': published[0]!.DetailType,
+              source: published[0]!.Source,
+              detail: JSON.parse(published[0]!.Detail) as unknown,
+            }),
+          },
+        ],
+      } as unknown as SQSEvent),
+    ).toEqual({ batchItemFailures: [] });
 
     const { Item: snapshot } = await docClient.send(
       new GetCommand({

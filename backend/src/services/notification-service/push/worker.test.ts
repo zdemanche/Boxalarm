@@ -152,6 +152,32 @@ describe('notification push worker (M7)', () => {
     expect(fcm.data.category).toBe('digest');
   });
 
+  it('a redelivery after one device failed re-sends FCM with the same notificationId', async () => {
+    const sendFcm = vi.fn().mockResolvedValue({ outcome: 'sent' });
+    const sendApns = vi.fn().mockRejectedValue(new Error('APNs 503'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const ddb = fakeDdb(
+      memberRow([
+        { channel: 'PUSH', platform: 'FCM', token: 'fcm-token' },
+        { channel: 'PUSH', platform: 'APNS', token: APNS_TOKEN },
+      ]),
+    );
+    const handler = await loadWorker(ddb, { sendFcm, sendApns });
+
+    const first = await handler(sqsEvent(message()));
+    const second = await handler(sqsEvent(message()));
+
+    expect(first.batchItemFailures).toHaveLength(1);
+    expect(second.batchItemFailures).toHaveLength(1);
+    const notificationIds = sendFcm.mock.calls.map((call) => {
+      const request = (call[0] as { buildRequest: () => Record<string, unknown> }).buildRequest();
+      return (request.message as { data: Record<string, string> }).data.notificationId;
+    });
+    expect(notificationIds).toHaveLength(2);
+    expect(notificationIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(notificationIds[1]).toBe(notificationIds[0]);
+  });
+
   it('skips invalid and non-push channels and succeeds with none left', async () => {
     const sendApns = vi.fn();
     const sendFcm = vi.fn();

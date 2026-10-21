@@ -145,6 +145,44 @@ describe('getScbaTestingSchedules handler', () => {
     vi.useRealTimers();
   });
 
+  it('surfaces an SCBA test that went overdue in an earlier month bucket', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+    const client = fakeDynamoClient({
+      'DEPT#dept-001#DUE#SCBA_TEST#2026-09': [
+        scbaItem({ gsi2pk: 'DEPT#dept-001#DUE#SCBA_TEST#2026-09', gsi2sk: '2026-09-20#SCBA-001' }),
+      ],
+    });
+    const createHandler = await importHandler();
+    const handler = createHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
+    const result = await handler(buildEvent(undefined));
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      dueSoon: { scbaUnitId: string }[];
+    };
+    expect(body.dueSoon.map((d) => d.scbaUnitId)).toEqual(['SCBA-001']);
+    vi.useRealTimers();
+  });
+
+  it('surfaces an SCBA test that went overdue more than two years ago', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-14T00:00:00Z'));
+    const client = fakeDynamoClient({
+      'DEPT#dept-001#DUE#SCBA_TEST#2024-08': [
+        scbaItem({ gsi2pk: 'DEPT#dept-001#DUE#SCBA_TEST#2024-08', gsi2sk: '2024-08-01#SCBA-001' }),
+      ],
+    });
+    const createHandler = await importHandler();
+    const handler = createHandler({ client, authzClient: fakeAuthzClient('ALLOW') });
+    const result = await handler(buildEvent(undefined));
+
+    const body = JSON.parse((result as { body: string }).body) as {
+      dueSoon: { scbaUnitId: string }[];
+    };
+    expect(body.dueSoon.map((d) => d.scbaUnitId)).toEqual(['SCBA-001']);
+    vi.useRealTimers();
+  });
+
   it('excludes a unit whose due date is outside the withinDays window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-14T00:00:00Z'));

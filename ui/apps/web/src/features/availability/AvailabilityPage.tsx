@@ -1,11 +1,11 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { Button, Card, PageHeader, Select, TextInput } from '../../components/ui';
 import { ApiError } from '../../lib/apiClient';
 import { useOnlineStatus } from '../../lib/useOnlineStatus';
 import { markUnavailable } from './api';
-import { MarkOffList } from './MarkOffList';
+import { MarkOffList, markOffsQueryKey } from './MarkOffList';
 import styles from './AvailabilityPage.module.css';
 
 // F2.5 / docs/design.md F-06 on the office surface. A mark-off suppresses alerting, so there is
@@ -58,6 +58,7 @@ const MAX_WINDOW_MS = 90 * DAY_MS;
 
 export function AvailabilityPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const isOnline = useOnlineStatus();
   const [now] = useState(() => new Date());
   const [preset, setPreset] = useState<Preset | null>(null);
@@ -73,6 +74,9 @@ export function AvailabilityPage() {
         endAt: Math.floor(input.end.getTime() / 1000),
         ...(input.reason ? { reason: input.reason } : {}),
       }),
+    onSettled: (_data, _error, input) => {
+      void queryClient.invalidateQueries({ queryKey: markOffsQueryKey(input.memberId) });
+    },
   });
 
   const presetLabels: { value: Preset; label: string }[] = [

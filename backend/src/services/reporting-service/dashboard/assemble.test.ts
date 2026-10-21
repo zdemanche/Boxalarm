@@ -36,4 +36,44 @@ describe('assembleDashboard', () => {
       ],
     });
   });
+
+  it('drops coverage gaps for shifts that have already ended', () => {
+    const view = assembleDashboard(
+      [
+        { sk: 'COVERAGE#ended', shiftId: 'ended', gapReason: 'short', endAt: now - 1_000 },
+        { sk: 'COVERAGE#live', shiftId: 'live', gapReason: 'short', endAt: now + 3_600_000 },
+      ],
+      now,
+    );
+    expect(view.staffing.shiftCoverage.gaps.map((gap) => gap.shiftId)).toEqual(['live']);
+  });
+
+  it('drops expired certifications and those beyond their lead window', () => {
+    const view = assembleDashboard(
+      [
+        { sk: 'CERT#c-1', memberId: 'm-1', certId: 'c-1', expiryDate: '2026-09-01', leadDays: 30 },
+        { sk: 'CERT#c-2', memberId: 'm-1', certId: 'c-2', expiryDate: '2026-10-01', leadDays: 30 },
+        { sk: 'CERT#c-3', memberId: 'm-2', certId: 'c-3', expiryDate: '2027-03-01', leadDays: 30 },
+        { sk: 'CERT#c-4', memberId: 'm-2', certId: 'c-4', expiryDate: '2026-09-25', leadDays: 30 },
+      ],
+      now,
+    );
+    expect(view.expiringCertifications.certifications.map((cert) => cert.certId)).toEqual([
+      'c-2',
+      'c-4',
+    ]);
+    expect(view.expiringCertifications.count).toBe(2);
+  });
+
+  it('ignores tombstoned rollup rows', () => {
+    const view = assembleDashboard(
+      [
+        { sk: 'OOS#E1', removed: true, ttl: 1 },
+        { sk: 'NERIS#inc-1', removed: true, ttl: 1 },
+      ],
+      now,
+    );
+    expect(view.outOfServiceApparatus).toEqual([]);
+    expect(view.nerisCompliance.submissions).toEqual([]);
+  });
 });

@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AuthProvider } from '../../auth/AuthContext';
 import { RequireRole } from '../../routing/RequireRole';
 import { CertificationsPage } from './CertificationsPage';
+import { safeAttachmentFilename } from './api';
 import { CertificationsPanel } from './CertificationsPanel';
 import { TrainingEventsPage } from './TrainingEventsPage';
 import { TrainingHoursPage } from './TrainingHoursPage';
@@ -183,6 +184,11 @@ test('training officer records post-event hours for an attendee via the hours fo
 
   let recordedBody: unknown;
   server.use(
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [{ memberId: 'm-1', firstName: 'Alex', lastName: 'Rivera', status: 'ACTIVE' }],
+      }),
+    ),
     http.get('/api/v1/training/events', () => HttpResponse.json(events)),
     http.post('/api/v1/training/events/:eventId/signup', async ({ request }) => {
       const body = (await request.json().catch(() => undefined)) as
@@ -200,7 +206,8 @@ test('training officer records post-event hours for an attendee via the hours fo
   await screen.findByText('Ladder drill');
 
   const form = screen.getByRole('form', { name: 'Record hours for Ladder drill' });
-  await user.type(within(form).getByLabelText('Member ID'), 'm-1');
+  await within(form).findByRole('option', { name: 'Rivera, Alex' });
+  await user.selectOptions(within(form).getByLabelText('Member'), 'm-1');
   await user.type(within(form).getByLabelText('Hours'), '2');
   await user.click(within(form).getByRole('button', { name: 'Record hours' }));
 
@@ -208,7 +215,7 @@ test('training officer records post-event hours for an attendee via the hours fo
     expect(recordedBody).toEqual({ attendees: [{ memberId: 'm-1', hours: 2 }] });
   });
   await waitFor(() => {
-    expect((within(form).getByLabelText('Member ID') as HTMLInputElement).value).toBe('');
+    expect((within(form).getByLabelText('Member') as HTMLSelectElement).value).toBe('');
   });
 });
 
@@ -322,6 +329,11 @@ test('failed sign-up and failed hours recording are shown, not swallowed (m2)', 
     },
   ];
   server.use(
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [{ memberId: 'm-1', firstName: 'Alex', lastName: 'Rivera', status: 'ACTIVE' }],
+      }),
+    ),
     http.get('/api/v1/training/events', () => HttpResponse.json(events)),
     http.post('/api/v1/training/events/:eventId/signup', () =>
       HttpResponse.json(
@@ -339,7 +351,8 @@ test('failed sign-up and failed hours recording are shown, not swallowed (m2)', 
   expect(await screen.findByText(/Sign-up failed/)).toBeTruthy();
 
   const form = screen.getByRole('form', { name: 'Record hours for Ladder drill' });
-  await user.type(within(form).getByLabelText('Member ID'), 'm-1');
+  await within(form).findByRole('option', { name: 'Rivera, Alex' });
+  await user.selectOptions(within(form).getByLabelText('Member'), 'm-1');
   await user.type(within(form).getByLabelText('Hours'), '2');
   await user.click(within(form).getByRole('button', { name: 'Record hours' }));
   expect(await within(form).findByText(/Hours not recorded/)).toBeTruthy();
@@ -588,4 +601,318 @@ test('certifications open on the expiring list, named from the roster, with a st
   expect(row.textContent).toContain('EVOC');
   expect(row.textContent).not.toContain(soonIso);
   expect(row.textContent).toContain('Expires in 10 days');
+});
+
+const BAD_REQUEST = (detail: string) =>
+  HttpResponse.json(
+    { type: 'about:blank', title: 'Bad Request', status: 400, detail, traceId: 't' },
+    { status: 400 },
+  );
+
+async function fillCertification(user: ReturnType<typeof userEvent.setup>, expiry = '2029-01-01') {
+  await user.type(screen.getByLabelText('Certification type'), 'FF1');
+  await user.type(screen.getByLabelText('Issue date'), '2024-01-01');
+  await user.type(screen.getByLabelText('Expiry date'), expiry);
+  await user.type(screen.getByLabelText('Issuing authority'), 'CT DESPP');
+}
+
+test('certification attachment filename is cleaned to what the API accepts before it is sent', async () => {
+  let body: { attachment?: { filename: string } } | undefined;
+  server.use(
+    http.get('/api/v1/training/members/m-1/certifications', () => HttpResponse.json([])),
+    http.post('/api/v1/training/members/m-1/certifications', async ({ request }) => {
+      body = (await request.json()) as typeof body;
+      return HttpResponse.json(
+        {
+          certId: 'CERT-1',
+          memberId: 'm-1',
+          certType: 'FF1',
+          issueDate: '2024-01-01',
+          expiryDate: '2029-01-01',
+          issuingAuthority: 'CT DESPP',
+          attachmentS3Key: 'd/CERTIFICATION/CERT-1/FF1_Card.pdf',
+          status: 'CURRENT',
+        },
+        { status: 201 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(<CertificationsPanel memberId="m-1" />, ['TRAINING']);
+  await screen.findByRole('heading', { name: 'Certifications' });
+  await fillCertification(user);
+  await user.upload(
+    screen.getByLabelText('Attachment (optional)'),
+    new File(['x'], '(FF1 Card).pdf', { type: 'application/pdf' }),
+  );
+  await user.click(screen.getByRole('button', { name: 'Add certification' }));
+
+  await waitFor(() => expect(body?.attachment?.filename).toBe('FF1_Card_.pdf'));
+});
+
+test('an attachment name with no usable stem keeps its extension', () => {
+  expect(safeAttachmentFilename('Сертификат.pdf')).toBe('attachment.pdf');
+  expect(safeAttachmentFilename('(FF1 Card).pdf')).toBe('FF1_Card_.pdf');
+});
+
+test('recording hours refreshes sibling training queries, and the member picker is sorted without retired members', async () => {
+  let eventGets = 0;
+  server.use(
+    http.get('/api/v1/personnel/members', () =>
+      HttpResponse.json({
+        items: [
+          { memberId: 'm-2', firstName: 'Zed', lastName: 'Zane', status: 'ACTIVE' },
+          { memberId: 'm-1', firstName: 'Amy', lastName: 'Adams', status: 'ACTIVE' },
+          { memberId: 'm-3', firstName: 'Old', lastName: 'Timer', status: 'RETIRED' },
+        ],
+      }),
+    ),
+    http.get('/api/v1/training/events', () => {
+      eventGets += 1;
+      return HttpResponse.json([
+        {
+          eventId: 'evt-1',
+          title: 'Ladder drill',
+          category: 'Ladders',
+          startAt: Date.parse('2020-01-01T18:00:00Z'),
+          endAt: Date.parse('2020-01-01T20:00:00Z'),
+          signedUp: false,
+        },
+      ]);
+    }),
+    http.post('/api/v1/training/events/:eventId/signup', () =>
+      HttpResponse.json({ eventId: 'evt-1', attendeeCount: 1 }),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<TrainingEventsPage />, ['TRAINING'], '/training/events');
+  await screen.findByText('Ladder drill');
+  const form = screen.getByRole('form', { name: 'Record hours for Ladder drill' });
+  await within(form).findByRole('option', { name: 'Adams, Amy' });
+  expect(
+    within(form)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual(['Select a member…', 'Adams, Amy', 'Zane, Zed']);
+  const before = eventGets;
+  await user.selectOptions(within(form).getByLabelText('Member'), 'm-1');
+  await user.type(within(form).getByLabelText('Hours'), '2');
+  await user.click(within(form).getByRole('button', { name: 'Record hours' }));
+  await waitFor(() => expect(eventGets).toBeGreaterThan(before));
+});
+
+test('a certification create 400 shows its detail, and a reversed expiry is not sent', async () => {
+  let posts = 0;
+  server.use(
+    http.get('/api/v1/training/members/m-1/certifications', () => HttpResponse.json([])),
+    http.post('/api/v1/training/members/m-1/certifications', () => {
+      posts += 1;
+      return HttpResponse.json(
+        {
+          type: 'about:blank',
+          title: 'Bad Request',
+          status: 400,
+          detail: 'The request failed validation.',
+          traceId: 't',
+          errors: [{ field: 'attachment.filename', detail: 'must have an allowed extension' }],
+        },
+        { status: 400 },
+      );
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(<CertificationsPanel memberId="m-1" />, ['TRAINING']);
+  await screen.findByRole('heading', { name: 'Certifications' });
+  await fillCertification(user, '2020-01-01');
+  await user.click(screen.getByRole('button', { name: 'Add certification' }));
+  expect(await screen.findByText(/Expiry date can't be before the issue date/)).toBeTruthy();
+  expect(posts).toBe(0);
+
+  await user.clear(screen.getByLabelText('Expiry date'));
+  await user.type(screen.getByLabelText('Expiry date'), '2029-01-01');
+  await user.click(screen.getByRole('button', { name: 'Add certification' }));
+  expect(
+    await screen.findByText('attachment.filename: must have an allowed extension'),
+  ).toBeTruthy();
+  expect(screen.queryByText("Expiry date can't be before the issue date.")).toBeNull();
+});
+
+test('the attachment input is cleared after a create so the next certification is not silently attachment-less', async () => {
+  server.use(
+    http.get('/api/v1/training/members/m-1/certifications', () => HttpResponse.json([])),
+    http.post('/api/v1/training/members/m-1/certifications', () =>
+      HttpResponse.json(
+        {
+          certId: 'CERT-1',
+          memberId: 'm-1',
+          certType: 'FF1',
+          issueDate: '2024-01-01',
+          expiryDate: '2029-01-01',
+          issuingAuthority: 'CT DESPP',
+          attachmentS3Key: null,
+          status: 'CURRENT',
+        },
+        { status: 201 },
+      ),
+    ),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(<CertificationsPanel memberId="m-1" />, ['TRAINING']);
+  await screen.findByRole('heading', { name: 'Certifications' });
+  await fillCertification(user);
+  const input = screen.getByLabelText('Attachment (optional)') as HTMLInputElement;
+  await user.upload(input, new File(['x'], 'certs.pdf', { type: 'application/pdf' }));
+  expect(input.files).toHaveLength(1);
+  await user.click(screen.getByRole('button', { name: 'Add certification' }));
+
+  await waitFor(() => expect(input.files).toHaveLength(0));
+});
+
+test('revoking a certification refreshes the transcript on the same page', async () => {
+  let revoked = false;
+  let transcriptGets = 0;
+  const cert = (status: string) => ({
+    certId: 'CERT-1',
+    memberId: 'm-1',
+    certType: 'FF1',
+    issueDate: '2024-01-01',
+    expiryDate: '2029-01-01',
+    issuingAuthority: 'CT DESPP',
+    attachmentS3Key: null,
+    status,
+  });
+  server.use(
+    http.get('/api/v1/training/members/m-1/certifications', () =>
+      HttpResponse.json([cert(revoked ? 'REVOKED' : 'CURRENT')]),
+    ),
+    http.get('/api/v1/training/members/m-1/transcript', () => {
+      transcriptGets += 1;
+      return HttpResponse.json({
+        memberId: 'm-1',
+        certifications: [],
+        attendance: [],
+        hoursByCategory: {},
+      });
+    }),
+    http.post('/api/v1/training/members/m-1/certifications/CERT-1/revoke', () => {
+      revoked = true;
+      return HttpResponse.json(cert('REVOKED'));
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPanel(
+    <>
+      <CertificationsPanel memberId="m-1" />
+      <TranscriptPanel memberId="m-1" />
+    </>,
+    ['TRAINING'],
+  );
+  await user.click(await screen.findByRole('button', { name: 'Revoke' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Revoke FF1?' });
+  await waitFor(() => expect(transcriptGets).toBeGreaterThan(0));
+  const before = transcriptGets;
+  await user.click(within(dialog).getByRole('button', { name: 'Revoke certification' }));
+
+  await waitFor(() => expect(transcriptGets).toBeGreaterThan(before));
+});
+
+test('the expiring list shows a revoked certification as revoked, not as expiring soon', async () => {
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 12);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const soonIso = `${soon.getFullYear()}-${pad(soon.getMonth() + 1)}-${pad(soon.getDate())}`;
+  server.use(
+    http.get('/api/v1/training/certifications/expiring', () =>
+      HttpResponse.json([
+        {
+          certId: 'c-1',
+          memberId: 'm-2',
+          certType: 'EVOC',
+          expiryDate: soonIso,
+          issuingAuthority: 'CT',
+          status: 'REVOKED',
+        },
+      ]),
+    ),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderPage(<CertificationsPage />, ['TRAINING'], '/certifications');
+  const row = (await screen.findByText('EVOC')).closest('tr')!;
+  expect(row.textContent).toContain('Revoked');
+  expect(row.textContent).not.toContain('Expires in');
+});
+
+test('training hours: members who only signed up (zero hours) are not counted or listed', async () => {
+  server.use(
+    http.get('/api/v1/training/hours', () =>
+      HttpResponse.json({
+        from: 0,
+        to: 0,
+        members: [
+          { memberId: 'm-1', categories: [{ category: 'Ladders', hours: 2 }] },
+          { memberId: 'm-2', categories: [{ category: 'Hose', hours: 0 }] },
+        ],
+      }),
+    ),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderPage(<TrainingHoursPage />, ['TRAINING'], '/training/hours');
+  const table = await screen.findByRole('table');
+  await within(table).findByRole('rowheader', { name: 'm-1' });
+  expect(within(table).queryByRole('rowheader', { name: 'm-2' })).toBeNull();
+  expect(within(table).queryByRole('columnheader', { name: 'Hose' })).toBeNull();
+  expect(
+    screen.getByText('Members with hours').parentElement?.parentElement?.textContent,
+  ).toContain('1');
+});
+
+test('training hours: a range holding only zero-hour sign-ups shows the empty state', async () => {
+  server.use(
+    http.get('/api/v1/training/hours', () =>
+      HttpResponse.json({
+        from: 0,
+        to: 0,
+        members: [{ memberId: 'm-2', categories: [{ category: 'Hose', hours: 0 }] }],
+      }),
+    ),
+    http.get('/api/v1/personnel/members', () => HttpResponse.json({ items: [] })),
+  );
+
+  renderPage(<TrainingHoursPage />, ['TRAINING'], '/training/hours');
+  expect(await screen.findByText(/No training hours were recorded/)).toBeTruthy();
+});
+
+test('a reversed event window is rejected before any request; a 400 shows its detail', async () => {
+  let posts = 0;
+  server.use(
+    http.get('/api/v1/training/events', () => HttpResponse.json([])),
+    http.post('/api/v1/training/events', () => {
+      posts += 1;
+      return BAD_REQUEST('title is too long');
+    }),
+  );
+
+  const user = userEvent.setup();
+  renderPage(<TrainingEventsPage />, ['TRAINING'], '/training/events');
+  await screen.findByText('No training events scheduled.');
+
+  await user.type(screen.getByLabelText('Title'), 'Hose drill');
+  await user.type(screen.getByLabelText('Category'), 'Hose');
+  await user.type(screen.getByLabelText('Starts'), '2099-07-01T11:00');
+  await user.type(screen.getByLabelText('Ends'), '2099-07-01T09:00');
+  await user.click(screen.getByRole('button', { name: 'Create event' }));
+  expect(await screen.findByText('End time must be after the start time.')).toBeTruthy();
+  expect(posts).toBe(0);
+
+  await user.clear(screen.getByLabelText('Ends'));
+  await user.type(screen.getByLabelText('Ends'), '2099-07-01T13:00');
+  await user.click(screen.getByRole('button', { name: 'Create event' }));
+  expect(await screen.findByText('title is too long')).toBeTruthy();
 });

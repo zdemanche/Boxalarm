@@ -4,6 +4,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { ApiError, problemFieldErrors, type ProblemFieldError } from '../../lib/apiClient';
 import { ApiForbiddenGate } from '../../components/ApiForbiddenGate';
 import { Button, Card, Skeleton, Textarea } from '../../components/ui';
+import { RetryableApiGate } from './RetryableApiGate';
 import { getConfig, putConfig } from './api';
 import type { ConfigResponse, EditableConfigType } from './types';
 import styles from './Settings.module.css';
@@ -109,9 +110,9 @@ export function JsonConfigEditor({
       {configQuery.isLoading ? (
         <Skeleton lines={3} />
       ) : configQuery.error ? (
-        <ApiForbiddenGate error={configQuery.error} embedded>
+        <RetryableApiGate error={configQuery.error} onRetry={() => void configQuery.refetch()}>
           <p role="alert">Unable to load {label}.</p>
-        </ApiForbiddenGate>
+        </RetryableApiGate>
       ) : (
         <form onSubmit={handleSubmit} className={styles.form}>
           <Textarea

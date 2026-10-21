@@ -24,13 +24,23 @@ const createNoActivityReport = vi.fn();
 const listNoActivityReports = vi.fn();
 let spies: { mockRestore: () => void }[] = [];
 
-function setup(options: { filed?: boolean; count?: number; departmentNerisId?: string | null }) {
+function setup(options: {
+  filed?: boolean;
+  count?: number;
+  dispatchCount?: number;
+  departmentNerisId?: string | null;
+}) {
   ddbSend.mockImplementation((command: Command) => {
     if (command.constructor.name === 'GetCommand') {
       return Promise.resolve(options.filed ? { Item: { nerisUid: 'nar-0' } } : {});
     }
     if (command.constructor.name === 'QueryCommand') {
-      return Promise.resolve({ Count: options.count ?? 0 });
+      const from = String(
+        (command.input.ExpressionAttributeValues as Record<string, unknown>)[':from'],
+      );
+      return Promise.resolve({
+        Count: from.startsWith('DISPATCH#') ? (options.dispatchCount ?? 0) : (options.count ?? 0),
+      });
     }
     return Promise.resolve({});
   });
@@ -125,6 +135,10 @@ describe('POST /incidents/no-activity-reports', () => {
     vi.resetModules();
     setup({ count: 3 });
     expect((await post({ month: '2026-08' })).json.code).toBe('MONTH_HAS_INCIDENTS');
+
+    vi.resetModules();
+    setup({ dispatchCount: 2 });
+    expect((await post({ month: '2026-08' })).json.code).toBe('MONTH_HAS_DISPATCHES');
 
     vi.resetModules();
     setup({ filed: true });

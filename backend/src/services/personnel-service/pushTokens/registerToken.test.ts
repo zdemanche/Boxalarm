@@ -8,6 +8,7 @@ interface SentCommand {
   input: {
     Key?: { pk: string };
     IndexName?: string;
+    ConsistentRead?: boolean;
     ExpressionAttributeValues?: Record<string, unknown>;
     TransactItems?: [
       {
@@ -518,5 +519,158 @@ describe('registerToken handler', () => {
     error.mockRestore();
     vi.doUnmock('../dynamoClient.js');
     vi.doUnmock('@boxalarm/authz');
+  });
+
+  describe('device-loss revocation racing the registration', () => {
+    const REVOCATION_PK = 'DEPT#NICHOLS#SESSION_REVOCATION#mbr-102';
+
+    async function register(
+      revokedAt: number | undefined,
+      iat: string | undefined,
+      failing: 'marker' | 'rollback' | 'rollbackOnce' | undefined = undefined,
+    ) {
+      let transactWrites = 0;
+      const send = vi.fn().mockImplementation((command: SentCommand) => {
+        if (command.constructor.name === 'TransactWriteCommand') {
+          transactWrites += 1;
+          if (failing === 'rollback' && transactWrites >= 2) {
+            return Promise.reject(new Error('rollback down'));
+          }
+          if (failing === 'rollbackOnce' && transactWrites === 2) {
+            return Promise.reject(new Error('rollback blip'));
+          }
+        }
+        if (command.constructor.name === 'GetCommand') {
+          if (failing === 'marker' && command.input.Key?.pk === REVOCATION_PK) {
+            return Promise.reject(new Error('marker read down'));
+          }
+          return Promise.resolve(
+            command.input.Key?.pk === REVOCATION_PK
+              ? { Item: revokedAt === undefined ? undefined : { revokedAt } }
+              : { Item: { pk: 'x', sk: 'METADATA', updatedAt: 1 } },
+          );
+        }
+        return Promise.resolve({});
+      });
+      vi.doMock('../dynamoClient.js', () => ({
+        createDynamoClient: () => ({ send }) as unknown as DynamoDBDocumentClient,
+        readPersonnelConfig: () => ({ tableName: 'personnel-table' }),
+      }));
+      vi.doMock('@boxalarm/authz', async () => {
+        const actual = await vi.importActual<typeof import('@boxalarm/authz')>('@boxalarm/authz');
+        return { ...actual, withAuthorization: (inner: unknown) => inner };
+      });
+      const { handler } = await import('./registerToken.js');
+      const event = buildEvent('mbr-102', { platform: 'FCM', token: 'tok-1', deviceId: 'd-1' });
+      (event.requestContext.authorizer as { lambda: Record<string, unknown> }).lambda = {
+        ...PRINCIPAL,
+        ...(iat === undefined ? {} : { iat }),
+      };
+      const result = await (
+        handler as unknown as (
+          e: GuardEvent,
+          p: CedarPrincipalContext,
+        ) => Promise<{ statusCode: number }>
+      )(event, PRINCIPAL);
+      const sent = send.mock.calls.map((call) => call[0] as SentCommand);
+      vi.doUnmock('../dynamoClient.js');
+      vi.doUnmock('@boxalarm/authz');
+      return { result, sent };
+    }
+
+    async function registerExpectingThrow(failing: 'marker' | 'rollback') {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      await expect(register(200, '100', failing)).rejects.toThrow();
+      const events = errorSpy.mock.calls.map((call) => JSON.parse(call[0] as string) as unknown);
+      const metrics = logSpy.mock.calls.map((call) => call[0] as string);
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+      return { events, metrics };
+    }
+
+    const names = (sent: SentCommand[]) => sent.map((command) => command.constructor.name);
+
+    it('refuses and takes the token back when a marker newer than the token landed after the authorizer read it', async () => {
+      const { result, sent } = await register(200, '100');
+
+      expect(result.statusCode).toBe(403);
+      expect(names(sent).filter((name) => name === 'TransactWriteCommand')).toHaveLength(2);
+      expect(names(sent)).not.toContain('QueryCommand');
+      const rollback = sent.filter(
+        (command) => command.constructor.name === 'TransactWriteCommand',
+      )[1];
+      expect(rollback?.input.TransactItems?.[0].Update.ExpressionAttributeValues[':cc']).toEqual(
+        [],
+      );
+    });
+
+    it('keeps the registration when the marker predates the token', async () => {
+      const { result, sent } = await register(50, '100');
+
+      expect(result.statusCode).toBe(200);
+      expect(names(sent).filter((name) => name === 'TransactWriteCommand')).toHaveLength(1);
+    });
+
+    it('reads the marker consistently', async () => {
+      const { sent } = await register(50, '100');
+
+      const markerRead = sent.find(
+        (command) =>
+          command.constructor.name === 'GetCommand' && command.input.Key?.pk === REVOCATION_PK,
+      );
+      expect(markerRead?.input.ConsistentRead).toBe(true);
+    });
+
+    it('skips the marker read when the authorizer supplied no iat', async () => {
+      const { result, sent } = await register(200, undefined);
+
+      expect(result.statusCode).toBe(200);
+      expect(
+        sent.some(
+          (command) =>
+            command.constructor.name === 'GetCommand' && command.input.Key?.pk === REVOCATION_PK,
+        ),
+      ).toBe(false);
+    });
+
+    it('refuses when the token was issued in the same second as the marker', async () => {
+      const { result } = await register(100, '100');
+
+      expect(result.statusCode).toBe(403);
+    });
+
+    it('logs, counts and rethrows when the marker read fails', async () => {
+      const { events, metrics } = await registerExpectingThrow('marker');
+
+      expect(events).toContainEqual(
+        expect.objectContaining({ event: 'personnel.pushToken.register.revocationRecheckFailed' }),
+      );
+      expect(metrics.some((line) => line.includes('"Reason":"RevocationRecheckFailed"'))).toBe(
+        true,
+      );
+    });
+
+    it('logs, counts and rethrows when the rollback write fails', async () => {
+      const { events, metrics } = await registerExpectingThrow('rollback');
+
+      expect(events).toContainEqual(
+        expect.objectContaining({ event: 'personnel.pushToken.register.rollbackFailed' }),
+      );
+      expect(metrics.some((line) => line.includes('"Reason":"RollbackFailed"'))).toBe(true);
+    });
+
+    it('retries the rollback in-process and still refuses when one attempt fails', async () => {
+      const { result, sent } = await register(200, '100', 'rollbackOnce');
+
+      expect(result.statusCode).toBe(403);
+      expect(names(sent).filter((name) => name === 'TransactWriteCommand')).toHaveLength(3);
+    });
+
+    it('keeps the registration when the member has no marker', async () => {
+      const { result } = await register(undefined, '100');
+
+      expect(result.statusCode).toBe(200);
+    });
   });
 });

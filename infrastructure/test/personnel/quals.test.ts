@@ -112,6 +112,28 @@ describe("Quals — eligibility-changed consumer (#114/#204)", () => {
     });
   });
 
+  it("reports partial batch failures so a failed record is retried, not deleted with its batch", async () => {
+    const quals = await build();
+    const types = await resolve(
+      quals.eligibilityChangedQueueConsumer.eventSourceMapping.functionResponseTypes,
+    );
+    expect(types).toEqual(["ReportBatchItemFailures"]);
+  });
+
+  it("lets the put Lambda authorize the cert ConditionCheck, the qual/outbox/audit Puts and the reads", async () => {
+    const quals = await build();
+    const policyJson = await resolve(quals.putLambda.rolePolicy.policy);
+    const write = (
+      JSON.parse(policyJson) as { Statement: Array<{ Sid: string; Action: string[] }> }
+    ).Statement.find((s) => s.Sid === "QualsTableWrite");
+    expect(write?.Action.sort()).toEqual([
+      "dynamodb:ConditionCheckItem",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+    ]);
+    expect(policyJson).not.toContain("table/alerting");
+  });
+
   it("grants the eligibility-changed consumer role only the alerting table, never platform-service (AC3)", async () => {
     const quals = await build();
     const policyJson = await resolve(quals.eligibilityChangedConsumer.rolePolicy.policy);

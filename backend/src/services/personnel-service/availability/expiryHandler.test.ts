@@ -27,11 +27,102 @@ describe('expiryHandler (entrypoint-test obligation)', () => {
     );
   });
 
-  it('no-ops SKIPPED_NOT_FOUND when the markoff item is absent', async () => {
-    mockDdb({ send: vi.fn().mockResolvedValue({ Item: undefined }) });
+  it('reads the mark-off consistently and throws (logged, metered) when the row is absent so the async retry re-reads', async () => {
+    const send = vi.fn().mockResolvedValue({ Item: undefined });
+    mockDdb({ send });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const metricSpy = vi.fn();
+    vi.doMock('@boxalarm/metrics', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@boxalarm/metrics')>()),
+      emitOutcomeMetric: metricSpy,
+    }));
     const { handler } = await import('./expiryHandler.js');
-    const result = await handler({ deptId: 'NICHOLS', memberId: 'mbr-1', startAt: 100 });
-    expect(result).toEqual({ outcome: 'SKIPPED_NOT_FOUND' });
+    await expect(handler({ deptId: 'NICHOLS', memberId: 'mbr-1', startAt: 100 })).rejects.toThrow(
+      'not found',
+    );
+    expect(
+      (send.mock.calls[0]?.[0] as { input: { ConsistentRead?: boolean } }).input.ConsistentRead,
+    ).toBe(true);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('availability.expiry.markoff_not_found'),
+    );
+    expect(metricSpy).toHaveBeenCalledWith(
+      'Boxalarm/personnel-availability',
+      'ExpiryFailed',
+      'MarkoffNotFound',
+    );
+    errorSpy.mockRestore();
+    vi.doUnmock('@boxalarm/metrics');
+  });
+
+  describe('ACTIVATE', () => {
+    const row = {
+      pk: 'DEPT#NICHOLS#MEMBER#mbr-1',
+      sk: 'MARKOFF#100',
+      entityType: 'AVAILABILITY_MARKOFF',
+      memberId: 'mbr-1',
+      deptId: 'NICHOLS',
+      startAt: 100,
+      endAt: 200,
+      affectsAlerting: true,
+    };
+    const payload = { deptId: 'NICHOLS', memberId: 'mbr-1', startAt: 100, action: 'ACTIVATE' };
+
+    it('stamps activatedAt under a not-activated, not-reverted condition and emits the MARKED_OFF outbox entry', async () => {
+      const send = vi.fn().mockResolvedValueOnce({ Item: row }).mockResolvedValueOnce({});
+      mockDdb({ send });
+      const { handler } = await import('./expiryHandler.js');
+      expect(await handler(payload)).toEqual({ outcome: 'ACTIVATED' });
+      const call = send.mock.calls[1]![0] as {
+        input: {
+          TransactItems: {
+            Update?: { ConditionExpression: string };
+            Put?: { Item: Record<string, unknown> };
+          }[];
+        };
+      };
+      const condition = call.input.TransactItems[0]!.Update!.ConditionExpression;
+      expect(condition).toContain('attribute_not_exists(activatedAt)');
+      expect(condition).toContain('attribute_not_exists(revertedAt)');
+      expect(call.input.TransactItems[1]!.Put!.Item.payload).toEqual({
+        deptId: 'NICHOLS',
+        memberId: 'mbr-1',
+        availabilityState: 'MARKED_OFF',
+        startAt: 100,
+        endAt: 200,
+      });
+    });
+
+    it('skips without writing when already activated', async () => {
+      const send = vi.fn().mockResolvedValue({ Item: { ...row, activatedAt: 120 } });
+      mockDdb({ send });
+      const { handler } = await import('./expiryHandler.js');
+      expect(await handler(payload)).toEqual({ outcome: 'SKIPPED_ALREADY_ACTIVATED' });
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips without writing when already reverted (a cancelled window never activates)', async () => {
+      const send = vi.fn().mockResolvedValue({ Item: { ...row, revertedAt: 150 } });
+      mockDdb({ send });
+      const { handler } = await import('./expiryHandler.js');
+      expect(await handler(payload)).toEqual({ outcome: 'SKIPPED_ALREADY_REVERTED' });
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats a lost condition race as already activated instead of throwing', async () => {
+      const send = vi
+        .fn()
+        .mockResolvedValueOnce({ Item: row })
+        .mockRejectedValueOnce(
+          Object.assign(new Error('cancelled'), {
+            name: 'TransactionCanceledException',
+            CancellationReasons: [{ Code: 'ConditionalCheckFailed' }],
+          }),
+        );
+      mockDdb({ send });
+      const { handler } = await import('./expiryHandler.js');
+      expect(await handler(payload)).toEqual({ outcome: 'SKIPPED_ALREADY_ACTIVATED' });
+    });
   });
 
   it('no-ops SKIPPED_ALREADY_REVERTED on a redelivered fire (revertedAt already set) — never re-emits the event (AC4)', async () => {

@@ -13,6 +13,13 @@ const OTHER_TOWN = '__other__';
 // Matches the backend's MAX_LOCALITY_TOWN_LENGTH (a longer town is dropped server-side).
 const MAX_TOWN_LENGTH = 80;
 const LOCALITY_LABEL = 'Town / village (required)';
+const REQUIRED_FIELDS = [
+  ['incidentType', 'Enter the incident type.'],
+  ['address', 'Enter the address.'],
+  ['crossStreets', 'Enter the cross streets.'],
+  ['narrative', 'Enter the narrative.'],
+  ['externalDispatchId', 'Enter a reference for this call.'],
+] as const;
 // The field floor (56dp, design.md §1) - above the 44pt / 48dp platform minimum m8 asked for.
 const FIELD_TARGET = targetSize.field;
 /** Field body text (design.md §1: body 17 on the field surface). */
@@ -69,12 +76,17 @@ export function ManualDispatchEntryScreen() {
       localityChoice === OTHER_TOWN
         ? { town: otherTown.trim(), choice: 'OTHER' as const }
         : { town: localityChoice ?? '', choice: 'HOME' as const };
+    const missing: FieldError[] = REQUIRED_FIELDS.filter(
+      ([key]) => form[key].trim().length === 0,
+    ).map(([field, message]) => ({ field, message }));
     if (locality.town.length === 0) {
-      const message = 'Choose the town or village.';
-      setFieldErrors([{ field: 'locality', message }]);
+      missing.push({ field: 'locality', message: 'Choose the town or village.' });
+    }
+    if (missing.length > 0) {
+      setFieldErrors(missing);
       // Android announces it through the live region; iOS has none, so announce it on every
       // failed submit, repeated ones included (m8, round-4b S2).
-      if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(message);
+      if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(missing[0]!.message);
       return;
     }
     setSubmitting(true);
@@ -99,7 +111,9 @@ export function ManualDispatchEntryScreen() {
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.problem.status === 409) {
-          setFormError('This dispatch was already entered. It has not been resubmitted.');
+          setFormError(
+            'No new page was sent: the same reference was entered in the last 10 minutes. A new call needs a different reference.',
+          );
         } else if (Array.isArray((error.problem as { errors?: FieldError[] }).errors)) {
           setFieldErrors((error.problem as unknown as { errors: FieldError[] }).errors);
         } else {
@@ -173,9 +187,9 @@ export function ManualDispatchEntryScreen() {
 
       <Card title="Call">
         <View style={{ gap: spacing.md }}>
-          {field('Incident type', 'incidentType')}
-          {field('Address', 'address')}
-          {field('Cross streets', 'crossStreets')}
+          {field('Incident type (required)', 'incidentType')}
+          {field('Address (required)', 'address')}
+          {field('Cross streets (required)', 'crossStreets')}
 
           <View
             testID="locality-group"
@@ -257,8 +271,8 @@ export function ManualDispatchEntryScreen() {
             />
           </View>
 
-          {field('Narrative', 'narrative', { multiline: true })}
-          {field('Operator-entered reference', 'externalDispatchId')}
+          {field('Narrative (required)', 'narrative', { multiline: true })}
+          {field('Operator-entered reference (required)', 'externalDispatchId')}
 
           {formError ? (
             <Notice tone="warning">

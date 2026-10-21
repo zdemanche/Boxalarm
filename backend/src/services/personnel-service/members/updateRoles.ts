@@ -194,7 +194,15 @@ export const handler: APIGatewayProxyHandlerV2WithLambdaAuthorizer<VerifiedAcces
     groups.added.length > 0 || groups.removed.length > 0 || !sameRoles(previousRoles, roles);
   if (changed) {
     try {
-      await updateMemberRoles(config.tableName, ctx, memberId, previousRoles, roles, ctx.sub);
+      await updateMemberRoles(
+        config.tableName,
+        ctx,
+        memberId,
+        previousRoles,
+        roles,
+        ctx.sub,
+        member.updatedAt,
+      );
     } catch (error) {
       if (isConditionalCheckFailure(error)) {
         // Another admin changed the roles since this request read them, or the member is

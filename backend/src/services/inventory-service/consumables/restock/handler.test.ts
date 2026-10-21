@@ -53,6 +53,13 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
     process.env = { ...originalEnv };
   });
 
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event('gloves-m', {}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('AC1: updates stockLevel and returns the updated consumable (entrypoint-test)', async () => {
     const client = fakeDocClient((command) => {
       const name = (command as { constructor: { name: string } }).constructor.name;
@@ -133,6 +140,20 @@ describe('handler (PUT /api/v1/inventory/consumables/{itemId})', () => {
     const result = await invoke(event('gloves-m', { stockLevel: 40 }), client);
     expect(result.statusCode).toBe(403);
     expect(client.sendMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['{bad', 'null'])('400 (not 500) for a malformed or non-object body %s', async (raw) => {
+    const send = vi.fn();
+    const result = await invoke({ ...event('GLOVES-L', {}), body: raw }, fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('400 (not 500) when the itemId path parameter contains "#"', async () => {
+    const send = vi.fn();
+    const result = await invoke(event('a#b', {}), fakeDocClient(send));
+    expect(result.statusCode).toBe(400);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('400 problem+json when neither stockLevel nor reorderThreshold is present', async () => {

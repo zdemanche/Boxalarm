@@ -145,6 +145,51 @@ describe('createCertification', () => {
   });
 });
 
+describe('createCertification with an already-lapsed expiryDate', () => {
+  it('stores and returns EXPIRED so a back-entered lapsed cert never grants eligibility', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const client = fakeClient(send);
+
+    const record = await createCertification(client, env, {
+      deptId,
+      memberId: 'MBR-0034',
+      certId: 'CERT-0092',
+      actorId: 'MBR-0034',
+      correlationId: 'trace-1',
+      certType: 'FF1',
+      issueDate: '2020-01-10',
+      expiryDate: '2026-06-30',
+      issuingAuthority: 'CT DESPP',
+      attachmentS3Key: null,
+      now: new Date('2026-10-13T12:00:00Z'),
+    });
+
+    const command = send.mock.calls[0]?.[0] as TransactWriteCommand;
+    const certPut = command.input.TransactItems?.[0]?.Put?.Item as Record<string, unknown>;
+    expect(certPut.status).toBe('EXPIRED');
+    expect(record.status).toBe('EXPIRED');
+  });
+
+  it('keeps a cert expiring today CURRENT', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    const record = await createCertification(fakeClient(send), env, {
+      deptId,
+      memberId: 'MBR-0034',
+      certId: 'CERT-0093',
+      actorId: 'MBR-0034',
+      correlationId: 'trace-1',
+      certType: 'FF1',
+      issueDate: '2020-01-10',
+      expiryDate: '2026-10-13',
+      issuingAuthority: 'CT DESPP',
+      attachmentS3Key: null,
+      now: new Date('2026-10-13T12:00:00Z'),
+    });
+
+    expect(record.status).toBe('CURRENT');
+  });
+});
+
 describe('listCertificationsForMember', () => {
   it('issues a Query with a key condition on pk and a begins_with sk prefix, never a Scan (dynamodb-access-patterns)', async () => {
     const send = vi.fn().mockResolvedValue({

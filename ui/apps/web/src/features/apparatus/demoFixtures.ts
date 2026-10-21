@@ -296,7 +296,7 @@ function complianceReport(): ComplianceEntry[] {
 // Defects
 // ---------------------------------------------------------------------------------------------
 
-const ENGINE_301_TIRE_PHOTO = '/demo/engine-301-tire.svg';
+const ENGINE_301_TIRE_PHOTO = `${import.meta.env.BASE_URL}demo/engine-301-tire.svg`;
 
 interface DemoDefect extends OpenDefectSummary {
   apparatusId: string;

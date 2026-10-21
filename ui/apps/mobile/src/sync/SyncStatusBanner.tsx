@@ -1,4 +1,11 @@
-import { palette, spacing, touchTarget, typography } from '@boxalarm/design-tokens';
+import {
+  palette,
+  spacing,
+  statusPalette,
+  targetSize,
+  touchTarget,
+  typography,
+} from '@boxalarm/design-tokens';
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Text, TouchableOpacity, View } from 'react-native';
 import type { SyncItem, SyncQueueStatus } from '../features/sync/types';
@@ -44,7 +51,7 @@ export function SyncStatusBanner() {
     void syncManager.sendAsMe(item.id);
   };
 
-  if (!status || dismissed) return null;
+  if (!status) return null;
 
   // Saved before this phone recorded who queued what: never sent until someone claims it (R2-M3).
   const unowned = status.items.filter((item) => item.needsOwner);
@@ -54,14 +61,16 @@ export function SyncStatusBanner() {
   const pending = own.filter((item) => item.status === 'QUEUED' || item.status === 'SYNCING');
   const heldForOthers = status.heldForOtherMembers ?? 0;
   const hasFailed = failed.length > 0 || rejected.length > 0 || unowned.length > 0;
+  if (dismissed && !hasFailed && pending.length === 0 && heldForOthers === 0) return null;
+  const errorText = statusPalette.cab.danger;
 
   const actionStyle = {
-    minHeight: touchTarget.baseline.ios,
+    minHeight: targetSize.field,
     justifyContent: 'center' as const,
     paddingHorizontal: spacing.sm,
   };
   const actionTextStyle = {
-    color: tokens.error,
+    color: errorText,
     fontWeight: '600' as const,
     fontSize: typography.size.sm,
   };
@@ -87,7 +96,7 @@ export function SyncStatusBanner() {
       {unowned.map((item) => (
         <View key={item.id} style={rowStyle}>
           <View style={{ flexShrink: 1 }}>
-            <Text style={{ color: tokens.error, fontSize: typography.size.sm }}>
+            <Text style={{ color: errorText, fontSize: typography.size.sm }}>
               {item.label} was saved on this phone before it recorded who saved it. It won&apos;t be
               sent unless you say it&apos;s yours.
             </Text>
@@ -125,7 +134,7 @@ export function SyncStatusBanner() {
       )}
       {failed.map((item) => (
         <View key={item.id} style={rowStyle}>
-          <Text style={{ color: tokens.error, fontSize: typography.size.sm, flexShrink: 1 }}>
+          <Text style={{ color: errorText, fontSize: typography.size.sm, flexShrink: 1 }}>
             {item.label} failed to sync
           </Text>
           <TouchableOpacity
@@ -141,11 +150,11 @@ export function SyncStatusBanner() {
       {rejected.map((item) => (
         <View key={item.id} style={rowStyle}>
           <View style={{ flexShrink: 1 }}>
-            <Text style={{ color: tokens.error, fontSize: typography.size.sm }}>
+            <Text style={{ color: errorText, fontSize: typography.size.sm }}>
               {item.label} was rejected
             </Text>
             {item.lastError && (
-              <Text style={{ color: tokens.error, fontSize: typography.size.sm, opacity: 0.8 }}>
+              <Text style={{ color: errorText, fontSize: typography.size.sm }}>
                 {item.lastError}
               </Text>
             )}

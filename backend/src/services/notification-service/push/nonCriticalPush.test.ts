@@ -89,6 +89,21 @@ describe('buildNonCriticalFcmRequest — non-critical by construction', () => {
     expect(data.body).toBe(PUSH.body);
   });
 
+  it('carries a notificationId that is the same for a redelivery and differs per notification', () => {
+    const data = message.data as Record<string, string>;
+    const again = buildNonCriticalFcmRequest(PUSH, 'other-token', 2).message as {
+      data: Record<string, string>;
+    };
+    const other = buildNonCriticalFcmRequest(
+      { ...PUSH, idempotencyKey: 'NICHOLS#MBR-1#apparatus-status#corr-2' },
+      'fcm-token-1',
+      1,
+    ).message as { data: Record<string, string> };
+    expect(data.notificationId).toBe(apnsIdFor(PUSH.idempotencyKey));
+    expect(again.data.notificationId).toBe(data.notificationId);
+    expect(other.data.notificationId).not.toBe(data.notificationId);
+  });
+
   it('never asks for validate_only (this worker has no test mode)', () => {
     expect(request.validate_only).toBeUndefined();
   });

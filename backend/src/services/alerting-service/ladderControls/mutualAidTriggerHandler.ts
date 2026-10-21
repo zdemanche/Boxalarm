@@ -19,10 +19,13 @@ import { createSnsClient, readFanOutTopicConfig } from '../fanout/snsClient.js';
 import {
   LADDER_CONTROL_FAILED_METRIC,
   LADDER_CONTROL_METRIC_NAMESPACE,
+  TEST_DISPATCH_DETAIL,
+  conflictProblem,
   dataUnavailableProblem,
   outcomeUnknownProblem,
   getDispatchMetadata,
   getMutualAidEvent,
+  isTestDispatch,
   jsonResponse,
   parseDispatchId,
   toMutualAidView,
@@ -71,6 +74,9 @@ async function trigger(
     const metadata = await getDispatchMetadata(ddb, tableName, deptId, dispatchId);
     if (!metadata) {
       return notFoundProblem(traceId, `No dispatch alert found for dispatchId "${dispatchId}"`);
+    }
+    if (isTestDispatch(metadata)) {
+      return conflictProblem(traceId, TEST_DISPATCH_DETAIL);
     }
 
     const result = await requestMutualAid({

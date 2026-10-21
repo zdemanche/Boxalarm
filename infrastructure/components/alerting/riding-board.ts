@@ -16,6 +16,7 @@ export interface RidingBoardArgs {
   platformTableName: pulumi.Input<string>;
   logGroup: ServiceLogGroup;
   policyStoreId: pulumi.Input<string>;
+  policyStoreArn: pulumi.Input<string>;
   /** LOB bus: the apparatus.serviceStatus.changed copy is consumed off this, not the alerting plane's own bus. */
   platformBus: PlatformBus;
   alertingTableArn: pulumi.Input<string>;
@@ -65,7 +66,7 @@ export class RidingBoard extends pulumi.ComponentResource {
     // Cast like the table ARN below: ServiceLambda deep-resolves nested Outputs.
     const apparatusIndexArn =
       pulumi.interpolate`${args.platformTableArn}/index/GSI3` as unknown as string;
-    const vpStatement = verifiedPermissionsStatement();
+    const vpStatement = verifiedPermissionsStatement(args.policyStoreArn);
 
     // src/services/apparatus-service/ridingBoard/handler.getRidingBoardHandler
     this.getRoute = new AlertingRoute(

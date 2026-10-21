@@ -58,6 +58,11 @@ DIFF | trumbull | 123 Main St Upper Stepney || 123 Main St
 DIFF | trumbull | 123 Main St, Botsford || 123 Main St
 DIFF | trumbull | 123 Main St Long Hill || 123 Main St, Monroe
 SAME | trumbull | 123 Main St, Nichols, CT || 123 Main St
+SAME | trumbull | 12 Main St W Trumbull CT 06611 || 12 Main St W
+SAME | trumbull | 12 George Washington Ct, Trumbull, CT 06611 || 12 George Washington Ct
+SAME | trumbull | 12 George Washington Ct Trumbull CT 06611 || 12 George Washington Ct
+SAME | trumbull | 12 Ben Franklin Ct || 12 Ben Franklin Ct
+SAME | trumbull | 12 Old Monroe Ct || 12 Old Monroe Ct
 SAME | trumbull | 123 Main St Long Hill CT 06611 || 123 Main St
 SAME | trumbull | 123 Main St, Trumbull, CT 06611 || 123 Main St
 SAME | trumbull | 123 Main St || 123 Main St
